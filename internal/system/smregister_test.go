@@ -41,7 +41,7 @@ func TestSmRegisterDao_Insert(t *testing.T) {
 
 	err := dao.Insert(record)
 	require.NoError(t, err)
-	assert.Greater(t, record.SmID, 0)
+	assert.Greater(t, record.SmDatasetID, 0)
 }
 
 func TestSmRegisterDao_GetByName(t *testing.T) {
@@ -143,7 +143,7 @@ func TestSmRegisterDao_UpdateObjectCount(t *testing.T) {
 	require.NoError(t, err)
 
 	// Update count
-	err = dao.UpdateObjectCount(record.SmID, 100)
+	err = dao.UpdateObjectCount(record.SmDatasetID, 100)
 	require.NoError(t, err)
 
 	// Verify
@@ -166,19 +166,17 @@ func TestSmRegisterDao_UpdateBounds(t *testing.T) {
 	err := dao.Insert(record)
 	require.NoError(t, err)
 
-	// Update bounds
-	err = dao.UpdateBounds(record.SmID, 116.0, 39.0, 117.0, 40.0)
+	// Update bounds (minX, minY, maxX, maxY)
+	err = dao.UpdateBounds(record.SmDatasetID, 116.0, 39.0, 117.0, 40.0)
 	require.NoError(t, err)
 
-	// Verify
+	// Verify - Java UDBX uses SmLeft, SmRight, SmTop, SmBottom
 	retrieved, err := dao.GetByName("cities")
 	require.NoError(t, err)
-	assert.InDelta(t, 116.0, retrieved.SmMinX.Float64, 0.0001)
-	assert.InDelta(t, 39.0, retrieved.SmMinY.Float64, 0.0001)
-	assert.InDelta(t, 117.0, retrieved.SmMaxX.Float64, 0.0001)
-	assert.InDelta(t, 40.0, retrieved.SmMaxY.Float64, 0.0001)
-	assert.InDelta(t, 116.5, retrieved.SmCenterX.Float64, 0.0001)
-	assert.InDelta(t, 39.5, retrieved.SmCenterY.Float64, 0.0001)
+	assert.InDelta(t, 116.0, retrieved.SmLeft.Float64, 0.0001)
+	assert.InDelta(t, 39.0, retrieved.SmBottom.Float64, 0.0001)
+	assert.InDelta(t, 117.0, retrieved.SmRight.Float64, 0.0001)
+	assert.InDelta(t, 40.0, retrieved.SmTop.Float64, 0.0001)
 }
 
 func TestSmRegisterDao_Delete(t *testing.T) {
@@ -196,7 +194,7 @@ func TestSmRegisterDao_Delete(t *testing.T) {
 	require.NoError(t, err)
 
 	// Delete
-	err = dao.Delete(record.SmID)
+	err = dao.Delete(record.SmDatasetID)
 	require.NoError(t, err)
 
 	// Verify deletion
@@ -206,12 +204,12 @@ func TestSmRegisterDao_Delete(t *testing.T) {
 
 func TestSmRegisterRecord_ToDatasetInfo(t *testing.T) {
 	record := &SmRegisterRecord{
-		SmID:          1,
+		SmDatasetID:   1,
 		SmDatasetType: int(types.DatasetKindPoint),
 		SmDatasetName: "cities",
 		SmTableName:   "cities_table",
 		SmObjectCount: 10,
-		SmSrid:        sql.NullInt32{Int32: 4326, Valid: true},
+		SmSRID:        sql.NullInt32{Int32: 4326, Valid: true},
 	}
 
 	info := record.ToDatasetInfo()
@@ -229,12 +227,12 @@ func TestSmRegisterRecord_ToDatasetInfo(t *testing.T) {
 
 func TestSmRegisterRecord_ToDatasetInfo_NoSRID(t *testing.T) {
 	record := &SmRegisterRecord{
-		SmID:          1,
+		SmDatasetID:   1,
 		SmDatasetType: int(types.DatasetKindTabular),
 		SmDatasetName: "countries",
 		SmTableName:   "countries_table",
 		SmObjectCount: 5,
-		SmSrid:        sql.NullInt32{},
+		SmSRID:        sql.NullInt32{},
 	}
 
 	info := record.ToDatasetInfo()

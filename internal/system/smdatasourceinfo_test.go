@@ -15,9 +15,9 @@ func TestSmDataSourceInfoDao_Insert(t *testing.T) {
 	dao := NewSmDataSourceInfoDao(db)
 
 	record := &SmDataSourceInfoRecord{
-		SmFileSmid:       1,
-		SmEngineType:     sql.NullInt32{Int32: 1, Valid: true},
-		SmFileIdentifier: sql.NullString{String: "test_id", Valid: true},
+		SmFlag:       1,
+		SmVersion:    sql.NullInt32{Int32: 1, Valid: true},
+		SmDataFormat: sql.NullInt32{Int32: 1, Valid: true},
 	}
 
 	err := dao.Insert(record)
@@ -32,10 +32,10 @@ func TestSmDataSourceInfoDao_Get(t *testing.T) {
 
 	// Insert record
 	record := &SmDataSourceInfoRecord{
-		SmFileSmid:       1,
-		SmEngineType:     sql.NullInt32{Int32: 1, Valid: true},
-		SmFileIdentifier: sql.NullString{String: "test_id", Valid: true},
-		SmPrjCoordSys:    sql.NullString{String: "WGS84", Valid: true},
+		SmFlag:           1,
+		SmVersion:        sql.NullInt32{Int32: 1, Valid: true},
+		SmDsDescription:  sql.NullString{String: "test desc", Valid: true},
+		SmDataFormat:     sql.NullInt32{Int32: 1, Valid: true},
 	}
 	err := dao.Insert(record)
 	require.NoError(t, err)
@@ -45,10 +45,10 @@ func TestSmDataSourceInfoDao_Get(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, retrieved)
 
-	assert.Equal(t, 1, retrieved.SmFileSmid)
-	assert.Equal(t, int32(1), retrieved.SmEngineType.Int32)
-	assert.Equal(t, "test_id", retrieved.SmFileIdentifier.String)
-	assert.Equal(t, "WGS84", retrieved.SmPrjCoordSys.String)
+	assert.Equal(t, 1, retrieved.SmFlag)
+	assert.Equal(t, int32(1), retrieved.SmVersion.Int32)
+	assert.Equal(t, "test desc", retrieved.SmDsDescription.String)
+	assert.Equal(t, int32(1), retrieved.SmDataFormat.Int32)
 }
 
 func TestSmDataSourceInfoDao_Get_Empty(t *testing.T) {

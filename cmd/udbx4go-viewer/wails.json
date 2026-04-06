@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "udbx4go-viewer-wails",
+  "outputfilename": "udbx4go-viewer-wails",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "rainstop_3",
+    "email": "zhyt1985@163.com"
+  }
+}

@@ -34,13 +34,13 @@ func createRegionDataset(t *testing.T, db *sql.DB) (*RegionDataset, *system.SmRe
 	// Insert field info
 	fieldInfoDao := system.NewSmFieldInfoDao(db)
 	fieldInfoDao.Insert(&system.SmFieldInfoRecord{
-		SmDatasetID:      record.SmID,
+		SmDatasetID:      record.SmDatasetID,
 		SmFieldName:      "name",
 		SmFieldType:      int(types.FieldTypeText),
 		SmFieldbRequired: 0,
 	})
 	fieldInfoDao.Insert(&system.SmFieldInfoRecord{
-		SmDatasetID:      record.SmID,
+		SmDatasetID:      record.SmDatasetID,
 		SmFieldName:      "area",
 		SmFieldType:      int(types.FieldTypeDouble),
 		SmFieldbRequired: 0,

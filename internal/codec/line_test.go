@@ -22,8 +22,10 @@ func TestGaiaLineCodec_DecodeMultiLineString(t *testing.T) {
 
 	writer := NewBinaryWriter()
 	writer.WriteBytes(header)
-	writer.WriteInt32(1) // 1 linestring
-	writer.WriteInt32(3) // 3 points
+	writer.WriteInt32(1)       // 1 linestring
+	writer.WriteByte(GaiaEntityMark) // entity marker
+	writer.WriteInt32(2)       // lineGeoType for 2D
+	writer.WriteInt32(3)       // 3 points
 	for _, p := range points {
 		writer.WriteFloat64(p[0])
 		writer.WriteFloat64(p[1])
@@ -63,8 +65,10 @@ func TestGaiaLineCodec_DecodeMultiLineStringZ(t *testing.T) {
 
 	writer := NewBinaryWriter()
 	writer.WriteBytes(header)
-	writer.WriteInt32(1) // 1 linestring
-	writer.WriteInt32(3) // 3 points
+	writer.WriteInt32(1)       // 1 linestring
+	writer.WriteByte(GaiaEntityMark) // entity marker
+	writer.WriteInt32(1002)    // lineGeoType for 3D
+	writer.WriteInt32(3)       // 3 points
 	for _, p := range points {
 		writer.WriteFloat64(p[0])
 		writer.WriteFloat64(p[1])

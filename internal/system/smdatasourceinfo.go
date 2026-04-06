@@ -1,3 +1,4 @@
+// Package system provides DAOs for UDBX system tables.
 package system
 
 import (
@@ -8,6 +9,7 @@ import (
 
 // SmDataSourceInfoDao provides access to the SmDataSourceInfo system table.
 // SmDataSourceInfo stores file-level metadata.
+// Compatible with Java/SuperMap UDBX format.
 type SmDataSourceInfoDao struct {
 	db *sql.DB
 }
@@ -18,29 +20,32 @@ func NewSmDataSourceInfoDao(db *sql.DB) *SmDataSourceInfoDao {
 }
 
 // SmDataSourceInfoRecord represents a record in the SmDataSourceInfo table.
+// Column names match Java/SuperMap UDBX format.
 type SmDataSourceInfoRecord struct {
-	SmFileSmid        int
-	SmEngineType      sql.NullInt32
-	SmFileIdentifier  sql.NullString
-	SmFilePwd         sql.NullString
-	SmPrjCoordSys     sql.NullString
+	SmFlag           int
+	SmVersion        sql.NullInt32
+	SmDsDescription  sql.NullString
+	SmProjectInfo    []byte
+	SmLastUpdateTime sql.NullString
+	SmDataFormat     sql.NullInt32
 }
 
 // Get returns the data source info record (there should be only one).
 func (dao *SmDataSourceInfoDao) Get() (*SmDataSourceInfoRecord, error) {
 	query := `
-		SELECT SmFileSmid, SmEngineType, SmFileIdentifier, SmFilePwd, SmPrjCoordSys
+		SELECT SmFlag, SmVersion, SmDsDescription, SmProjectInfo, SmLastUpdateTime, SmDataFormat
 		FROM SmDataSourceInfo
 		LIMIT 1
 	`
 
 	record := &SmDataSourceInfoRecord{}
 	err := dao.db.QueryRow(query).Scan(
-		&record.SmFileSmid,
-		&record.SmEngineType,
-		&record.SmFileIdentifier,
-		&record.SmFilePwd,
-		&record.SmPrjCoordSys,
+		&record.SmFlag,
+		&record.SmVersion,
+		&record.SmDsDescription,
+		&record.SmProjectInfo,
+		&record.SmLastUpdateTime,
+		&record.SmDataFormat,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -55,16 +60,17 @@ func (dao *SmDataSourceInfoDao) Get() (*SmDataSourceInfoRecord, error) {
 // Insert inserts a new data source info record.
 func (dao *SmDataSourceInfoDao) Insert(record *SmDataSourceInfoRecord) error {
 	query := `
-		INSERT INTO SmDataSourceInfo (SmFileSmid, SmEngineType, SmFileIdentifier, SmFilePwd, SmPrjCoordSys)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO SmDataSourceInfo (SmFlag, SmVersion, SmDsDescription, SmProjectInfo, SmLastUpdateTime, SmDataFormat)
+		VALUES (?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := dao.db.Exec(query,
-		record.SmFileSmid,
-		record.SmEngineType,
-		record.SmFileIdentifier,
-		record.SmFilePwd,
-		record.SmPrjCoordSys,
+		record.SmFlag,
+		record.SmVersion,
+		record.SmDsDescription,
+		record.SmProjectInfo,
+		record.SmLastUpdateTime,
+		record.SmDataFormat,
 	)
 	if err != nil {
 		return errors.IOError("failed to insert into SmDataSourceInfo", err)

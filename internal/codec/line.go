@@ -60,6 +60,28 @@ func (c *GaiaLineCodec) decodeMultiLineStringInternal(data []byte, is3D bool) (*
 	allPoints := make([][2]float64, 0)
 
 	for i := int32(0); i < numLineStrings; i++ {
+		// Read entity marker (0x69)
+		entityMark, err := reader.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if entityMark != GaiaEntityMark {
+			return nil, errors.FormatError(fmt.Sprintf("invalid LineString entity mark: expected 0x%02X, got 0x%02X", GaiaEntityMark, entityMark))
+		}
+
+		// Read line geo type (2 for 2D, 1002 for 3D)
+		lineGeoType, err := reader.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		expectedLineGeoType := int32(2)
+		if is3D {
+			expectedLineGeoType = 1002
+		}
+		if lineGeoType != expectedLineGeoType {
+			return nil, errors.FormatError(fmt.Sprintf("invalid LineString geoType: expected %d, got %d", expectedLineGeoType, lineGeoType))
+		}
+
 		// Read number of points in this linestring
 		numPoints, err := reader.ReadInt32()
 		if err != nil {
@@ -157,6 +179,16 @@ func (c *GaiaLineCodec) encodeMultiLineStringInternal(geometry *types.MultiLineS
 	writer.WriteInt32(int32(len(geometry.Coordinates)))
 
 	for _, line := range geometry.Coordinates {
+		// Write entity marker
+		writer.WriteByte(GaiaEntityMark)
+
+		// Write line geo type (2 for 2D, 1002 for 3D)
+		if is3D {
+			writer.WriteInt32(1002)
+		} else {
+			writer.WriteInt32(2)
+		}
+
 		// Write number of points
 		writer.WriteInt32(int32(len(line)))
 

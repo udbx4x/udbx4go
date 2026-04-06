@@ -18,6 +18,7 @@ const (
 	GaiaByteOrder    = 0x01 // Little-endian
 	GaiaMarker       = 0x7c
 	GaiaEndMarker    = 0xFE
+	GaiaEntityMark   = 0x69 // Entity marker for LineString/Polygon within Multi* geometry
 	GaiaHeaderLength = 43   // Bytes from start to geoType
 )
 

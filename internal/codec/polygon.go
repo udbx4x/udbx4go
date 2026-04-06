@@ -60,6 +60,28 @@ func (c *GaiaPolygonCodec) decodeMultiPolygonInternal(data []byte, is3D bool) (*
 	allPoints := make([][2]float64, 0)
 
 	for i := int32(0); i < numPolygons; i++ {
+		// Read entity marker (0x69)
+		entityMark, err := reader.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if entityMark != GaiaEntityMark {
+			return nil, errors.FormatError(fmt.Sprintf("invalid Polygon entity mark: expected 0x%02X, got 0x%02X", GaiaEntityMark, entityMark))
+		}
+
+		// Read polygon geo type (3 for 2D, 1003 for 3D)
+		polygonGeoType, err := reader.ReadInt32()
+		if err != nil {
+			return nil, err
+		}
+		expectedPolygonGeoType := int32(3)
+		if is3D {
+			expectedPolygonGeoType = 1003
+		}
+		if polygonGeoType != expectedPolygonGeoType {
+			return nil, errors.FormatError(fmt.Sprintf("invalid Polygon geoType: expected %d, got %d", expectedPolygonGeoType, polygonGeoType))
+		}
+
 		// Read number of rings in this polygon
 		numRings, err := reader.ReadInt32()
 		if err != nil {
@@ -175,6 +197,16 @@ func (c *GaiaPolygonCodec) encodeMultiPolygonInternal(geometry *types.MultiPolyg
 	writer.WriteInt32(int32(len(geometry.Coordinates)))
 
 	for _, polygon := range geometry.Coordinates {
+		// Write entity marker
+		writer.WriteByte(GaiaEntityMark)
+
+		// Write polygon geo type (3 for 2D, 1003 for 3D)
+		if is3D {
+			writer.WriteInt32(1003)
+		} else {
+			writer.WriteInt32(3)
+		}
+
 		// Write number of rings
 		writer.WriteInt32(int32(len(polygon)))
 

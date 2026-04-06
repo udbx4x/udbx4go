@@ -39,22 +39,41 @@ func (i *Initializer) Initialize() error {
 }
 
 // createSmRegister creates the SmRegister table.
+// Compatible with Java/SuperMap UDBX format.
 func (i *Initializer) createSmRegister() error {
 	query := `
 		CREATE TABLE IF NOT EXISTS SmRegister (
-			SmID INTEGER PRIMARY KEY AUTOINCREMENT,
-			SmDatasetType INTEGER NOT NULL,
+			SmDatasetID INTEGER PRIMARY KEY AUTOINCREMENT,
 			SmDatasetName TEXT NOT NULL UNIQUE,
 			SmTableName TEXT NOT NULL,
-			SmMaxX REAL,
-			SmMaxY REAL,
-			SmMinX REAL,
-			SmMinY REAL,
-			SmCenterX REAL,
-			SmCenterY REAL,
-			SmSrid INTEGER,
-			SmObjectCount INTEGER DEFAULT 0,
-			SmMaxGeometrySize INTEGER DEFAULT 0
+			SmOption INTEGER,
+			SmEncType INTEGER,
+			SmParentDTID INTEGER DEFAULT 0 NOT NULL,
+			SmDatasetType INTEGER,
+			SmObjectCount INTEGER DEFAULT 0 NOT NULL,
+			SmLeft REAL,
+			SmRight REAL,
+			SmTop REAL,
+			SmBottom REAL,
+			SmIDColName TEXT,
+			SmGeoColName TEXT,
+			SmMinZ REAL,
+			SmMaxZ REAL,
+			SmSRID INTEGER DEFAULT 0,
+			SmIndexType INTEGER DEFAULT 1,
+			SmToleRanceFuzzy REAL,
+			SmToleranceDAngle REAL,
+			SmToleranceNodeSnap REAL,
+			SmToleranceSmallPolygon REAL,
+			SmToleranceGrain REAL,
+			SmMaxGeometrySize INTEGER DEFAULT 0 NOT NULL,
+			SmOptimizeCount INTEGER DEFAULT 0 NOT NULL,
+			SmOptimizeRatio REAL,
+			SmDescription TEXT,
+			SmExtInfo TEXT,
+			SmCreateTime TEXT,
+			SmLastUpdateTime TEXT,
+			SmProjectInfo BLOB
 		)
 	`
 
@@ -99,14 +118,16 @@ func (i *Initializer) createGeometryColumns() error {
 }
 
 // createSmDataSourceInfo creates the SmDataSourceInfo table.
+// Compatible with Java/SuperMap UDBX format.
 func (i *Initializer) createSmDataSourceInfo() error {
 	query := `
 		CREATE TABLE IF NOT EXISTS SmDataSourceInfo (
-			SmFileSmid INTEGER PRIMARY KEY,
-			SmEngineType INTEGER,
-			SmFileIdentifier TEXT,
-			SmFilePwd TEXT,
-			SmPrjCoordSys TEXT
+			SmFlag INTEGER PRIMARY KEY DEFAULT 0,
+			SmVersion INTEGER,
+			SmDsDescription TEXT,
+			SmProjectInfo BLOB,
+			SmLastUpdateTime DATE DEFAULT CURRENT_TIMESTAMP,
+			SmDataFormat INTEGER DEFAULT 0
 		)
 	`
 

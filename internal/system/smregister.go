@@ -10,6 +10,7 @@ import (
 
 // SmRegisterDao provides access to the SmRegister system table.
 // SmRegister stores dataset metadata.
+// Compatible with Java/SuperMap UDBX format.
 type SmRegisterDao struct {
 	db *sql.DB
 }
@@ -20,33 +21,53 @@ func NewSmRegisterDao(db *sql.DB) *SmRegisterDao {
 }
 
 // SmRegisterRecord represents a record in the SmRegister table.
+// Column names match Java/SuperMap UDBX format.
 type SmRegisterRecord struct {
-	SmID          int
-	SmDatasetType int
-	SmDatasetName string
-	SmTableName   string
-	SmMaxX        sql.NullFloat64
-	SmMaxY        sql.NullFloat64
-	SmMinX        sql.NullFloat64
-	SmMinY        sql.NullFloat64
-	SmCenterX     sql.NullFloat64
-	SmCenterY     sql.NullFloat64
-	SmSrid        sql.NullInt32
-	SmObjectCount int
+	SmDatasetID               int
+	SmDatasetName             string
+	SmTableName               string
+	SmOption                  sql.NullInt32
+	SmEncType                 sql.NullInt32
+	SmParentDTID              int
+	SmDatasetType             int
+	SmObjectCount             int
+	SmLeft                    sql.NullFloat64
+	SmRight                   sql.NullFloat64
+	SmTop                     sql.NullFloat64
+	SmBottom                  sql.NullFloat64
+	SmIDColName               sql.NullString
+	SmGeoColName              sql.NullString
+	SmMinZ                    sql.NullFloat64
+	SmMaxZ                    sql.NullFloat64
+	SmSRID                    sql.NullInt32
+	SmIndexType               sql.NullInt32
+	SmToleRanceFuzzy          sql.NullFloat64
+	SmToleranceDAngle         sql.NullFloat64
+	SmToleranceNodeSnap       sql.NullFloat64
+	SmToleranceSmallPolygon   sql.NullFloat64
+	SmToleranceGrain          sql.NullFloat64
+	SmMaxGeometrySize         int
+	SmOptimizeCount           int
+	SmOptimizeRatio           sql.NullFloat64
+	SmDescription             sql.NullString
+	SmExtInfo                 sql.NullString
+	SmCreateTime              sql.NullString
+	SmLastUpdateTime          sql.NullString
+	SmProjectInfo             []byte
 }
 
 // ToDatasetInfo converts a SmRegisterRecord to DatasetInfo.
 func (r *SmRegisterRecord) ToDatasetInfo() *types.DatasetInfo {
 	info := &types.DatasetInfo{
-		ID:          r.SmID,
+		ID:          r.SmDatasetID,
 		Name:        r.SmDatasetName,
 		TableName:   r.SmTableName,
 		Kind:        types.DatasetKind(r.SmDatasetType),
 		ObjectCount: r.SmObjectCount,
 	}
 
-	if r.SmSrid.Valid {
-		srid := int(r.SmSrid.Int32)
+	if r.SmSRID.Valid {
+		srid := int(r.SmSRID.Int32)
 		info.SRID = &srid
 	}
 
@@ -61,11 +82,15 @@ func (r *SmRegisterRecord) ToDatasetInfo() *types.DatasetInfo {
 // ListAll returns all records from SmRegister.
 func (dao *SmRegisterDao) ListAll() ([]*SmRegisterRecord, error) {
 	query := `
-		SELECT SmID, SmDatasetType, SmDatasetName, SmTableName,
-		       SmMaxX, SmMaxY, SmMinX, SmMinY, SmCenterX, SmCenterY,
-		       SmSrid, SmObjectCount
+		SELECT SmDatasetID, SmDatasetName, SmTableName, SmOption, SmEncType,
+		       SmParentDTID, SmDatasetType, SmObjectCount, SmLeft, SmRight,
+		       SmTop, SmBottom, SmIDColName, SmGeoColName, SmMinZ, SmMaxZ,
+		       SmSRID, SmIndexType, SmToleRanceFuzzy, SmToleranceDAngle,
+		       SmToleranceNodeSnap, SmToleranceSmallPolygon, SmToleranceGrain,
+		       SmMaxGeometrySize, SmOptimizeCount, SmOptimizeRatio,
+		       SmDescription, SmExtInfo, SmCreateTime, SmLastUpdateTime, SmProjectInfo
 		FROM SmRegister
-		ORDER BY SmID
+		ORDER BY SmDatasetID
 	`
 
 	rows, err := dao.db.Query(query)
@@ -77,14 +102,18 @@ func (dao *SmRegisterDao) ListAll() ([]*SmRegisterRecord, error) {
 	return dao.scanRecords(rows)
 }
 
-// GetByID returns a record by SmID.
+// GetByID returns a record by SmDatasetID.
 func (dao *SmRegisterDao) GetByID(id int) (*SmRegisterRecord, error) {
 	query := `
-		SELECT SmID, SmDatasetType, SmDatasetName, SmTableName,
-		       SmMaxX, SmMaxY, SmMinX, SmMinY, SmCenterX, SmCenterY,
-		       SmSmid, SmObjectCount
+		SELECT SmDatasetID, SmDatasetName, SmTableName, SmOption, SmEncType,
+		       SmParentDTID, SmDatasetType, SmObjectCount, SmLeft, SmRight,
+		       SmTop, SmBottom, SmIDColName, SmGeoColName, SmMinZ, SmMaxZ,
+		       SmSRID, SmIndexType, SmToleRanceFuzzy, SmToleranceDAngle,
+		       SmToleranceNodeSnap, SmToleranceSmallPolygon, SmToleranceGrain,
+		       SmMaxGeometrySize, SmOptimizeCount, SmOptimizeRatio,
+		       SmDescription, SmExtInfo, SmCreateTime, SmLastUpdateTime, SmProjectInfo
 		FROM SmRegister
-		WHERE SmID = ?
+		WHERE SmDatasetID = ?
 	`
 
 	row := dao.db.QueryRow(query, id)
@@ -94,9 +123,13 @@ func (dao *SmRegisterDao) GetByID(id int) (*SmRegisterRecord, error) {
 // GetByName returns a record by dataset name.
 func (dao *SmRegisterDao) GetByName(name string) (*SmRegisterRecord, error) {
 	query := `
-		SELECT SmID, SmDatasetType, SmDatasetName, SmTableName,
-		       SmMaxX, SmMaxY, SmMinX, SmMinY, SmCenterX, SmCenterY,
-		       SmSrid, SmObjectCount
+		SELECT SmDatasetID, SmDatasetName, SmTableName, SmOption, SmEncType,
+		       SmParentDTID, SmDatasetType, SmObjectCount, SmLeft, SmRight,
+		       SmTop, SmBottom, SmIDColName, SmGeoColName, SmMinZ, SmMaxZ,
+		       SmSRID, SmIndexType, SmToleRanceFuzzy, SmToleranceDAngle,
+		       SmToleranceNodeSnap, SmToleranceSmallPolygon, SmToleranceGrain,
+		       SmMaxGeometrySize, SmOptimizeCount, SmOptimizeRatio,
+		       SmDescription, SmExtInfo, SmCreateTime, SmLastUpdateTime, SmProjectInfo
 		FROM SmRegister
 		WHERE SmDatasetName = ?
 	`
@@ -116,16 +149,17 @@ func (dao *SmRegisterDao) GetByName(name string) (*SmRegisterRecord, error) {
 func (dao *SmRegisterDao) Insert(record *SmRegisterRecord) error {
 	query := `
 		INSERT INTO SmRegister (SmDatasetType, SmDatasetName, SmTableName,
-		                       SmMaxX, SmMaxY, SmMinX, SmMinY, SmCenterX, SmCenterY,
-		                       SmSrid, SmObjectCount)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		                       SmParentDTID, SmObjectCount, SmLeft, SmRight,
+		                       SmTop, SmBottom, SmSRID, SmMaxGeometrySize,
+		                       SmOptimizeCount)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := dao.db.Exec(query,
 		record.SmDatasetType, record.SmDatasetName, record.SmTableName,
-		record.SmMaxX, record.SmMaxY, record.SmMinX, record.SmMinY,
-		record.SmCenterX, record.SmCenterY,
-		record.SmSrid, record.SmObjectCount,
+		record.SmParentDTID, record.SmObjectCount,
+		record.SmLeft, record.SmRight, record.SmTop, record.SmBottom,
+		record.SmSRID, record.SmMaxGeometrySize, record.SmOptimizeCount,
 	)
 	if err != nil {
 		return errors.IOError("failed to insert into SmRegister", err)
@@ -136,13 +170,13 @@ func (dao *SmRegisterDao) Insert(record *SmRegisterRecord) error {
 		return errors.IOError("failed to get last insert ID", err)
 	}
 
-	record.SmID = int(id)
+	record.SmDatasetID = int(id)
 	return nil
 }
 
 // UpdateObjectCount updates the SmObjectCount for a dataset.
 func (dao *SmRegisterDao) UpdateObjectCount(id int, count int) error {
-	query := `UPDATE SmRegister SET SmObjectCount = ? WHERE SmID = ?`
+	query := `UPDATE SmRegister SET SmObjectCount = ? WHERE SmDatasetID = ?`
 
 	_, err := dao.db.Exec(query, count, id)
 	if err != nil {
@@ -154,16 +188,13 @@ func (dao *SmRegisterDao) UpdateObjectCount(id int, count int) error {
 
 // UpdateBounds updates the bounds for a dataset.
 func (dao *SmRegisterDao) UpdateBounds(id int, minX, minY, maxX, maxY float64) error {
-	centerX := (minX + maxX) / 2
-	centerY := (minY + maxY) / 2
-
 	query := `
 		UPDATE SmRegister
-		SET SmMinX = ?, SmMinY = ?, SmMaxX = ?, SmMaxY = ?, SmCenterX = ?, SmCenterY = ?
-		WHERE SmID = ?
+		SET SmLeft = ?, SmBottom = ?, SmRight = ?, SmTop = ?
+		WHERE SmDatasetID = ?
 	`
 
-	_, err := dao.db.Exec(query, minX, minY, maxX, maxY, centerX, centerY, id)
+	_, err := dao.db.Exec(query, minX, minY, maxX, maxY, id)
 	if err != nil {
 		return errors.IOError("failed to update bounds", err)
 	}
@@ -173,7 +204,7 @@ func (dao *SmRegisterDao) UpdateBounds(id int, minX, minY, maxX, maxY float64) e
 
 // Delete deletes a record from SmRegister.
 func (dao *SmRegisterDao) Delete(id int) error {
-	query := `DELETE FROM SmRegister WHERE SmID = ?`
+	query := `DELETE FROM SmRegister WHERE SmDatasetID = ?`
 
 	_, err := dao.db.Exec(query, id)
 	if err != nil {
@@ -205,10 +236,18 @@ func (dao *SmRegisterDao) scanRecords(rows *sql.Rows) ([]*SmRegisterRecord, erro
 	for rows.Next() {
 		record := &SmRegisterRecord{}
 		err := rows.Scan(
-			&record.SmID, &record.SmDatasetType, &record.SmDatasetName, &record.SmTableName,
-			&record.SmMaxX, &record.SmMaxY, &record.SmMinX, &record.SmMinY,
-			&record.SmCenterX, &record.SmCenterY,
-			&record.SmSrid, &record.SmObjectCount,
+			&record.SmDatasetID, &record.SmDatasetName, &record.SmTableName,
+			&record.SmOption, &record.SmEncType, &record.SmParentDTID,
+			&record.SmDatasetType, &record.SmObjectCount,
+			&record.SmLeft, &record.SmRight, &record.SmTop, &record.SmBottom,
+			&record.SmIDColName, &record.SmGeoColName,
+			&record.SmMinZ, &record.SmMaxZ, &record.SmSRID, &record.SmIndexType,
+			&record.SmToleRanceFuzzy, &record.SmToleranceDAngle,
+			&record.SmToleranceNodeSnap, &record.SmToleranceSmallPolygon,
+			&record.SmToleranceGrain, &record.SmMaxGeometrySize,
+			&record.SmOptimizeCount, &record.SmOptimizeRatio,
+			&record.SmDescription, &record.SmExtInfo,
+			&record.SmCreateTime, &record.SmLastUpdateTime, &record.SmProjectInfo,
 		)
 		if err != nil {
 			return nil, errors.IOError("failed to scan SmRegister row", err)
@@ -226,10 +265,18 @@ func (dao *SmRegisterDao) scanRecords(rows *sql.Rows) ([]*SmRegisterRecord, erro
 func (dao *SmRegisterDao) scanRecord(row *sql.Row) (*SmRegisterRecord, error) {
 	record := &SmRegisterRecord{}
 	err := row.Scan(
-		&record.SmID, &record.SmDatasetType, &record.SmDatasetName, &record.SmTableName,
-		&record.SmMaxX, &record.SmMaxY, &record.SmMinX, &record.SmMinY,
-		&record.SmCenterX, &record.SmCenterY,
-		&record.SmSrid, &record.SmObjectCount,
+		&record.SmDatasetID, &record.SmDatasetName, &record.SmTableName,
+		&record.SmOption, &record.SmEncType, &record.SmParentDTID,
+		&record.SmDatasetType, &record.SmObjectCount,
+		&record.SmLeft, &record.SmRight, &record.SmTop, &record.SmBottom,
+		&record.SmIDColName, &record.SmGeoColName,
+		&record.SmMinZ, &record.SmMaxZ, &record.SmSRID, &record.SmIndexType,
+		&record.SmToleRanceFuzzy, &record.SmToleranceDAngle,
+		&record.SmToleranceNodeSnap, &record.SmToleranceSmallPolygon,
+		&record.SmToleranceGrain, &record.SmMaxGeometrySize,
+		&record.SmOptimizeCount, &record.SmOptimizeRatio,
+		&record.SmDescription, &record.SmExtInfo,
+		&record.SmCreateTime, &record.SmLastUpdateTime, &record.SmProjectInfo,
 	)
 	if err == sql.ErrNoRows {
 		return nil, errors.NotFoundError("record not found in SmRegister")

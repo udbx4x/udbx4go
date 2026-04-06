@@ -19,6 +19,7 @@ A Go implementation of the UDBX (Universal Spatial Database Extension) reader/wr
 - ✅ Cross-language compatibility (udbx4j, udbx4ts)
 - ✅ Comprehensive error handling
 - ✅ TDD development with 76%+ test coverage
+- ✅ GUI viewer for visualizing UDBX files (Wails-based, React + TypeScript frontend)
 
 ## Installation
 
@@ -73,6 +74,68 @@ func main() {
     }
 }
 ```
+
+## GUI Viewer
+
+udbx4go includes a graphical viewer application for visualizing UDBX files. Built with [Wails](https://wails.io/) v2 (Go backend + React/TypeScript frontend).
+
+### Features
+
+- Open and browse UDBX files
+- Display dataset list with type icons
+- View data records in paginated table with MUI X-DataGrid
+- Column sorting, resizing, and reordering
+- Support all dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular
+- Geometry preview in GeoJSON format
+- Cross-platform: macOS, Windows, Linux
+- Small binary size (~10MB vs ~34MB with Fyne)
+
+### Prerequisites
+
+- Go 1.21 or later
+- Node.js 18 or later
+- Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
+
+### Installation
+
+```bash
+cd cmd/udbx4go-viewer
+
+# Install frontend dependencies
+cd frontend && npm install && cd ..
+
+# Build for current platform
+wails build
+
+# Or build for specific platform
+wails build -platform darwin/universal
+wails build -platform windows/amd64
+wails build -platform linux/amd64
+```
+
+### Development
+
+```bash
+cd cmd/udbx4go-viewer
+
+# Run in development mode (with hot reload)
+wails dev
+
+# Build with debug info
+wails build -debug
+```
+
+### Usage
+
+```bash
+# Run the built app
+./build/bin/udbx4go-viewer.app/Contents/MacOS/udbx4go-viewer
+
+# Or open the .app bundle directly
+open ./build/bin/udbx4go-viewer.app
+```
+
+Click "选择文件" to open a `.udbx` file. The dataset list appears on the left, click any dataset to view its records in the table on the right.
 
 ## Creating a New UDBX File
 
@@ -342,7 +405,19 @@ udbx4go/
 │   ├── dataset/            # Dataset implementations (Point, Line, Region, Tabular)
 │   ├── schema/             # Schema initialization
 │   └── system/             # System table DAOs (SmRegister, SmFieldInfo, etc.)
-├── cmd/                    # Example applications
+├── cmd/                    # Applications
+│   ├── udbx4go-example/    # Example usage
+│   └── udbx4go-viewer/     # GUI viewer (Wails-based)
+│       ├── main.go         # Entry point (Wails)
+│       ├── app.go          # Go backend bindings
+│       ├── models.go       # DTO types
+│       └── frontend/       # React + TypeScript frontend
+│           ├── src/
+│           │   ├── App.tsx         # Main app component
+│           │   ├── DatasetTree.tsx # Dataset list sidebar
+│           │   ├── DataTable.tsx   # MUI X-DataGrid table
+│           │   └── main.tsx        # Entry point
+│           └── package.json
 ├── udbx.go                 # Main package with re-exports
 └── datasource.go           # DataSource implementation
 ```

@@ -11,7 +11,17 @@ This file provides guidance to Claude Code when working with the udbx4go project
 ```
 udbx4go/
 ├── cmd/                          # Command-line applications
-│   └── udbx4go-example/          # Example usage
+│   ├── udbx4go-example/          # Example usage
+│   └── udbx4go-viewer/           # GUI viewer (Wails v2 + React)
+│       ├── main.go               # Wails entry point
+│       ├── app.go                # Go backend with Wails bindings
+│       ├── models.go             # DTO types for frontend
+│       ├── wails.json            # Wails configuration
+│       └── frontend/             # React + TypeScript frontend
+│           ├── src/
+│           │   ├── App.tsx       # Main component
+│           │   ├── DatasetTree.tsx   # Dataset sidebar
+│           │   └── DataTable.tsx     # MUI X-DataGrid
 ├── internal/                     # Internal implementation (not exported)
 │   ├── codec/                    # Binary codecs (GAIA, CAD)
 │   │   ├── point.go              # Point GAIA codec

@@ -34,13 +34,13 @@ func createPointDataset(t *testing.T, db *sql.DB) (*PointDataset, *system.SmRegi
 	// Insert field info
 	fieldInfoDao := system.NewSmFieldInfoDao(db)
 	fieldInfoDao.Insert(&system.SmFieldInfoRecord{
-		SmDatasetID:      record.SmID,
+		SmDatasetID:      record.SmDatasetID,
 		SmFieldName:      "name",
 		SmFieldType:      int(types.FieldTypeText),
 		SmFieldbRequired: 0,
 	})
 	fieldInfoDao.Insert(&system.SmFieldInfoRecord{
-		SmDatasetID:      record.SmID,
+		SmDatasetID:      record.SmDatasetID,
 		SmFieldName:      "population",
 		SmFieldType:      int(types.FieldTypeInt32),
 		SmFieldbRequired: 0,

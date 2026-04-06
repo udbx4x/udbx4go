@@ -270,7 +270,7 @@ func (ds *DataSource) createTabularDatasetInternal(name string, kind types.Datas
 	}
 
 	if srid > 0 {
-		record.SmSrid = sql.NullInt32{Int32: int32(srid), Valid: true}
+		record.SmSRID = sql.NullInt32{Int32: int32(srid), Valid: true}
 	}
 
 	if err := ds.registerDao.Insert(record); err != nil {
@@ -280,7 +280,7 @@ func (ds *DataSource) createTabularDatasetInternal(name string, kind types.Datas
 	// Insert field info
 	for _, field := range fields {
 		fieldRecord := &system.SmFieldInfoRecord{
-			SmDatasetID:      record.SmID,
+			SmDatasetID:      record.SmDatasetID,
 			SmFieldName:      field.Name,
 			SmFieldType:      int(field.FieldType),
 			SmFieldbRequired: boolToInt(field.Required),
@@ -334,7 +334,7 @@ func (ds *DataSource) createPointDatasetInternal(name string, kind types.Dataset
 	}
 
 	if srid > 0 {
-		record.SmSrid = sql.NullInt32{Int32: int32(srid), Valid: true}
+		record.SmSRID = sql.NullInt32{Int32: int32(srid), Valid: true}
 	}
 
 	if err := ds.registerDao.Insert(record); err != nil {
@@ -357,7 +357,7 @@ func (ds *DataSource) createPointDatasetInternal(name string, kind types.Dataset
 	// Insert field info
 	for _, field := range fields {
 		fieldRecord := &system.SmFieldInfoRecord{
-			SmDatasetID:      record.SmID,
+			SmDatasetID:      record.SmDatasetID,
 			SmFieldName:      field.Name,
 			SmFieldType:      int(field.FieldType),
 			SmFieldbRequired: boolToInt(field.Required),

@@ -47,7 +47,7 @@ func TestBaseDataset_GetFields(t *testing.T) {
 	// Insert field info
 	fieldInfoDao := system.NewSmFieldInfoDao(db)
 	fieldRecord := &system.SmFieldInfoRecord{
-		SmDatasetID:      record.SmID,
+		SmDatasetID:      record.SmDatasetID,
 		SmFieldName:      "name",
 		SmFieldType:      int(types.FieldTypeText),
 		SmFieldbRequired: 1,

@@ -24,6 +24,8 @@ func TestGaiaPolygonCodec_DecodeMultiPolygon(t *testing.T) {
 	writer := NewBinaryWriter()
 	writer.WriteBytes(header)
 	writer.WriteInt32(1) // 1 polygon
+	writer.WriteByte(GaiaEntityMark) // entity marker
+	writer.WriteInt32(3) // polygonGeoType for 2D
 	writer.WriteInt32(1) // 1 ring
 	writer.WriteInt32(4) // 4 points
 	for _, p := range points {
@@ -69,6 +71,8 @@ func TestGaiaPolygonCodec_DecodeMultiPolygonZ(t *testing.T) {
 	writer := NewBinaryWriter()
 	writer.WriteBytes(header)
 	writer.WriteInt32(1) // 1 polygon
+	writer.WriteByte(GaiaEntityMark) // entity marker
+	writer.WriteInt32(1003) // polygonGeoType for 3D
 	writer.WriteInt32(1) // 1 ring
 	writer.WriteInt32(4) // 4 points
 	for _, p := range points {
@@ -122,6 +126,8 @@ func TestGaiaPolygonCodec_DecodeMultiPolygon_WithHoles(t *testing.T) {
 	writer := NewBinaryWriter()
 	writer.WriteBytes(header)
 	writer.WriteInt32(1) // 1 polygon
+	writer.WriteByte(GaiaEntityMark) // entity marker
+	writer.WriteInt32(3) // polygonGeoType for 2D
 	writer.WriteInt32(2) // 2 rings (outer + hole)
 
 	// Outer ring
@@ -364,8 +370,10 @@ func TestGaiaPolygonCodec_DecodeMultiPolygon_InvalidEndMarker(t *testing.T) {
 
 	writer := NewBinaryWriter()
 	writer.WriteBytes(header)
-	writer.WriteInt32(1)
-	writer.WriteInt32(1)
+	writer.WriteInt32(1) // 1 polygon
+	writer.WriteByte(GaiaEntityMark) // entity marker
+	writer.WriteInt32(3) // polygonGeoType for 2D
+	writer.WriteInt32(1) // 1 ring
 	writer.WriteInt32(4)
 	for _, p := range points {
 		writer.WriteFloat64(p[0])
