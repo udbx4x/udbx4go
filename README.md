@@ -5,14 +5,15 @@
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](./)
 [![Coverage](https://img.shields.io/badge/coverage-76.7%25-yellowgreen)](./)
 
-A Go implementation of the UDBX (Universal Spatial Database Extension) reader/writer library. UDBX is a spatial data format based on SQLite, supporting vector (Point, Line, Region, CAD) and tabular datasets.
+A Go implementation of the UDBX (Universal Spatial Database Extension) reader/writer library. UDBX is a spatial data format based on SQLite, supporting tabular datasets and vector datasets such as Point, Line, Region, PointZ, LineZ, RegionZ, Text, and CAD.
 
 [中文](./README.zh.md)
 
 ## Features
 
-- ✅ Full UDBX format support (read/write)
-- ✅ All dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD
+- ✅ Core UDBX read/write support, including Text / GeoText and CAD minimal GeoHeader baselines.
+- ✅ Dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD
+- ✅ `TextDataset` supports minimal GeoText read/write CRUD and `CadDataset` supports minimal GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion`.
 - ✅ 14 field types with proper type mapping
 - ✅ GeoJSON-like geometry model
 - ✅ Streaming and batch operations
@@ -85,10 +86,9 @@ udbx4go includes a graphical viewer application for visualizing UDBX files. Buil
 - Display dataset list with type icons
 - View data records in paginated table with MUI X-DataGrid
 - Column sorting, resizing, and reordering
-- Support all dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular
+- Support implemented dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular
 - Geometry preview in GeoJSON format
 - Cross-platform: macOS, Windows, Linux
-- Small binary size (~10MB vs ~34MB with Fyne)
 
 ### Prerequisites
 
@@ -197,7 +197,7 @@ func main() {
 | `LineZ` | 3D Line dataset | MultiLineString (with Z) |
 | `RegionZ` | 3D Region dataset | MultiPolygon (with Z) |
 | `Text` | Text annotation dataset | GeoText |
-| `CAD` | CAD dataset | Custom GeoHeader |
+| `CAD` | CAD dataset | Custom GeoHeader (`GeoPoint` / `GeoLine` / `GeoRegion`) |
 
 ## Field Types
 
@@ -248,12 +248,15 @@ newFeature := &udbx4go.Feature{
 err = pointDS.Insert(newFeature)
 
 // Update
-changes := &udbx4go.FeatureChanges{
-    Attributes: map[string]interface{}{
-        "population": 27000000,
+err = pointDS.Update(2, &udbx4go.FeatureChanges{
+    Geometry: &udbx4go.PointGeometry{
+        Type:        "Point",
+        Coordinates: []float64{121.6, 31.3},
     },
-}
-err = pointDS.Update(2, changes)
+    Attributes: map[string]interface{}{
+        "population": 26400000,
+    },
+})
 
 // Delete
 err = pointDS.Delete(2)
@@ -324,6 +327,37 @@ err = tabularDS.Insert(record)
 err = tabularDS.Update(1, map[string]interface{}{
     "value": 100.0,
 })
+```
+
+## Stable Public API Semantics
+
+`udbx4go` follows `udbx4spec/docs/08-api-stable-surface.md`. Go APIs use synchronous calls and `(value, error)` returns, while preserving the same cross-language behavior as `udbx4j` and `udbx4ts`.
+
+| Meaning | Go API | Stable behavior |
+|---|---|---|
+| Open data source | `Open(path)` | Open an existing UDBX file |
+| Create data source | `Create(path)` | Create UDBX and initialize system tables |
+| List datasets | `ListDatasets()` | Return a `DatasetInfo` list |
+| Get dataset by name | `GetDataset(name)` / typed getters | Return not found error when missing |
+| Get object by ID | `GetByID(id)` | Return `nil, err`; `udbx4go.IsNotFound(err)` must be true when missing |
+| List objects | `List(options)` | Return objects ordered by `SmID` ascending by default |
+| Count | `Count()` | Read the physical table row count, not cached `SmRegister.SmObjectCount` |
+| Write | `Insert(...)` / `InsertMany(...)` | Write objects and synchronize object count |
+| Update | `Update(id, ...)` | Return not found when the target is missing; unknown fields return not found or constraint errors |
+| Delete | `Delete(id)` | Return not found when the target is missing; synchronize object count after success |
+
+Error handling example:
+
+```go
+feature, err := pointDS.GetByID(42)
+if err != nil {
+    if udbx4go.IsNotFound(err) {
+        // Dataset, field, record, or feature not found.
+        return
+    }
+    log.Fatal(err)
+}
+log.Println(feature.ID)
 ```
 
 ## Error Handling
@@ -436,6 +470,7 @@ Contributions are welcome! Please ensure:
 4. Run tests with race detector (`go test -race ./...`)
 5. Add tests for new features
 6. Update documentation as needed
+7. Before a public release, follow the release gates in the workspace root `RELEASE.md`
 
 ## Architecture
 

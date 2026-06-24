@@ -2,12 +2,15 @@
 
 udbx4go 完整 API 参考。
 
+注意：当前数据集具体类型来自内部实现包。外部调用者可以直接使用 `DataSource` 方法返回的值并调用其方法，但不应导入内部包，也不应把这些具体类型名称视为稳定公开 API。
+
 [English](./API.md)
 
 ## 目录
 
 - [DataSource](#datasource)
 - [数据集类型](#数据集类型)
+  - [数据集稳定语义](#数据集稳定语义)
 - [几何类型](#几何类型)
 - [要素和记录](#要素和记录)
 - [查询选项](#查询选项)
@@ -85,7 +88,7 @@ for _, info := range datasets {
 func (ds *DataSource) GetDataset(name string) (dataset.Dataset, error)
 ```
 
-根据名称获取数据集（通用接口）。
+根据名称通过内部通用数据集接口获取数据集。外部调用者通常应优先使用 `GetPointDataset` 等类型专用获取方法。
 
 #### GetTabularDataset
 
@@ -226,6 +229,16 @@ func (ds *DataSource) CreateRegionZDataset(
 
 ## 数据集类型
 
+### 数据集稳定语义
+
+所有数据集 API 遵循 `udbx4spec/docs/08-api-stable-surface.md`：
+
+- `GetByID(id)` 在对象不存在时返回 `nil, err`，且 `udbx4go.IsNotFound(err)` 必须为 `true`。
+- `List(opts)` 默认按 `SmID` 升序返回；`QueryOptions.IDs` 只过滤结果集合，不改变排序语义。
+- `Count()` 读取物理表真实行数，不以 `SmRegister.SmObjectCount` 缓存为准。
+- `Update(id, ...)` 和 `Delete(id)` 在目标对象不存在时返回 not found error。
+- 更新未知字段时返回 not found 或约束类错误，不得静默忽略。
+
 ### TabularDataset
 
 非空间数据集，用于纯属性数据。
@@ -238,7 +251,7 @@ func (ds *DataSource) CreateRegionZDataset(
 func (d *TabularDataset) GetByID(id int) (*TabularRecord, error)
 ```
 
-根据 ID 获取记录。
+根据 ID 获取记录。记录不存在时返回 `nil, err`，且 `udbx4go.IsNotFound(err)` 为 `true`。
 
 ##### List
 
@@ -246,7 +259,7 @@ func (d *TabularDataset) GetByID(id int) (*TabularRecord, error)
 func (d *TabularDataset) List(opts *QueryOptions) ([]*TabularRecord, error)
 ```
 
-返回记录列表。
+返回记录列表，默认按 `SmID` 升序排列。
 
 ##### Insert
 
@@ -270,7 +283,7 @@ func (d *TabularDataset) InsertMany(records []*TabularRecord) error
 func (d *TabularDataset) Update(id int, attributes map[string]interface{}) error
 ```
 
-更新记录的属性。
+更新记录的属性。记录不存在时返回 not found error。
 
 ##### Delete
 
@@ -278,7 +291,7 @@ func (d *TabularDataset) Update(id int, attributes map[string]interface{}) error
 func (d *TabularDataset) Delete(id int) error
 ```
 
-根据 ID 删除记录。
+根据 ID 删除记录。记录不存在时返回 not found error。
 
 ### PointDataset
 
@@ -292,7 +305,7 @@ func (d *TabularDataset) Delete(id int) error
 func (d *PointDataset) GetByID(id int) (*Feature, error)
 ```
 
-根据 ID 获取要素。
+根据 ID 获取要素。要素不存在时返回 `nil, err`，且 `udbx4go.IsNotFound(err)` 为 `true`。
 
 ##### List
 
@@ -300,7 +313,7 @@ func (d *PointDataset) GetByID(id int) (*Feature, error)
 func (d *PointDataset) List(opts *QueryOptions) ([]*Feature, error)
 ```
 
-返回要素列表。
+返回要素列表，默认按 `SmID` 升序排列。
 
 ##### Insert
 
@@ -339,16 +352,21 @@ func (d *PointDataset) InsertMany(features []*Feature) error
 func (d *PointDataset) Update(id int, changes *FeatureChanges) error
 ```
 
-更新要素。
+使用公开的 `udbx4go.FeatureChanges` 类型更新要素。
+
+要素不存在时返回 not found error。
 
 **示例：**
 ```go
-changes := &udbx4go.FeatureChanges{
-    Attributes: map[string]interface{}{
-        "population": 22000000,
+err = pointDS.Update(1, &udbx4go.FeatureChanges{
+    Geometry: &udbx4go.PointGeometry{
+        Type:        "Point",
+        Coordinates: []float64{121.5, 31.2},
     },
-}
-err = pointDS.Update(1, changes)
+    Attributes: map[string]interface{}{
+        "population": 26320000,
+    },
+})
 ```
 
 ##### Delete
@@ -357,7 +375,7 @@ err = pointDS.Update(1, changes)
 func (d *PointDataset) Delete(id int) error
 ```
 
-根据 ID 删除要素。
+根据 ID 删除要素。要素不存在时返回 not found error。
 
 ### LineDataset
 
@@ -379,8 +397,10 @@ func (d *PointDataset) Delete(id int) error
 type PointGeometry struct {
     Type        string
     Coordinates []float64  // [x, y] 表示二维，[x, y, z] 表示三维
-    SRID        int        // 可选的 SRID
-    BBox        []float64  // 可选的边界框
+    SRID        int        // 可选 SRID，未设置时为 0
+    HasZValue   bool       // 可选的显式 Z 标记
+    BBox        []float64  // 可选边界框 [minX, minY, maxX, maxY]
+    GeoType     int        // 可选 GAIA geoType
 }
 ```
 
@@ -400,7 +420,9 @@ type MultiLineStringGeometry struct {
     Type        string
     Coordinates [][][]float64  // 线串数组
     SRID        int
+    HasZValue   bool
     BBox        []float64
+    GeoType     int
 }
 ```
 
@@ -417,7 +439,9 @@ type MultiPolygonGeometry struct {
     Type        string
     Coordinates [][][][]float64  // 多边形数组，每个多边形包含环
     SRID        int
+    HasZValue   bool
     BBox        []float64
+    GeoType     int
 }
 ```
 
@@ -454,7 +478,7 @@ type TabularRecord struct {
 
 ### FeatureChanges
 
-用于部分更新。
+矢量要素更新使用的公开变更对象。
 
 ```go
 type FeatureChanges struct {
@@ -462,6 +486,8 @@ type FeatureChanges struct {
     Attributes map[string]interface{}
 }
 ```
+
+通过 `udbx4go.FeatureChanges` 调用矢量数据集 `Update` 方法。`Geometry` 和 `Attributes` 均为可选；两者都为空时，实现可以将调用视为无操作。
 
 ## 查询选项
 

@@ -5,14 +5,15 @@
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](./)
 [![Coverage](https://img.shields.io/badge/coverage-76.7%25-yellowgreen)](./)
 
-UDBX（通用空间数据库扩展）读写库的 Go 语言实现。UDBX 是一种基于 SQLite 的空间数据格式，支持矢量（点、线、面、CAD）和属性表数据集。
+UDBX（通用空间数据库扩展）读写库的 Go 语言实现。UDBX 是一种基于 SQLite 的空间数据格式，当前 Go SDK 支持属性表以及点、线、面、三维点、三维线、三维面、文本和 CAD 数据集。
 
 [English](./README.md)
 
 ## 特性
 
-- ✅ 完整的 UDBX 格式支持（读/写）
-- ✅ 全部数据集类型：点、线、面、三维点、三维线、三维面、属性表、文本、CAD
+- ✅ 核心 UDBX 读写能力已实现，包含 Text / GeoText 与 CAD 最小 GeoHeader 基线。
+- ✅ 已实现数据集类型：点、线、面、三维点、三维线、三维面、属性表、文本、CAD。
+- ✅ `TextDataset` 支持最小 GeoText 读写 CRUD；`CadDataset` 支持最小 GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion`。
 - ✅ 14 种字段类型，支持正确的类型映射
 - ✅ 类 GeoJSON 几何模型
 - ✅ 流式和批量操作
@@ -152,12 +153,15 @@ newFeature := &udbx4go.Feature{
 err = pointDS.Insert(newFeature)
 
 // 更新
-changes := &udbx4go.FeatureChanges{
-    Attributes: map[string]interface{}{
-        "population": 27000000,
+err = pointDS.Update(2, &udbx4go.FeatureChanges{
+    Geometry: &udbx4go.PointGeometry{
+        Type:        "Point",
+        Coordinates: []float64{121.6, 31.3},
     },
-}
-err = pointDS.Update(2, changes)
+    Attributes: map[string]interface{}{
+        "population": 26400000,
+    },
+})
 
 // 删除
 err = pointDS.Delete(2)
@@ -230,6 +234,37 @@ err = tabularDS.Update(1, map[string]interface{}{
 })
 ```
 
+## 公开 API 稳定语义
+
+`udbx4go` 的公开 API 遵循 `udbx4spec/docs/08-api-stable-surface.md`。Go 侧使用同步方法和 `(value, error)` 返回形式，但跨语言语义必须与 `udbx4j`、`udbx4ts` 一致。
+
+| 语义 | Go API | 稳定行为 |
+|---|---|---|
+| 打开数据源 | `Open(path)` | 打开已有 UDBX 文件 |
+| 创建数据源 | `Create(path)` | 创建 UDBX 并初始化系统表 |
+| 列出数据集 | `ListDatasets()` | 返回 `DatasetInfo` 列表 |
+| 按名称获取数据集 | `GetDataset(name)` / 类型专用 getter | 不存在时返回 not found error |
+| 按 ID 获取对象 | `GetByID(id)` | 不存在时返回 `nil, err`，且 `udbx4go.IsNotFound(err)` 为 `true` |
+| 列表读取 | `List(options)` | 默认按 `SmID` 升序返回 |
+| 计数 | `Count()` | 读取物理表真实行数，不以 `SmRegister.SmObjectCount` 缓存为准 |
+| 写入 | `Insert(...)` / `InsertMany(...)` | 写入对象并同步对象数 |
+| 更新 | `Update(id, ...)` | 目标不存在时返回 not found；未知字段返回 not found 或约束类错误 |
+| 删除 | `Delete(id)` | 目标不存在时返回 not found；成功后同步对象数 |
+
+错误处理示例：
+
+```go
+feature, err := pointDS.GetByID(42)
+if err != nil {
+    if udbx4go.IsNotFound(err) {
+        // 数据集、字段、记录或要素不存在
+        return
+    }
+    log.Fatal(err)
+}
+log.Println(feature.ID)
+```
+
 ## 数据集类型
 
 | 数据集类型 | 描述 | 几何类型 |
@@ -241,8 +276,8 @@ err = tabularDS.Update(1, map[string]interface{}{
 | `PointZ` | 三维点数据集 | 点（含 Z） |
 | `LineZ` | 三维线数据集 | 多线串（含 Z） |
 | `RegionZ` | 三维面数据集 | 多多边形（含 Z） |
-| `Text` | 文本标注数据集 | 文本 |
-| `CAD` | CAD 数据集 | 自定义 |
+| `Text` | 文本标注数据集 | GeoText 最小基线 |
+| `CAD` | CAD 数据集 | 自定义 GeoHeader（GeoPoint / GeoLine / GeoRegion） |
 
 ## 字段类型
 
@@ -411,6 +446,7 @@ GAIA 点头部（43 字节）：
 4. 使用 race detector 运行测试（`go test -race ./...`）
 5. 为新功能添加测试
 6. 根据需要更新文档
+7. 公开发布前按工作区根目录 `RELEASE.md` 执行完整发布门禁
 
 ## 许可证
 

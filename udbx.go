@@ -64,6 +64,7 @@
 package udbx4go
 
 import (
+	"github.com/udbx4x/udbx4go/internal/dataset"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
@@ -88,6 +89,42 @@ type (
 	// MultiPolygonGeometry represents a MultiPolygon geometry.
 	MultiPolygonGeometry = types.MultiPolygonGeometry
 
+	// CadStyle represents a CAD GeoHeader style payload.
+	CadStyle = types.CadStyle
+
+	// CadMarkerStyle represents a CAD marker style.
+	CadMarkerStyle = types.CadMarkerStyle
+
+	// CadLineStyle represents a CAD line style.
+	CadLineStyle = types.CadLineStyle
+
+	// CadFillStyle represents a CAD fill style.
+	CadFillStyle = types.CadFillStyle
+
+	// CadGeometry represents a minimal CAD GeoHeader geometry.
+	CadGeometry = types.CadGeometry
+
+	// Color represents a UDBX Color value in ABGR byte order.
+	Color = types.Color
+
+	// TextStyle represents GeoText style.
+	TextStyle = types.TextStyle
+
+	// TextSubText represents a GeoText sub-text object.
+	TextSubText = types.TextSubText
+
+	// TextGeometry represents a UDBX GeoText geometry.
+	TextGeometry = types.TextGeometry
+
+	// CadPointGeometry represents a CAD point geometry.
+	CadPointGeometry = types.CadPointGeometry
+
+	// CadLineGeometry represents a CAD line geometry.
+	CadLineGeometry = types.CadLineGeometry
+
+	// CadRegionGeometry represents a CAD region geometry.
+	CadRegionGeometry = types.CadRegionGeometry
+
 	// Feature represents a spatial feature.
 	Feature = types.Feature
 
@@ -102,6 +139,9 @@ type (
 
 	// QueryOptions provides options for querying features.
 	QueryOptions = types.QueryOptions
+
+	// FeatureChanges holds geometry and attribute changes for vector dataset updates.
+	FeatureChanges = dataset.FeatureChanges
 )
 
 // DatasetKind constants.
@@ -143,12 +183,12 @@ type (
 
 // Error checking functions.
 var (
-	IsFormatError       = errors.IsFormatError
-	IsNotFound          = errors.IsNotFound
-	IsUnsupported       = errors.IsUnsupported
+	IsFormatError         = errors.IsFormatError
+	IsNotFound            = errors.IsNotFound
+	IsUnsupported         = errors.IsUnsupported
 	IsConstraintViolation = errors.IsConstraintViolation
-	IsIOError           = errors.IsIOError
-	IsUdbxError         = errors.IsUdbxError
+	IsIOError             = errors.IsIOError
+	IsUdbxError           = errors.IsUdbxError
 )
 
 // Sentinel errors.

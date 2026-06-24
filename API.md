@@ -2,12 +2,15 @@
 
 Complete API reference for udbx4go.
 
+Note: dataset concrete types currently come from the internal implementation package. External callers can use values returned by `DataSource` methods directly, but should not import internal packages or treat those concrete types as stable public API names.
+
 [中文](./API.zh.md)
 
 ## Table of Contents
 
 - [DataSource](#datasource)
 - [Dataset Types](#dataset-types)
+  - [Stable Dataset Semantics](#stable-dataset-semantics)
 - [Geometry Types](#geometry-types)
 - [Feature and Record](#feature-and-record)
 - [Query Options](#query-options)
@@ -85,7 +88,7 @@ for _, info := range datasets {
 func (ds *DataSource) GetDataset(name string) (dataset.Dataset, error)
 ```
 
-Returns a dataset by name (generic interface).
+Returns a dataset by name through the internal generic dataset interface. External callers normally prefer typed getters such as `GetPointDataset`.
 
 #### GetTabularDataset
 
@@ -226,6 +229,16 @@ Creates a new 3D region dataset.
 
 ## Dataset Types
 
+### Stable Dataset Semantics
+
+All dataset APIs follow `udbx4spec/docs/08-api-stable-surface.md`:
+
+- `GetByID(id)` returns `nil, err` when the object is missing, and `udbx4go.IsNotFound(err)` must be true.
+- `List(opts)` returns rows ordered by `SmID` ascending by default; `QueryOptions.IDs` filters the result set but does not change ordering.
+- `Count()` reads the physical table row count, not cached `SmRegister.SmObjectCount`.
+- `Update(id, ...)` and `Delete(id)` return a not found error when the target object is missing.
+- Unknown update fields return a not found or constraint error; they must not be silently ignored.
+
 ### TabularDataset
 
 Non-spatial dataset for attribute-only data.
@@ -238,7 +251,7 @@ Non-spatial dataset for attribute-only data.
 func (d *TabularDataset) GetByID(id int) (*TabularRecord, error)
 ```
 
-Returns a record by ID.
+Returns a record by ID. Missing records return `nil, err` with `udbx4go.IsNotFound(err) == true`.
 
 ##### List
 
@@ -246,7 +259,7 @@ Returns a record by ID.
 func (d *TabularDataset) List(opts *QueryOptions) ([]*TabularRecord, error)
 ```
 
-Returns a list of records.
+Returns a list of records ordered by `SmID` ascending by default.
 
 ##### Insert
 
@@ -270,7 +283,7 @@ Inserts multiple records in a transaction.
 func (d *TabularDataset) Update(id int, attributes map[string]interface{}) error
 ```
 
-Updates a record's attributes.
+Updates a record's attributes. Missing records return a not found error.
 
 ##### Delete
 
@@ -278,7 +291,7 @@ Updates a record's attributes.
 func (d *TabularDataset) Delete(id int) error
 ```
 
-Deletes a record by ID.
+Deletes a record by ID. Missing records return a not found error.
 
 ### PointDataset
 
@@ -292,7 +305,7 @@ Deletes a record by ID.
 func (d *PointDataset) GetByID(id int) (*Feature, error)
 ```
 
-Returns a feature by ID.
+Returns a feature by ID. Missing features return `nil, err` with `udbx4go.IsNotFound(err) == true`.
 
 ##### List
 
@@ -300,7 +313,7 @@ Returns a feature by ID.
 func (d *PointDataset) List(opts *QueryOptions) ([]*Feature, error)
 ```
 
-Returns a list of features.
+Returns a list of features ordered by `SmID` ascending by default.
 
 ##### Insert
 
@@ -339,16 +352,21 @@ Inserts multiple features in a transaction.
 func (d *PointDataset) Update(id int, changes *FeatureChanges) error
 ```
 
-Updates a feature.
+Updates a feature using the public `udbx4go.FeatureChanges` type.
+
+Missing features return a not found error.
 
 **Example:**
 ```go
-changes := &udbx4go.FeatureChanges{
-    Attributes: map[string]interface{}{
-        "population": 22000000,
+err = pointDS.Update(1, &udbx4go.FeatureChanges{
+    Geometry: &udbx4go.PointGeometry{
+        Type:        "Point",
+        Coordinates: []float64{121.5, 31.2},
     },
-}
-err = pointDS.Update(1, changes)
+    Attributes: map[string]interface{}{
+        "population": 26320000,
+    },
+})
 ```
 
 ##### Delete
@@ -357,7 +375,7 @@ err = pointDS.Update(1, changes)
 func (d *PointDataset) Delete(id int) error
 ```
 
-Deletes a feature by ID.
+Deletes a feature by ID. Missing features return a not found error.
 
 ### LineDataset
 
@@ -379,8 +397,10 @@ Deletes a feature by ID.
 type PointGeometry struct {
     Type        string
     Coordinates []float64  // [x, y] for 2D, [x, y, z] for 3D
-    SRID        *int       // Optional SRID
-    BBox        *BBox      // Optional bounding box
+    SRID        int        // Optional SRID, 0 if not set
+    HasZValue   bool       // Optional explicit Z flag
+    BBox        []float64  // Optional [minX, minY, maxX, maxY]
+    GeoType     int        // Optional GAIA geoType
 }
 ```
 
@@ -388,7 +408,7 @@ type PointGeometry struct {
 - `GeometryType() string` - Returns "Point"
 - `GetSRID() int` - Returns SRID or 0
 - `HasZ() bool` - Returns true if has Z coordinate
-- `GetBBox() *BBox` - Returns bounding box
+- `GetBBox() []float64` - Returns bounding box
 - `X() float64` - Returns X coordinate
 - `Y() float64` - Returns Y coordinate
 - `Z() float64` - Returns Z coordinate (0 if 2D)
@@ -399,8 +419,10 @@ type PointGeometry struct {
 type MultiLineStringGeometry struct {
     Type        string
     Coordinates [][][]float64  // Array of line strings
-    SRID        *int
-    BBox        *BBox
+    SRID        int
+    HasZValue   bool
+    BBox        []float64
+    GeoType     int
 }
 ```
 
@@ -408,7 +430,7 @@ type MultiLineStringGeometry struct {
 - `GeometryType() string` - Returns "MultiLineString"
 - `GetSRID() int`
 - `HasZ() bool`
-- `GetBBox() *BBox`
+- `GetBBox() []float64`
 
 ### MultiPolygonGeometry
 
@@ -416,8 +438,10 @@ type MultiLineStringGeometry struct {
 type MultiPolygonGeometry struct {
     Type        string
     Coordinates [][][][]float64  // Array of polygons, each with rings
-    SRID        *int
-    BBox        *BBox
+    SRID        int
+    HasZValue   bool
+    BBox        []float64
+    GeoType     int
 }
 ```
 
@@ -425,7 +449,7 @@ type MultiPolygonGeometry struct {
 - `GeometryType() string` - Returns "MultiPolygon"
 - `GetSRID() int`
 - `HasZ() bool`
-- `GetBBox() *BBox`
+- `GetBBox() []float64`
 
 ## Feature and Record
 
@@ -454,7 +478,7 @@ type TabularRecord struct {
 
 ### FeatureChanges
 
-Used for partial updates.
+Public change object for vector feature updates.
 
 ```go
 type FeatureChanges struct {
@@ -462,6 +486,8 @@ type FeatureChanges struct {
     Attributes map[string]interface{}
 }
 ```
+
+Use `udbx4go.FeatureChanges` with vector dataset `Update` methods. `Geometry` and `Attributes` are both optional; when both are empty, implementations may treat the call as a no-op.
 
 ## Query Options
 
