@@ -10,14 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Initial implementation of UDBX reader/writer library
-- Support for all dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular
+- Support for implemented dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD
+- Text / GeoText minimal baseline: `TextDataset`, GeoText encode/decode, CRUD, `CreateTextDataset()`, and roundtrip fixture generation
+- CAD minimal GeoHeader baseline: `CadDataset`, `CadPoint`, `CadLine`, `CadRegion`, CRUD, and `CreateCadDataset()`
+- udbx4spec compliance coverage for `test_text`, `test_cad`, and cross-language roundtrip fixtures
 - GAIA geometry codec for binary encoding/decoding
 - System table DAOs (SmRegister, SmFieldInfo, geometry_columns, SmDataSourceInfo)
 - Comprehensive error handling with typed errors
 - GeoJSON-like geometry model
-- CRUD operations for all dataset types
+- CRUD operations for implemented dataset types
 - Test suite with 76%+ coverage
-- Documentation (README, CLAUDE.md)
+- Documentation (README, AGENTS.md, CLAUDE.md compatibility entry)
 
 ### Features
 
@@ -27,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Line Dataset**: MultiLineString features with full CRUD
 - **Region Dataset**: MultiPolygon features with full CRUD
 - **Tabular Dataset**: Non-spatial tables with full CRUD
+- **Text Dataset**: GeoText features with minimal read/write CRUD
+- **CAD Dataset**: Minimal GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion` features with CRUD
 - **Query Options**: Limit, offset, and ID-based filtering
 - **Batch Operations**: InsertMany for efficient bulk inserts
 

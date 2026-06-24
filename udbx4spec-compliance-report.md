@@ -30,9 +30,35 @@
 | FieldType 完整性 | ✅ | 14/14 | 100% |
 | 几何类型完整性 | ✅ | 3/3 | 100% |
 | 错误类型完整性 | ✅ | 5/5 | 100% |
-| 数据集类完整性 | ⚠️ | 7/9 | 78% |
-| DataSource API | ⚠️ | 12/14 | 86% |
-| **总计** | **⚠️** | **50/54** | **93%** |
+| 数据集类完整性 | ✅ | 9/9 | 100% |
+| DataSource API | ✅ | 14/14 | 100% |
+| **总计** | **✅** | **54/54** | **100%** |
+
+注意：本报告的接口存在性评分不代表所有真实 SuperMap UDBX 变体都已完全兼容。当前可执行合规覆盖已包含 2D/3D 矢量、Tabular、Text / GeoText 最小基线和 CAD 最小 GeoHeader（`GeoPoint`、`GeoLine`、`GeoRegion`）读写闭环。
+
+## 可执行合规测试
+
+当前已接入 `../udbx4spec/compliance/roundtrip-matrix.md` 的 P0/P1 测试入口：
+
+```bash
+go test ./internal/codec -run Udbx4Spec -v
+go test . -run Udbx4Spec -v
+```
+
+| 矩阵项 | 状态 | 覆盖内容 |
+|--------|------|----------|
+| R1 Golden decode | ✅ | 解码 `udbx4spec/compliance/golden-gaia-bytes/` 中的 2D/3D Point、MultiLineString、MultiPolygon fixture |
+| R2 Golden encode | ✅ | 对解码后的 GeoJSON-like 几何重新编码，并与 Golden Bytes 做字节级一致性比较 |
+| R3 Compliance read | ✅ | 打开 `udbx4spec/compliance/compliance.udbx`，校验 2D/3D 矢量、tabular、Text / GeoText 与 CAD 最小 GeoHeader 数据集的 kind、对象数、字段类型和代表性记录 |
+| R4 单语言语义 roundtrip | ✅ | 读取覆盖 `point/line/region/pointZ/lineZ/regionZ/tabular/cad/text` 的 `compliance.udbx` 后通过 Go SDK 写出临时 UDBX，再重新打开并比较数据集、字段、对象数、几何和属性语义 |
+| R5 跨语言语义 roundtrip | ✅ 三实现闭环 | 读取 `udbx4spec/compliance/roundtrip/udbx4ts-roundtrip.udbx`、`udbx4spec/compliance/roundtrip/udbx4j-roundtrip.udbx`，验证 Go 能读取 TypeScript 与 Java 写出的 UDBX；同时生成 `udbx4go-roundtrip.udbx`，供 `udbx4j`、`udbx4ts` 读取验证 |
+| R6 Source-derived fixture | ✅ stable | 读取 `source-derived/sampledata/county-t/smid-1-smgeometry.bin`，验证真实 Text 中非 UTF-8 可读 `faceName` / `subText` 的容错解码行为；读取 `source-derived/sampledata/caddt/smid-1/16/63-smgeometry.bin`，验证真实 CAD Point / Line / Region 无样式 GeoHeader 解码行为；校验 `sampledata-3d-srid-zero-metadata` 的 stable manifest 与 3D metadata-json，并通过真实样本测试覆盖 `BaseMap_PZ` / `BaseMap_LZ` / `BaseMap_RZ`；Go 已统一为逐非法字节替换为 U+FFFD |
+
+未完成项：
+
+- 继续扩大真实 SuperMap UDBX 样本兼容范围，尤其是复杂 Text 样式和复杂 CAD 对象。
+- T3 Source-derived fixture 当前为 `stable`，原始字节一致性、授权字段、生成工具字段和脱敏状态由 `udbx4spec/tools/check-fixtures.mjs` 校验；发布前必须运行 `make test-stable-t3`。
+- 公开 API 最小稳定面已按 `udbx4spec/docs/08-api-stable-surface.md` 收敛：`GetDataset` / `GetByID` 未命中返回 not found error，`List` 默认按 `SmID` 升序，`Count` 读取物理表真实行数，`Update/Delete` 对缺失对象返回 not found，`Update` 对未知字段返回 not found。
 
 ## 详细检查结果
 
@@ -111,7 +137,7 @@
 | `ErrConstraint` | ✅ |
 | `ErrIO` | ✅ |
 
-### 5. 数据集类完整性 ⚠️
+### 5. 数据集类完整性 ✅
 
 | 规范类名 | 实现状态 | 文件 | 方法 |
 |----------|----------|------|------|
@@ -122,10 +148,10 @@
 | `PointZDataset` | ✅ | `pointz.go` | 继承自 PointDataset |
 | `LineZDataset` | ✅ | `linez.go` | 继承自 LineDataset |
 | `RegionZDataset` | ✅ | `regionz.go` | 继承自 RegionDataset |
-| `TextDataset` | ❌ | - | **缺失** |
-| `CadDataset` | ❌ | - | **缺失** |
+| `TextDataset` | ✅ | `text.go` | `GetByID()`, `List()`, `Insert()`, `InsertMany()`, `Update()`, `Delete()` |
+| `CadDataset` | ✅ | `cad.go` | `GetByID()`, `List()`, `Insert()`, `InsertMany()`, `Update()`, `Delete()` |
 
-### 6. DataSource API ⚠️
+### 6. DataSource API ✅
 
 #### 6.1 生命周期方法 ✅
 
@@ -142,7 +168,7 @@
 | `listDatasets()` | ✅ | `ListDatasets() ([]*DatasetInfo, error)` |
 | `getDataset(name)` | ✅ | `GetDataset(name string) (Dataset, error)` |
 
-#### 6.3 类型专用获取方法 ⚠️
+#### 6.3 类型专用获取方法 ✅
 
 | 规范方法 | 实现状态 | 签名 |
 |----------|----------|------|
@@ -150,10 +176,10 @@
 | `getPointDataset()` | ✅ | `GetPointDataset(name string) (*PointDataset, error)` |
 | `getLineDataset()` | ✅ | `GetLineDataset(name string) (*LineDataset, error)` |
 | `getRegionDataset()` | ✅ | `GetRegionDataset(name string) (*RegionDataset, error)` |
-| `getTextDataset()` | ❌ | **缺失** |
-| `getCadDataset()` | ❌ | **缺失** |
+| `getTextDataset()` | ✅ | `GetTextDataset(name string) (*TextDataset, error)` |
+| `getCadDataset()` | ✅ | `GetCadDataset(name string) (*CadDataset, error)` |
 
-#### 6.4 数据集创建方法 ⚠️
+#### 6.4 数据集创建方法 ✅
 
 | 规范方法 | 实现状态 | 签名 |
 |----------|----------|------|
@@ -164,8 +190,8 @@
 | `createPointZDataset()` | ✅ | `CreatePointZDataset(name string, srid int, fields []*FieldInfo) (*PointZDataset, error)` |
 | `createLineZDataset()` | ✅ | `CreateLineZDataset(name string, srid int, fields []*FieldInfo) (*LineZDataset, error)` |
 | `createRegionZDataset()` | ✅ | `CreateRegionZDataset(name string, srid int, fields []*FieldInfo) (*RegionZDataset, error)` |
-| `createTextDataset()` | ❌ | **缺失** |
-| `createCadDataset()` | ❌ | **缺失** |
+| `createTextDataset()` | ✅ | `CreateTextDataset(name string, srid int, fields []*FieldInfo) (*TextDataset, error)` |
+| `createCadDataset()` | ✅ | `CreateCadDataset(name string, fields []*FieldInfo) (*CadDataset, error)` |
 
 ### 7. 其他类型检查 ✅
 
@@ -177,16 +203,12 @@
 | `FieldInfo` | ✅ | `FieldInfo` struct |
 | `QueryOptions` | ✅ | `QueryOptions` struct |
 
-## 缺失的实现
+## 当前实现边界
 
-| 类别 | 缺失项 | 优先级 | 建议操作 |
-|------|--------|--------|----------|
-| 数据集类 | `TextDataset` | 中 | 创建 `internal/dataset/text.go` |
-| 数据集类 | `CadDataset` | 中 | 创建 `internal/dataset/cad.go` |
-| DataSource 方法 | `GetTextDataset()` | 中 | 在 `datasource.go` 中添加 |
-| DataSource 方法 | `GetCadDataset()` | 中 | 在 `datasource.go` 中添加 |
-| DataSource 方法 | `CreateTextDataset()` | 中 | 在 `datasource.go` 中添加 |
-| DataSource 方法 | `CreateCadDataset()` | 中 | 在 `datasource.go` 中添加 |
+| 类别 | 状态 | 后续方向 |
+|------|------|----------|
+| Text / GeoText | 已完成最小合规基线 | 扩展复杂样式、复杂文本对象和更多真实样本 |
+| CAD GeoHeader | 已完成最小合规基线 | 扩展复杂 CAD 类型、样式和混合对象 |
 
 ## 命名一致性检查
 
@@ -198,7 +220,7 @@
 | `insertMany` | `InsertMany` | ✅ | 一致 |
 | `update` | `Update` | ✅ | 一致 |
 | `delete` | `Delete` | ✅ | 一致 |
-| `count` | `Count()` | ✅ | BaseDataset 提供 |
+| `count` | `Count() (int, error)` | ✅ | BaseDataset 提供，语义已统一为物理表实际计数 |
 
 ## 规范符合度评分
 
@@ -206,22 +228,12 @@
 |------|------|------|
 | 类型系统 | 100% | DatasetKind、FieldType、Geometry 完整 |
 | 错误处理 | 100% | 所有错误类型和哨兵错误已实现 |
-| 核心功能 | 86% | 缺少 Text 和 CAD 数据集 |
-| **总体** | **93%** | 良好，建议补齐 Text 和 CAD 支持 |
+| 核心功能 | 100% | 当前最小合规基线已覆盖 Text 与 CAD |
+| **总体** | **100%** | 当前 udbx4spec 最小合规基线通过 |
 
 ## 建议
 
-### 短期（建议优先实现）
-
-1. **添加 TextDataset 支持**
-   - 创建 `internal/dataset/text.go`
-   - 在 DataSource 中添加 `GetTextDataset()` 和 `CreateTextDataset()`
-
-2. **添加 CadDataset 支持**
-   - 创建 `internal/dataset/cad.go`
-   - 在 DataSource 中添加 `GetCadDataset()` 和 `CreateCadDataset()`
-
-### 长期
+### 后续建议
 
 1. **考虑添加 AsyncIterable 支持**
    - 规范中有 `iterate()` 方法返回 AsyncIterable
@@ -232,16 +244,17 @@
 
 ## 结论
 
-**udbx4go 项目整体符合 udbx4spec 规范，符合度为 93%。**
+**udbx4go 项目已通过当前 udbx4spec 最小合规基线。**
 
 主要优点：
 - DatasetKind 和 FieldType 实现完整
 - 几何模型符合 GeoJSON-like 规范
 - 错误处理体系完善
 - API 命名符合 Go 语言惯例
+- Text / GeoText 最小基线已纳入合规闭环
+- CAD 最小 GeoHeader 基线已纳入合规闭环
 
 需要改进：
-- 缺少 TextDataset 和 CadDataset 实现
-- 缺少对应的工厂方法
+- 扩展真实 SuperMap UDBX 样本文本和 CAD 兼容范围
 
-建议优先实现 Text 和 CAD 数据集支持以达到 100% 合规。
+建议后续以真实样本兼容和发布治理为重点继续推进。

@@ -1,4 +1,4 @@
-.PHONY: all build test test-unit test-integration test-spec coverage lint fmt clean help
+.PHONY: all build test test-unit test-integration test-spec test-stable-t3 benchmark-real-samples benchstat-real-samples coverage lint fmt clean help
 
 # Default target
 all: fmt lint build test
@@ -21,6 +21,27 @@ test-integration:
 # Run spec tests (TDD compliance tests)
 test-spec:
 	go test -v ./test/spec/...
+
+# Run stable T3 source-derived release gate tests
+test-stable-t3:
+	GOCACHE=/private/tmp/udbx4go-gocache go test -v ./internal/codec . -run 'Udbx4SpecSourceDerived|Udbx4SpecStableSourceDerived|RealSampleData(CadDataset|Vector3DDatasets|CountyTextDataset)'
+
+# Run real sample benchmarks
+benchmark-real-samples:
+	GOCACHE=/private/tmp/udbx4go-gocache go test . -run '^$$' -bench 'BenchmarkRealHenan' -benchmem -count 5
+
+# Compare two real sample benchmark outputs with benchstat
+# Usage: make benchstat-real-samples BASELINE=bench-old.txt CURRENT=bench-new.txt
+benchstat-real-samples:
+	@if ! command -v benchstat >/dev/null 2>&1; then \
+		echo "benchstat not installed. Install with: go install golang.org/x/perf/cmd/benchstat@latest"; \
+		exit 1; \
+	fi
+	@if [ -z "$(BASELINE)" ] || [ -z "$(CURRENT)" ]; then \
+		echo "Usage: make benchstat-real-samples BASELINE=bench-old.txt CURRENT=bench-new.txt"; \
+		exit 1; \
+	fi
+	benchstat "$(BASELINE)" "$(CURRENT)"
 
 # Generate coverage report
 coverage: test-unit
@@ -64,6 +85,9 @@ help:
 	@echo "  test-unit        - Run unit tests with coverage"
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-spec        - Run spec compliance tests"
+	@echo "  test-stable-t3   - Run stable T3 source-derived release gate tests"
+	@echo "  benchmark-real-samples - Run real sample benchmarks"
+	@echo "  benchstat-real-samples - Compare benchmark outputs with benchstat"
 	@echo "  coverage         - Generate HTML coverage report"
 	@echo "  lint             - Run linter"
 	@echo "  fmt              - Format code"
