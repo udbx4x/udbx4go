@@ -68,6 +68,16 @@ func (r *BinaryReader) ReadInt32() (int32, error) {
 	return val, nil
 }
 
+// ReadInt16 reads a 16-bit integer (little-endian).
+func (r *BinaryReader) ReadInt16() (int16, error) {
+	if r.pos+2 > len(r.data) {
+		return 0, errors.FormatError("unexpected end of data reading int16")
+	}
+	val := int16(binary.LittleEndian.Uint16(r.data[r.pos:]))
+	r.pos += 2
+	return val, nil
+}
+
 // ReadInt64 reads a 64-bit integer (little-endian).
 func (r *BinaryReader) ReadInt64() (int64, error) {
 	if r.pos+8 > len(r.data) {
@@ -123,6 +133,13 @@ func (w *BinaryWriter) WriteByte(b byte) {
 func (w *BinaryWriter) WriteInt32(val int32) {
 	b := make([]byte, 4)
 	binary.LittleEndian.PutUint32(b, uint32(val))
+	w.data = append(w.data, b...)
+}
+
+// WriteInt16 writes a 16-bit integer (little-endian).
+func (w *BinaryWriter) WriteInt16(val int16) {
+	b := make([]byte, 2)
+	binary.LittleEndian.PutUint16(b, uint16(val))
 	w.data = append(w.data, b...)
 }
 

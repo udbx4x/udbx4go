@@ -72,12 +72,12 @@ func (g PointGeometry) Z() float64 {
 
 // MultiLineStringGeometry represents a GeoJSON-like MultiLineString geometry.
 type MultiLineStringGeometry struct {
-	Type        string          `json:"type"`
-	Coordinates [][][]float64   `json:"coordinates"`
-	SRID        int             `json:"srid,omitempty"`
-	HasZValue   bool            `json:"hasZ,omitempty"`
-	BBox        []float64       `json:"bbox,omitempty"`
-	GeoType     int             `json:"geoType,omitempty"`
+	Type        string        `json:"type"`
+	Coordinates [][][]float64 `json:"coordinates"`
+	SRID        int           `json:"srid,omitempty"`
+	HasZValue   bool          `json:"hasZ,omitempty"`
+	BBox        []float64     `json:"bbox,omitempty"`
+	GeoType     int           `json:"geoType,omitempty"`
 }
 
 // GeometryType returns "MultiLineString".
@@ -108,12 +108,12 @@ func (g MultiLineStringGeometry) GetBBox() []float64 {
 
 // MultiPolygonGeometry represents a GeoJSON-like MultiPolygon geometry.
 type MultiPolygonGeometry struct {
-	Type        string            `json:"type"`
-	Coordinates [][][][]float64   `json:"coordinates"`
-	SRID        int               `json:"srid,omitempty"`
-	HasZValue   bool              `json:"hasZ,omitempty"`
-	BBox        []float64         `json:"bbox,omitempty"`
-	GeoType     int               `json:"geoType,omitempty"`
+	Type        string          `json:"type"`
+	Coordinates [][][][]float64 `json:"coordinates"`
+	SRID        int             `json:"srid,omitempty"`
+	HasZValue   bool            `json:"hasZ,omitempty"`
+	BBox        []float64       `json:"bbox,omitempty"`
+	GeoType     int             `json:"geoType,omitempty"`
 }
 
 // GeometryType returns "MultiPolygon".
@@ -140,4 +140,183 @@ func (g MultiPolygonGeometry) HasZ() bool {
 // GetBBox returns the bounding box.
 func (g MultiPolygonGeometry) GetBBox() []float64 {
 	return g.BBox
+}
+
+// Color represents a UDBX Color value in ABGR byte order.
+type Color struct {
+	A int
+	B int
+	G int
+	R int
+}
+
+// TextStyle represents the GeoText TextStyle payload.
+type TextStyle struct {
+	Color           *Color
+	BackgroundColor *Color
+	FixedSize       int
+	Weight          int
+	StyleFlag       int
+	AlignFlag       int
+	FontWidth       float64
+	FontHeight      float64
+	Anchor          []float64
+	FaceName        string
+}
+
+// TextSubText represents one GeoText sub-text object.
+type TextSubText struct {
+	Text     string
+	Anchor   []float64
+	Rotation float64
+}
+
+// TextGeometry represents a UDBX GeoText geometry.
+type TextGeometry struct {
+	Type     string
+	Text     string
+	Anchor   []float64
+	Rotation float64
+	SRID     int
+	BBox     []float64
+	GeoType  int
+	Style    *TextStyle
+	SubTexts []*TextSubText
+}
+
+// GeometryType returns "Text".
+func (g *TextGeometry) GeometryType() string { return "Text" }
+
+// GetSRID returns the SRID.
+func (g *TextGeometry) GetSRID() int { return g.SRID }
+
+// HasZ returns false for current TextGeometry.
+func (g *TextGeometry) HasZ() bool { return false }
+
+// GetBBox returns the bounding box.
+func (g *TextGeometry) GetBBox() []float64 { return g.BBox }
+
+// CadStyle represents a CAD GeoHeader style payload.
+type CadStyle interface {
+	CadStyleKind() string
+}
+
+// CadMarkerStyle represents point marker style.
+type CadMarkerStyle struct {
+	MarkerStyle       int
+	MarkerSize        int
+	MarkerAngle       int
+	MarkerColor       int
+	MarkerWidth       int
+	MarkerHeight      int
+	FillOpaqueRate    int8
+	FillGradientType  int8
+	FillAngle         int16
+	FillCenterOffsetX int16
+	FillCenterOffsetY int16
+	FillBackcolor     int
+}
+
+func (s *CadMarkerStyle) CadStyleKind() string { return "marker" }
+
+// CadLineStyle represents line style.
+type CadLineStyle struct {
+	LineStyle int
+	LineWidth int
+	LineColor int
+}
+
+func (s *CadLineStyle) CadStyleKind() string { return "line" }
+
+// CadFillStyle represents fill style.
+type CadFillStyle struct {
+	LineStyle         int
+	LineWidth         int
+	LineColor         int
+	FillStyle         int
+	FillForecolor     int
+	FillBackcolor     int
+	FillOpaquerate    int8
+	FillGadientType   int8
+	FillAngle         int16
+	FillCenterOffsetX int16
+	FillCenterOffsetY int16
+}
+
+func (s *CadFillStyle) CadStyleKind() string { return "fill" }
+
+// CadGeometry represents a minimal CAD GeoHeader geometry.
+type CadGeometry interface {
+	Geometry
+	CadGeoType() int
+	CadStyle() CadStyle
+}
+
+// CadPointGeometry represents a CAD point geometry.
+type CadPointGeometry struct {
+	XCoord float64
+	YCoord float64
+	Style  CadStyle
+}
+
+func (g *CadPointGeometry) GeometryType() string { return "CadPoint" }
+func (g *CadPointGeometry) GetSRID() int         { return 0 }
+func (g *CadPointGeometry) HasZ() bool           { return false }
+func (g *CadPointGeometry) GetBBox() []float64 {
+	return []float64{g.XCoord, g.YCoord, g.XCoord, g.YCoord}
+}
+func (g *CadPointGeometry) CadGeoType() int    { return 1 }
+func (g *CadPointGeometry) CadStyle() CadStyle { return g.Style }
+
+// CadLineGeometry represents a CAD line geometry.
+type CadLineGeometry struct {
+	NumSub         int
+	SubPointCounts []int
+	Coordinates    [][2]float64
+	Style          CadStyle
+}
+
+func (g *CadLineGeometry) GeometryType() string { return "CadLine" }
+func (g *CadLineGeometry) GetSRID() int         { return 0 }
+func (g *CadLineGeometry) HasZ() bool           { return false }
+func (g *CadLineGeometry) GetBBox() []float64   { return cadBBox(g.Coordinates) }
+func (g *CadLineGeometry) CadGeoType() int      { return 3 }
+func (g *CadLineGeometry) CadStyle() CadStyle   { return g.Style }
+
+// CadRegionGeometry represents a CAD region geometry.
+type CadRegionGeometry struct {
+	NumSub         int
+	SubPointCounts []int
+	Coordinates    [][2]float64
+	Style          CadStyle
+}
+
+func (g *CadRegionGeometry) GeometryType() string { return "CadRegion" }
+func (g *CadRegionGeometry) GetSRID() int         { return 0 }
+func (g *CadRegionGeometry) HasZ() bool           { return false }
+func (g *CadRegionGeometry) GetBBox() []float64   { return cadBBox(g.Coordinates) }
+func (g *CadRegionGeometry) CadGeoType() int      { return 5 }
+func (g *CadRegionGeometry) CadStyle() CadStyle   { return g.Style }
+
+func cadBBox(coordinates [][2]float64) []float64 {
+	if len(coordinates) == 0 {
+		return nil
+	}
+	minX, minY := coordinates[0][0], coordinates[0][1]
+	maxX, maxY := minX, minY
+	for _, coordinate := range coordinates[1:] {
+		if coordinate[0] < minX {
+			minX = coordinate[0]
+		}
+		if coordinate[0] > maxX {
+			maxX = coordinate[0]
+		}
+		if coordinate[1] < minY {
+			minY = coordinate[1]
+		}
+		if coordinate[1] > maxY {
+			maxY = coordinate[1]
+		}
+	}
+	return []float64{minX, minY, maxX, maxY}
 }
