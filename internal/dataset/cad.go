@@ -1,0 +1,282 @@
+package dataset
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/udbx4x/udbx4go/internal/codec"
+	"github.com/udbx4x/udbx4go/pkg/errors"
+	"github.com/udbx4x/udbx4go/pkg/types"
+)
+
+// CadDataset represents a CAD GeoHeader dataset.
+type CadDataset struct {
+	*BaseDataset
+	cadCodec *codec.CadGeometryCodec
+}
+
+// NewCadDataset creates a new CAD dataset.
+func NewCadDataset(db *sql.DB, info *types.DatasetInfo) *CadDataset {
+	return &CadDataset{
+		BaseDataset: NewBaseDataset(db, info),
+		cadCodec:    codec.NewCadGeometryCodec(),
+	}
+}
+
+// GetByID returns a CAD feature by ID.
+func (d *CadDataset) GetByID(id int) (*types.Feature, error) {
+	query := fmt.Sprintf("SELECT * FROM %s WHERE SmID = ?", d.TableName())
+	row := d.DB().QueryRow(query, id)
+	return d.scanFeature(row, id)
+}
+
+// List returns CAD features.
+func (d *CadDataset) List(opts *types.QueryOptions) ([]*types.Feature, error) {
+	query, args := d.buildQuery(opts)
+	rows, err := d.DB().Query(query, args...)
+	if err != nil {
+		return nil, errors.IOError("failed to query CAD features", err)
+	}
+	defer rows.Close()
+
+	return d.scanFeatures(rows)
+}
+
+// Insert inserts a CAD feature.
+func (d *CadDataset) Insert(feature *types.Feature) error {
+	cadGeometry, ok := feature.Geometry.(types.CadGeometry)
+	if !ok {
+		return errors.ConstraintError("geometry must be CAD GeoHeader geometry")
+	}
+
+	fields, err := d.GetFields()
+	if err != nil {
+		return err
+	}
+
+	geometryBlob, err := d.cadCodec.Encode(cadGeometry)
+	if err != nil {
+		return err
+	}
+
+	columns := []string{"SmID", "SmGeometry"}
+	placeholders := []string{"?", "?"}
+	values := []interface{}{feature.ID, geometryBlob}
+
+	for _, field := range fields {
+		columns = append(columns, field.Name)
+		placeholders = append(placeholders, "?")
+		values = append(values, feature.Attributes[field.Name])
+	}
+
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
+		d.TableName(),
+		strings.Join(columns, ", "),
+		strings.Join(placeholders, ", "))
+
+	if _, err := d.DB().Exec(query, values...); err != nil {
+		return errors.IOError("failed to insert CAD feature", err)
+	}
+
+	return d.syncObjectCount()
+}
+
+// InsertMany inserts multiple CAD features.
+func (d *CadDataset) InsertMany(features []*types.Feature) error {
+	for _, feature := range features {
+		if err := d.Insert(feature); err != nil {
+			_ = d.syncObjectCount()
+			return err
+		}
+	}
+	return d.syncObjectCount()
+}
+
+// Update updates a CAD feature.
+func (d *CadDataset) Update(id int, changes *FeatureChanges) error {
+	fields, err := d.GetFields()
+	if err != nil {
+		return err
+	}
+
+	validFields := make(map[string]bool)
+	for _, field := range fields {
+		validFields[field.Name] = true
+	}
+
+	var setClauses []string
+	var values []interface{}
+
+	if changes.Geometry != nil {
+		cadGeometry, ok := changes.Geometry.(types.CadGeometry)
+		if !ok {
+			return errors.ConstraintError("geometry must be CAD GeoHeader geometry")
+		}
+		geometryBlob, err := d.cadCodec.Encode(cadGeometry)
+		if err != nil {
+			return err
+		}
+		setClauses = append(setClauses, "SmGeometry = ?")
+		values = append(values, geometryBlob)
+	}
+
+	for name, value := range changes.Attributes {
+		if !validFields[name] {
+			return errors.FieldNotFound(name)
+		}
+		setClauses = append(setClauses, fmt.Sprintf("%s = ?", name))
+		values = append(values, value)
+	}
+
+	if len(setClauses) == 0 {
+		return nil
+	}
+
+	values = append(values, id)
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE SmID = ?",
+		d.TableName(),
+		strings.Join(setClauses, ", "))
+
+	result, err := d.DB().Exec(query, values...)
+	if err != nil {
+		return errors.IOError("failed to update CAD feature", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return errors.FeatureNotFound(d.Info().Name, id)
+	}
+
+	return d.syncObjectCount()
+}
+
+// Delete deletes a CAD feature by ID.
+func (d *CadDataset) Delete(id int) error {
+	query := fmt.Sprintf("DELETE FROM %s WHERE SmID = ?", d.TableName())
+	result, err := d.DB().Exec(query, id)
+	if err != nil {
+		return errors.IOError("failed to delete CAD feature", err)
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		return errors.FeatureNotFound(d.Info().Name, id)
+	}
+
+	return d.syncObjectCount()
+}
+
+func (d *CadDataset) scanFeature(row *sql.Row, id int) (*types.Feature, error) {
+	rows, err := d.DB().Query(fmt.Sprintf("SELECT * FROM %s LIMIT 0", d.TableName()))
+	if err != nil {
+		return nil, errors.IOError("failed to get CAD column names", err)
+	}
+	columns, err := rows.Columns()
+	rows.Close()
+	if err != nil {
+		return nil, errors.IOError("failed to get CAD columns", err)
+	}
+
+	values := make([]interface{}, len(columns))
+	valuePtrs := make([]interface{}, len(columns))
+	for index := range values {
+		valuePtrs[index] = &values[index]
+	}
+
+	if err := row.Scan(valuePtrs...); err == sql.ErrNoRows {
+		return nil, errors.FeatureNotFound(d.Info().Name, id)
+	} else if err != nil {
+		return nil, errors.IOError("failed to scan CAD feature", err)
+	}
+
+	return d.buildFeature(columns, values)
+}
+
+func (d *CadDataset) scanFeatures(rows *sql.Rows) ([]*types.Feature, error) {
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, errors.IOError("failed to get CAD columns", err)
+	}
+
+	var features []*types.Feature
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePtrs := make([]interface{}, len(columns))
+		for index := range values {
+			valuePtrs[index] = &values[index]
+		}
+		if err := rows.Scan(valuePtrs...); err != nil {
+			return nil, errors.IOError("failed to scan CAD feature", err)
+		}
+		feature, err := d.buildFeature(columns, values)
+		if err != nil {
+			return nil, err
+		}
+		features = append(features, feature)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, errors.IOError("error iterating CAD features", err)
+	}
+	return features, nil
+}
+
+func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*types.Feature, error) {
+	feature := &types.Feature{Attributes: make(map[string]interface{})}
+	var geometryBlob []byte
+
+	for index, column := range columns {
+		value := values[index]
+		switch column {
+		case "SmID":
+			if id, ok := value.(int64); ok {
+				feature.ID = int(id)
+			}
+		case "SmGeometry":
+			if blob, ok := value.([]byte); ok {
+				geometryBlob = blob
+			}
+		default:
+			feature.Attributes[column] = value
+		}
+	}
+
+	if geometryBlob != nil {
+		geometry, err := d.cadCodec.Decode(geometryBlob)
+		if err != nil {
+			return nil, errors.FormatError("failed to decode CAD geometry", err)
+		}
+		feature.Geometry = geometry
+	}
+
+	return feature, nil
+}
+
+func (d *CadDataset) buildQuery(opts *types.QueryOptions) (string, []interface{}) {
+	if opts == nil {
+		opts = &types.QueryOptions{}
+	}
+
+	query := fmt.Sprintf("SELECT * FROM %s", d.TableName())
+	var args []interface{}
+
+	if len(opts.IDs) > 0 {
+		placeholders := make([]string, len(opts.IDs))
+		for index, id := range opts.IDs {
+			placeholders[index] = "?"
+			args = append(args, id)
+		}
+		query += fmt.Sprintf(" WHERE SmID IN (%s)", strings.Join(placeholders, ", "))
+	}
+
+	query += " ORDER BY SmID"
+	if opts.Limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", opts.Limit)
+	}
+	if opts.Offset > 0 {
+		query += fmt.Sprintf(" OFFSET %d", opts.Offset)
+	}
+
+	return query, args
+}

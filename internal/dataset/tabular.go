@@ -26,7 +26,7 @@ func (d *TabularDataset) GetByID(id int) (*types.TabularRecord, error) {
 	query := fmt.Sprintf("SELECT * FROM %s WHERE SmID = ?", d.TableName())
 
 	row := d.DB().QueryRow(query, id)
-	return d.scanRecord(row)
+	return d.scanRecord(row, id)
 }
 
 // List returns a list of records.
@@ -95,24 +95,19 @@ func (d *TabularDataset) Insert(record *types.TabularRecord) error {
 		return errors.IOError("failed to insert record", err)
 	}
 
-	return nil
+	return d.syncObjectCount()
 }
 
 // InsertMany inserts multiple records.
 func (d *TabularDataset) InsertMany(records []*types.TabularRecord) error {
-	tx, err := d.DB().Begin()
-	if err != nil {
-		return errors.IOError("failed to begin transaction", err)
-	}
-	defer tx.Rollback()
-
 	for _, record := range records {
 		if err := d.Insert(record); err != nil {
+			_ = d.syncObjectCount()
 			return err
 		}
 	}
 
-	return tx.Commit()
+	return d.syncObjectCount()
 }
 
 // Update updates a record.
@@ -160,7 +155,7 @@ func (d *TabularDataset) Update(id int, attributes map[string]interface{}) error
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
 
-	return nil
+	return d.syncObjectCount()
 }
 
 // Delete deletes a record by ID.
@@ -180,7 +175,7 @@ func (d *TabularDataset) Delete(id int) error {
 	return nil
 }
 
-func (d *TabularDataset) scanRecord(row *sql.Row) (*types.TabularRecord, error) {
+func (d *TabularDataset) scanRecord(row *sql.Row, id int) (*types.TabularRecord, error) {
 	// Get column names
 	rows, err := d.DB().Query(fmt.Sprintf("SELECT * FROM %s LIMIT 0", d.TableName()))
 	if err != nil {
@@ -203,7 +198,7 @@ func (d *TabularDataset) scanRecord(row *sql.Row) (*types.TabularRecord, error) 
 	// Scan the row
 	err = row.Scan(valuePtrs...)
 	if err == sql.ErrNoRows {
-		return nil, errors.FeatureNotFound(d.Info().Name, 0)
+		return nil, errors.FeatureNotFound(d.Info().Name, id)
 	}
 	if err != nil {
 		return nil, errors.IOError("failed to scan record", err)

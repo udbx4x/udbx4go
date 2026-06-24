@@ -24,9 +24,32 @@ func TestBaseDataset_Info(t *testing.T) {
 	dataset := NewBaseDataset(db, info)
 
 	assert.Equal(t, info, dataset.Info())
-	assert.Equal(t, 10, dataset.Count())
 	assert.Equal(t, "test_table", dataset.TableName())
 	assert.Equal(t, db, dataset.DB())
+}
+
+func TestBaseDataset_CountReadsPhysicalTable(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	_, err := db.Exec(`CREATE TABLE test_table (SmID INTEGER PRIMARY KEY, value TEXT)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO test_table (SmID, value) VALUES (1, 'a'), (2, 'b'), (3, 'c')`)
+	require.NoError(t, err)
+
+	info := &types.DatasetInfo{
+		ID:          1,
+		Name:        "test",
+		TableName:   "test_table",
+		Kind:        types.DatasetKindTabular,
+		ObjectCount: 99,
+	}
+
+	dataset := NewBaseDataset(db, info)
+	count, err := dataset.Count()
+	require.NoError(t, err)
+	assert.Equal(t, 3, count)
+	assert.Equal(t, 99, dataset.Info().ObjectCount)
 }
 
 func TestBaseDataset_GetFields(t *testing.T) {

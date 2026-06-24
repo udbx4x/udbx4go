@@ -119,6 +119,10 @@ func (ds *DataSource) GetDataset(name string) (dataset.Dataset, error) {
 		return dataset.NewLineZDataset(ds.db, info), nil
 	case types.DatasetKindRegionZ:
 		return dataset.NewRegionZDataset(ds.db, info), nil
+	case types.DatasetKindText:
+		return dataset.NewTextDataset(ds.db, info), nil
+	case types.DatasetKindCAD:
+		return dataset.NewCadDataset(ds.db, info), nil
 	default:
 		return nil, errors.UnsupportedError(fmt.Sprintf("dataset kind '%s' is not supported", info.Kind.String()))
 	}
@@ -184,6 +188,36 @@ func (ds *DataSource) GetRegionDataset(name string) (*dataset.RegionDataset, err
 	return region, nil
 }
 
+// GetTextDataset returns a Text dataset by name.
+func (ds *DataSource) GetTextDataset(name string) (*dataset.TextDataset, error) {
+	d, err := ds.GetDataset(name)
+	if err != nil {
+		return nil, err
+	}
+
+	text, ok := d.(*dataset.TextDataset)
+	if !ok {
+		return nil, errors.FormatError(fmt.Sprintf("dataset '%s' is not a Text dataset", name))
+	}
+
+	return text, nil
+}
+
+// GetCadDataset returns a CAD dataset by name.
+func (ds *DataSource) GetCadDataset(name string) (*dataset.CadDataset, error) {
+	d, err := ds.GetDataset(name)
+	if err != nil {
+		return nil, err
+	}
+
+	cad, ok := d.(*dataset.CadDataset)
+	if !ok {
+		return nil, errors.FormatError(fmt.Sprintf("dataset '%s' is not a CAD dataset", name))
+	}
+
+	return cad, nil
+}
+
 // CreateTabularDataset creates a new tabular dataset.
 func (ds *DataSource) CreateTabularDataset(name string, fields []*types.FieldInfo) (*dataset.TabularDataset, error) {
 	return ds.createTabularDatasetInternal(name, types.DatasetKindTabular, 0, fields)
@@ -229,6 +263,16 @@ func (ds *DataSource) CreateRegionZDataset(name string, srid int, fields []*type
 		return nil, err
 	}
 	return dataset.NewRegionZDataset(ds.db, d.Info()), nil
+}
+
+// CreateCadDataset creates a new CAD GeoHeader dataset.
+func (ds *DataSource) CreateCadDataset(name string, fields []*types.FieldInfo) (*dataset.CadDataset, error) {
+	return ds.createCadDatasetInternal(name, fields)
+}
+
+// CreateTextDataset creates a new Text / GeoText dataset.
+func (ds *DataSource) CreateTextDataset(name string, srid int, fields []*types.FieldInfo) (*dataset.TextDataset, error) {
+	return ds.createTextDatasetInternal(name, srid, fields)
 }
 
 // Internal creation methods
@@ -390,6 +434,139 @@ func (ds *DataSource) createRegionDatasetInternal(name string, kind types.Datase
 		return nil, err
 	}
 	return dataset.NewRegionDataset(ds.db, pointDS.Info()), nil
+}
+
+func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.FieldInfo) (*dataset.CadDataset, error) {
+	exists, err := ds.registerDao.Exists(name)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.ConstraintError(fmt.Sprintf("dataset '%s' already exists", name))
+	}
+
+	tableName := generateTableName(name)
+	initializer := schema.NewInitializer(ds.db)
+
+	fieldColumns := make([]schema.FieldColumn, len(fields))
+	for i, f := range fields {
+		fieldColumns[i] = schema.FieldColumn{
+			Name:       f.Name,
+			SQLiteType: f.FieldType.SQLiteType(),
+			Nullable:   f.Nullable,
+		}
+	}
+
+	if err := initializer.CreateDatasetTable(tableName, true, fieldColumns); err != nil {
+		return nil, errors.IOError("failed to create CAD dataset table", err)
+	}
+
+	record := &system.SmRegisterRecord{
+		SmDatasetType: int(types.DatasetKindCAD),
+		SmDatasetName: name,
+		SmTableName:   tableName,
+		SmObjectCount: 0,
+	}
+	if err := ds.registerDao.Insert(record); err != nil {
+		return nil, err
+	}
+
+	for _, field := range fields {
+		fieldRecord := &system.SmFieldInfoRecord{
+			SmDatasetID:      record.SmDatasetID,
+			SmFieldName:      field.Name,
+			SmFieldType:      int(field.FieldType),
+			SmFieldbRequired: boolToInt(field.Required),
+		}
+		if field.Alias != nil {
+			fieldRecord.SmFieldCaption = sql.NullString{String: *field.Alias, Valid: true}
+		}
+		if err := ds.fieldInfoDao.Insert(fieldRecord); err != nil {
+			return nil, err
+		}
+	}
+
+	return dataset.NewCadDataset(ds.db, record.ToDatasetInfo()), nil
+}
+
+func (ds *DataSource) createTextDatasetInternal(name string, srid int, fields []*types.FieldInfo) (*dataset.TextDataset, error) {
+	exists, err := ds.registerDao.Exists(name)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errors.ConstraintError(fmt.Sprintf("dataset '%s' already exists", name))
+	}
+
+	tableName := generateTableName(name)
+
+	fieldColumns := make([]schema.FieldColumn, len(fields))
+	for i, f := range fields {
+		fieldColumns[i] = schema.FieldColumn{
+			Name:       f.Name,
+			SQLiteType: f.FieldType.SQLiteType(),
+			Nullable:   f.Nullable,
+		}
+	}
+
+	query := "CREATE TABLE IF NOT EXISTS " + tableName + " (\n"
+	query += "\tSmID INTEGER PRIMARY KEY,\n"
+	query += "\tSmUserID INTEGER DEFAULT 0 NOT NULL,\n"
+	query += "\tSmGeometry BLOB,\n"
+	query += "\tSmIndexKey POLYGON"
+	for _, field := range fieldColumns {
+		query += ",\n\t" + field.Name + " " + field.SQLiteType
+		if !field.Nullable {
+			query += " NOT NULL"
+		}
+	}
+	query += "\n)"
+	if _, err := ds.db.Exec(query); err != nil {
+		return nil, errors.IOError("failed to create Text dataset table", err)
+	}
+
+	record := &system.SmRegisterRecord{
+		SmDatasetType: int(types.DatasetKindText),
+		SmDatasetName: name,
+		SmTableName:   tableName,
+		SmObjectCount: 0,
+		SmGeoColName:  sql.NullString{String: "SmGeometry", Valid: true},
+	}
+	if srid > 0 {
+		record.SmSRID = sql.NullInt32{Int32: int32(srid), Valid: true}
+	}
+	if err := ds.registerDao.Insert(record); err != nil {
+		return nil, err
+	}
+
+	geoRecord := &system.GeometryColumnsRecord{
+		FTableName:          strings.ToLower(tableName),
+		FGeometryColumn:     "smindexkey",
+		GeometryType:        3,
+		CoordDimension:      2,
+		SRID:                srid,
+		SpatialIndexEnabled: 0,
+	}
+	if err := ds.geoColsDao.Insert(geoRecord); err != nil {
+		return nil, err
+	}
+
+	for _, field := range fields {
+		fieldRecord := &system.SmFieldInfoRecord{
+			SmDatasetID:      record.SmDatasetID,
+			SmFieldName:      field.Name,
+			SmFieldType:      int(field.FieldType),
+			SmFieldbRequired: boolToInt(field.Required),
+		}
+		if field.Alias != nil {
+			fieldRecord.SmFieldCaption = sql.NullString{String: *field.Alias, Valid: true}
+		}
+		if err := ds.fieldInfoDao.Insert(fieldRecord); err != nil {
+			return nil, err
+		}
+	}
+
+	return dataset.NewTextDataset(ds.db, record.ToDatasetInfo()), nil
 }
 
 // generateTableName generates a safe table name from dataset name.

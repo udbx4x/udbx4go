@@ -93,6 +93,7 @@ func TestTabularDataset_GetByID_NotFound(t *testing.T) {
 	_, err := dataset.GetByID(999)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+	assert.Contains(t, err.Error(), "999")
 }
 
 func TestTabularDataset_List(t *testing.T) {

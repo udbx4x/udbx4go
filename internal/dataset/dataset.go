@@ -3,8 +3,10 @@ package dataset
 
 import (
 	"database/sql"
+	"fmt"
 
 	"github.com/udbx4x/udbx4go/internal/system"
+	"github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
@@ -13,7 +15,7 @@ type Dataset interface {
 	// Info returns the dataset metadata.
 	Info() *types.DatasetInfo
 	// Count returns the number of records/features.
-	Count() int
+	Count() (int, error)
 	// GetFields returns the field metadata.
 	GetFields() ([]*types.FieldInfo, error)
 	// Close releases any resources.
@@ -44,17 +46,19 @@ type WritableDataset[T any] interface {
 
 // BaseDataset provides common functionality for all datasets.
 type BaseDataset struct {
-	db       *sql.DB
-	info     *types.DatasetInfo
-	fieldDao *system.SmFieldInfoDao
+	db          *sql.DB
+	info        *types.DatasetInfo
+	fieldDao    *system.SmFieldInfoDao
+	registerDao *system.SmRegisterDao
 }
 
 // NewBaseDataset creates a new base dataset.
 func NewBaseDataset(db *sql.DB, info *types.DatasetInfo) *BaseDataset {
 	return &BaseDataset{
-		db:       db,
-		info:     info,
-		fieldDao: system.NewSmFieldInfoDao(db),
+		db:          db,
+		info:        info,
+		fieldDao:    system.NewSmFieldInfoDao(db),
+		registerDao: system.NewSmRegisterDao(db),
 	}
 }
 
@@ -63,9 +67,9 @@ func (d *BaseDataset) Info() *types.DatasetInfo {
 	return d.info
 }
 
-// Count returns the number of records.
-func (d *BaseDataset) Count() int {
-	return d.info.ObjectCount
+// Count returns the actual number of rows in the physical dataset table.
+func (d *BaseDataset) Count() (int, error) {
+	return d.countRows()
 }
 
 // GetFields returns the field metadata.
@@ -96,4 +100,30 @@ func (d *BaseDataset) DB() *sql.DB {
 // TableName returns the dataset table name.
 func (d *BaseDataset) TableName() string {
 	return d.info.TableName
+}
+
+// syncObjectCount refreshes SmRegister.SmObjectCount from the actual table row count.
+func (d *BaseDataset) syncObjectCount() error {
+	count, err := d.countRows()
+	if err != nil {
+		return err
+	}
+
+	if err := d.registerDao.UpdateObjectCount(d.info.ID, count); err != nil {
+		return err
+	}
+
+	d.info.ObjectCount = count
+	return nil
+}
+
+func (d *BaseDataset) countRows() (int, error) {
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s", d.TableName())
+
+	var count int
+	if err := d.db.QueryRow(query).Scan(&count); err != nil {
+		return 0, errors.IOError("failed to count dataset rows", err)
+	}
+
+	return count, nil
 }

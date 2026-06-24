@@ -37,7 +37,7 @@ func (d *VectorDataset) SRID() int {
 }
 
 // scanFeature scans a row into a Feature.
-func (d *VectorDataset) scanFeature(row *sql.Row, geometryType string) (*types.Feature, error) {
+func (d *VectorDataset) scanFeature(row *sql.Row, geometryType string, id int) (*types.Feature, error) {
 	// Get column names
 	rows, err := d.DB().Query(fmt.Sprintf("SELECT * FROM %s LIMIT 0", d.TableName()))
 	if err != nil {
@@ -60,7 +60,7 @@ func (d *VectorDataset) scanFeature(row *sql.Row, geometryType string) (*types.F
 	// Scan the row
 	err = row.Scan(valuePtrs...)
 	if err == sql.ErrNoRows {
-		return nil, errors.FeatureNotFound(d.Info().Name, 0)
+		return nil, errors.FeatureNotFound(d.Info().Name, id)
 	}
 	if err != nil {
 		return nil, errors.IOError("failed to scan feature", err)

@@ -26,7 +26,7 @@ func (d *PointDataset) GetByID(id int) (*types.Feature, error) {
 	query := fmt.Sprintf("SELECT * FROM %s WHERE SmID = ?", d.TableName())
 
 	row := d.DB().QueryRow(query, id)
-	return d.scanFeature(row, "Point")
+	return d.scanFeature(row, "Point", id)
 }
 
 // List returns a list of features.
@@ -83,24 +83,19 @@ func (d *PointDataset) Insert(feature *types.Feature) error {
 		return errors.IOError("failed to insert feature", err)
 	}
 
-	return nil
+	return d.syncObjectCount()
 }
 
 // InsertMany inserts multiple features.
 func (d *PointDataset) InsertMany(features []*types.Feature) error {
-	tx, err := d.DB().Begin()
-	if err != nil {
-		return errors.IOError("failed to begin transaction", err)
-	}
-	defer tx.Rollback()
-
 	for _, feature := range features {
 		if err := d.Insert(feature); err != nil {
+			_ = d.syncObjectCount()
 			return err
 		}
 	}
 
-	return tx.Commit()
+	return d.syncObjectCount()
 }
 
 // Update updates a feature.
@@ -163,7 +158,7 @@ func (d *PointDataset) Update(id int, changes *FeatureChanges) error {
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
 
-	return nil
+	return d.syncObjectCount()
 }
 
 // Delete deletes a feature by ID.
@@ -188,4 +183,3 @@ type FeatureChanges struct {
 	Geometry   types.Geometry
 	Attributes map[string]interface{}
 }
-
