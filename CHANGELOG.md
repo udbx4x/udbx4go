@@ -5,12 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-06-26
 
 ### Added
 
-- Initial implementation of UDBX reader/writer library
-- Support for implemented dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD
+- Initial public release of the UDBX reader/writer library for Go.
+- Support for implemented dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD.
 - Text / GeoText minimal baseline: `TextDataset`, GeoText encode/decode, CRUD, `CreateTextDataset()`, and roundtrip fixture generation
 - CAD minimal GeoHeader baseline: `CadDataset`, `CadPoint`, `CadLine`, `CadRegion`, CRUD, and `CreateCadDataset()`
 - udbx4spec compliance coverage for `test_text`, `test_cad`, and cross-language roundtrip fixtures
@@ -42,3 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TDD development approach
 - Table-driven tests with testify
 - Type re-exports for convenient API access
+
+### Known limitations
+
+- Text / GeoText and CAD support are declared as minimal compliance baselines, not full compatibility with every complex SuperMap style or object variant.
+- Stable T3 coverage currently targets approved `SampleData.udbx` source-derived fixtures and selected real sample integration tests.
+- Network, Network3D, Model, and other unsupported dataset kinds are outside the `0.1.0` support scope.

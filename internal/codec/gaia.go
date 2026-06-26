@@ -125,8 +125,9 @@ func NewBinaryWriter() *BinaryWriter {
 }
 
 // WriteByte writes a single byte.
-func (w *BinaryWriter) WriteByte(b byte) {
+func (w *BinaryWriter) WriteByte(b byte) error {
 	w.data = append(w.data, b)
+	return nil
 }
 
 // WriteInt32 writes a 32-bit integer (little-endian).

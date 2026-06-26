@@ -16,11 +16,11 @@ test-unit:
 
 # Run integration tests (requires SampleData.udbx)
 test-integration:
-	go test -v ./test/integration/...
+	go test -v .
 
 # Run spec tests (TDD compliance tests)
 test-spec:
-	go test -v ./test/spec/...
+	go test -v ./internal/codec . -run Udbx4Spec
 
 # Run stable T3 source-derived release gate tests
 test-stable-t3:
