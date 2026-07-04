@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 	udbx4go "github.com/udbx4x/udbx4go"
 	"github.com/udbx4x/udbx4go/pkg/types"
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const pageSize = 100
@@ -75,6 +75,8 @@ func (a *App) OpenUDBXFile(path string) (*FileInfo, error) {
 	// Close any existing datasource
 	if a.dataSource != nil {
 		a.dataSource.Close()
+		a.dataSource = nil
+		a.currentPath = ""
 	}
 
 	ds, err := udbx4go.Open(path)
@@ -89,6 +91,7 @@ func (a *App) OpenUDBXFile(path string) (*FileInfo, error) {
 	if err != nil {
 		ds.Close()
 		a.dataSource = nil
+		a.currentPath = ""
 		return nil, fmt.Errorf("无法读取数据集列表: %w", err)
 	}
 
@@ -220,12 +223,16 @@ func (a *App) LoadDatasetPage(datasetName string, page int) (*PageData, error) {
 	var rows [][]string
 
 	// Try to get the dataset with List method
-	if vectorDs, ok := ds.(interface{ List(opts *types.QueryOptions) ([]*types.Feature, error) }); ok {
+	if vectorDs, ok := ds.(interface {
+		List(opts *types.QueryOptions) ([]*types.Feature, error)
+	}); ok {
 		features, err := vectorDs.List(opts)
 		if err == nil {
 			rows = a.formatFeatures(features, fields, info.Kind)
 		}
-	} else if tabularDs, ok := ds.(interface{ List(opts *types.QueryOptions) ([]*types.TabularRecord, error) }); ok {
+	} else if tabularDs, ok := ds.(interface {
+		List(opts *types.QueryOptions) ([]*types.TabularRecord, error)
+	}); ok {
 		records, err := tabularDs.List(opts)
 		if err == nil {
 			rows = a.formatTabularRecords(records, fields)

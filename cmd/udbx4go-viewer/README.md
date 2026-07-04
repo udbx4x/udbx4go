@@ -12,6 +12,13 @@
 - 列出文件中的数据集。
 - 按页查看数据记录。
 - 显示加载状态和错误信息。
+- 关闭或切换文件时释放当前 `DataSource`。
+
+当前不提供：
+
+- 编辑或保存 UDBX 文件。
+- 转换、导出或投影变换。
+- 绕过 `udbx4go` SDK 的系统表或二进制几何解析。
 
 ## 技术栈
 
@@ -57,6 +64,38 @@ wails build
 - `ListDatasets()`：列出数据集。
 - `GetDatasetFields(datasetName)`：读取字段列表。
 - `LoadDatasetPage(datasetName, page)`：分页读取数据。
+
+## 验证
+
+后端测试：
+
+```bash
+cd udbx4go/cmd/udbx4go-viewer
+go test ./...
+```
+
+当前后端测试覆盖：
+
+- 打开 `data/SampleData.udbx`。
+- 列出 `BaseMap_P`、`County_T`、`CADDT` 等真实样本数据集。
+- 分页读取 `BaseMap_P`。
+- 关闭文件后拒绝继续读取。
+- 打开不存在文件时清理旧数据源状态。
+- 页码小于 1 或大于总页数时归一到有效范围。
+
+前端当前尚未配置自动化测试脚本，`frontend/package.json` 没有 `test` 命令。前端改动至少按以下手工脚本验收：
+
+```text
+1. 启动 wails dev。
+2. 无文件状态下，“关闭文件”按钮不可用。
+3. 打开 data/SampleData.udbx 后，左侧显示数据集列表。
+4. 选择 BaseMap_P 后，右侧表格显示第一页记录。
+5. 翻页按钮不会触发越界页。
+6. 打开不存在或损坏文件时显示错误提示。
+7. 关闭文件后状态栏清空当前文件，数据集列表和表格不再显示旧数据。
+```
+
+后续稳定化任务应补充前端测试框架，覆盖加载状态、错误提示、数据集选择和分页交互。
 
 ## 维护约束
 
