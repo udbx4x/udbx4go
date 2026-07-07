@@ -10,8 +10,10 @@ import { useUDBX } from './hooks/useUDBX'
 import { DatasetList } from './components/DatasetList'
 import { DataTable } from './components/DataTable'
 import { SpatialPreviewPanel } from './components/SpatialPreviewPanel'
+import { AppShell } from './components/AppShell'
+import { TopToolbar } from './components/TopToolbar'
 import { StatusBar } from './components/StatusBar'
-import { viewerTheme } from './theme/viewerTheme'
+import { viewerLayout, viewerTheme } from './theme/viewerTheme'
 
 function App() {
   const {
@@ -34,6 +36,7 @@ function App() {
   } = useUDBX()
 
   const [errorOpen, setErrorOpen] = React.useState(false)
+  const [tableOpen, setTableOpen] = React.useState(true)
 
   useEffect(() => {
     if (error) {
@@ -63,39 +66,26 @@ function App() {
     <ThemeProvider theme={viewerTheme}>
       <CssBaseline />
       <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-        {/* Menu Bar */}
-        <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-          <Box component="nav" sx={{ display: 'flex', gap: 2 }}>
-            <button onClick={handleOpenFile} style={{ padding: '6px 16px' }}>
-              打开文件
-            </button>
-            <button onClick={handleCloseFile} style={{ padding: '6px 16px' }} disabled={!currentFile}>
-              关闭文件
-            </button>
-          </Box>
-        </Box>
-
-        {/* Main Content */}
-        <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-          {/* Left Sidebar - Dataset List */}
-          <Box sx={{ width: 280, flexShrink: 0, borderRight: 1, borderColor: 'divider' }}>
-            <DatasetList
-              datasets={datasets}
-              selectedDataset={selectedDataset}
-              onSelectDataset={handleSelectDataset}
-            />
-          </Box>
-
-          {/* Right Content - Map and Data Table */}
-          <Box
-            sx={{
-              flex: 1,
-              overflow: 'hidden',
-              display: 'grid',
-              gridTemplateRows: 'minmax(320px, 1fr) minmax(220px, 0.75fr)',
-            }}
-          >
-            <Box sx={{ overflow: 'hidden', borderBottom: 1, borderColor: 'divider' }}>
+        <Box sx={{ flex: 1, minHeight: 0 }}>
+          <AppShell
+            toolbar={
+              <TopToolbar
+                currentFile={currentFile}
+                loading={loading}
+                tableOpen={tableOpen}
+                onOpenFile={handleOpenFile}
+                onCloseFile={handleCloseFile}
+                onToggleTable={() => setTableOpen((open) => !open)}
+              />
+            }
+            datasetExplorer={
+              <DatasetList
+                datasets={datasets}
+                selectedDataset={selectedDataset}
+                onSelectDataset={handleSelectDataset}
+              />
+            }
+            mapWorkspace={
               <SpatialPreviewPanel
                 layers={mapLayers}
                 selectedFeature={selectedMapFeature}
@@ -104,17 +94,28 @@ function App() {
                 onLayerVisibleChange={setMapLayerVisible}
                 onRemoveLayer={removeMapLayer}
               />
-            </Box>
-            <Box sx={{ overflow: 'hidden' }}>
-              <DataTable
-                pageData={pageData}
-                datasetName={activeTableDataset}
-                selectedFeature={selectedMapFeature}
-                onFeatureSelect={selectFeature}
-                onPageChange={handlePageChange}
-              />
-            </Box>
-          </Box>
+            }
+            inspector={<Box sx={{ height: '100%', bgcolor: 'background.paper' }} />}
+            tableDrawer={
+              <Box
+                sx={{
+                  height: tableOpen ? viewerLayout.tableExpandedHeight : viewerLayout.tableCollapsedHeight,
+                  overflow: 'hidden',
+                  bgcolor: 'background.paper',
+                }}
+              >
+                {tableOpen && (
+                  <DataTable
+                    pageData={pageData}
+                    datasetName={activeTableDataset}
+                    selectedFeature={selectedMapFeature}
+                    onFeatureSelect={selectFeature}
+                    onPageChange={handlePageChange}
+                  />
+                )}
+              </Box>
+            }
+          />
         </Box>
 
         {/* Status Bar */}
