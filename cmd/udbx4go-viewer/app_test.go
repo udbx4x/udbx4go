@@ -157,3 +157,77 @@ func TestViewerSpatialPreviewReportsUnsupportedTabularDataset(t *testing.T) {
 		t.Fatalf("LoadSpatialPreview(tabular) error = %v", err)
 	}
 }
+
+func TestViewerSpatialPreviewSupportsPointLineAndRegionDatasets(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	cases := []struct {
+		name         string
+		wantGeomType string
+		maxVertices  int
+	}{
+		{name: "BaseMap_P", wantGeomType: "Point", maxVertices: 10},
+		{name: "BaseMap_L", wantGeomType: "MultiLineString", maxVertices: 100},
+		{name: "BaseMap_R", wantGeomType: "MultiPolygon", maxVertices: 200},
+	}
+
+	for _, tc := range cases {
+		preview, err := app.LoadSpatialPreview(tc.name, SpatialPreviewRequestDTO{Limit: 2, MaxVertices: tc.maxVertices})
+		if err != nil {
+			t.Fatalf("LoadSpatialPreview(%s) error = %v", tc.name, err)
+		}
+		if len(preview.Features) == 0 {
+			t.Fatalf("LoadSpatialPreview(%s) returned no features", tc.name)
+		}
+		if preview.Features[0].Geometry.Type != tc.wantGeomType {
+			t.Fatalf("%s geometry type = %q, want %q", tc.name, preview.Features[0].Geometry.Type, tc.wantGeomType)
+		}
+	}
+}
+
+func TestViewerGetFeatureAttributesUsesDatasetNameAndSmID(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	preview, err := app.LoadSpatialPreview("BaseMap_P", SpatialPreviewRequestDTO{Limit: 1, MaxVertices: 10})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview(BaseMap_P) error = %v", err)
+	}
+	if len(preview.Features) != 1 {
+		t.Fatalf("len(preview.Features) = %d, want 1", len(preview.Features))
+	}
+
+	attributes, err := app.GetFeatureAttributes("BaseMap_P", preview.Features[0].ID)
+	if err != nil {
+		t.Fatalf("GetFeatureAttributes() error = %v", err)
+	}
+	if attributes.DatasetName != "BaseMap_P" {
+		t.Fatalf("DatasetName = %q, want BaseMap_P", attributes.DatasetName)
+	}
+	if attributes.ID != preview.Features[0].ID {
+		t.Fatalf("ID = %d, want %d", attributes.ID, preview.Features[0].ID)
+	}
+	if attributes.GeometryType != "Point" {
+		t.Fatalf("GeometryType = %q, want Point", attributes.GeometryType)
+	}
+	if attributes.Properties == nil {
+		t.Fatal("Properties = nil")
+	}
+}
+
+func TestViewerGetFeatureAttributesRejectsMissingFeature(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	_, err := app.GetFeatureAttributes("BaseMap_P", -999999)
+	if err == nil || !strings.Contains(err.Error(), "要素不存在") {
+		t.Fatalf("GetFeatureAttributes(missing) error = %v", err)
+	}
+}

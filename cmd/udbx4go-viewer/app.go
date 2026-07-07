@@ -90,6 +90,15 @@ type SpatialPreviewDTO struct {
 	SampleReason         string              `json:"sampleReason,omitempty"`
 }
 
+// FeatureAttributesDTO is returned when the user identifies a feature.
+type FeatureAttributesDTO struct {
+	DatasetName  string            `json:"datasetName"`
+	ID           int               `json:"id"`
+	GeometryType string            `json:"geometryType"`
+	BBox         *BoundingBoxDTO   `json:"bbox,omitempty"`
+	Properties   map[string]string `json:"properties"`
+}
+
 // FileInfo represents information about an opened file
 type FileInfo struct {
 	Path         string `json:"path"`
@@ -375,6 +384,52 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		response.SampleReason = "预览达到顶点上限"
 	}
 	return response, nil
+}
+
+// GetFeatureAttributes returns attributes for one feature by SmID.
+func (a *App) GetFeatureAttributes(datasetName string, featureID int) (*FeatureAttributesDTO, error) {
+	info, ds, err := a.getDatasetForPreview(datasetName)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Kind.IsSpatial() {
+		return nil, fmt.Errorf("数据集 %s 不支持空间要素查询: 非空间数据集", datasetName)
+	}
+
+	fields, err := ds.GetFields()
+	if err != nil {
+		return nil, err
+	}
+	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{IDs: []int{featureID}, Limit: 1})
+	if err != nil {
+		return nil, err
+	}
+	if len(features) == 0 {
+		return nil, fmt.Errorf("要素不存在: %d", featureID)
+	}
+
+	feature := features[0]
+	properties := make(map[string]string)
+	for _, field := range fields {
+		if value, ok := feature.Attributes[field.Name]; ok && value != nil {
+			properties[field.Name] = fmt.Sprintf("%v", value)
+		}
+	}
+
+	geometryType := ""
+	var bbox *BoundingBoxDTO
+	if feature.Geometry != nil {
+		geometryType = feature.Geometry.GeometryType()
+		bbox = bboxFromSlice(feature.Geometry.GetBBox())
+	}
+
+	return &FeatureAttributesDTO{
+		DatasetName:  info.Name,
+		ID:           feature.ID,
+		GeometryType: geometryType,
+		BBox:         bbox,
+		Properties:   properties,
+	}, nil
 }
 
 func (a *App) getDatasetForPreview(datasetName string) (*types.DatasetInfo, interface {
