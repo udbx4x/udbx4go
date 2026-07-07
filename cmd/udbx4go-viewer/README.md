@@ -11,13 +11,19 @@
 - 打开本地 `.udbx` 文件。
 - 列出文件中的数据集。
 - 按页查看数据记录。
+- 创建一副只读地图，同时预览多个空间数据集图层。
+- 支持地图图层显隐、移除和适配全部可见图层。
+- 点、线、面图层使用内置默认样式渲染，并在内部保留 `LayerStyle` 结构供后续样式设置 UI 使用。
+- 在地图、图层和属性表之间按 `datasetName + SmID` 做单选联动。
+- 点击地图要素或属性表行查看属性摘要。
 - 显示加载状态和错误信息。
 - 关闭或切换文件时释放当前 `DataSource`。
 
 当前不提供：
 
+- 在线底图、投影变换或坐标转换。
 - 编辑或保存 UDBX 文件。
-- 转换、导出或投影变换。
+- 空间数据编辑、保存、导出或格式转换。
 - 绕过 `udbx4go` SDK 的系统表或二进制几何解析。
 
 ## 技术栈
@@ -64,6 +70,9 @@ wails build
 - `ListDatasets()`：列出数据集。
 - `GetDatasetFields(datasetName)`：读取字段列表。
 - `LoadDatasetPage(datasetName, page)`：分页读取数据。
+- `GetDatasetSpatialSummary(datasetName)`：读取空间预览摘要。
+- `LoadSpatialPreview(datasetName, request)`：读取有限数量空间预览要素。
+- `GetFeatureAttributes(datasetName, featureID)`：按 `SmID` 查询要素属性摘要。
 
 ## 验证
 
@@ -93,6 +102,15 @@ go test ./...
 5. 翻页按钮不会触发越界页。
 6. 打开不存在或损坏文件时显示错误提示。
 7. 关闭文件后状态栏清空当前文件，数据集列表和表格不再显示旧数据。
+8. 选择 BaseMap_P 后，地图新增点图层，属性表显示 BaseMap_P。
+9. 再选择 BaseMap_L 后，地图同时显示点图层和线图层，属性表切换为 BaseMap_L。
+10. 再选择 BaseMap_R 后，地图同时显示点、线、面图层。
+11. 在图层列表关闭 BaseMap_P 可见性后，点图层隐藏，线和面仍显示。
+12. 从图层列表移除 BaseMap_L 后，线图层从地图消失。
+13. 点击地图要素后，属性摘要显示对应 datasetName、SmID 和几何类型。
+14. 点击属性表行后，地图高亮同一 datasetName + SmID 的要素。
+15. 选择 TabularDT 后，属性表可显示，地图不新增空间图层或显示不支持空间预览信息。
+16. 图层列表应显示每个图层的样式色块，点、线、面至少能通过颜色区分。
 ```
 
 后续稳定化任务应补充前端测试框架，覆盖加载状态、错误提示、数据集选择和分页交互。
