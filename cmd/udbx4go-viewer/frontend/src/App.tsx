@@ -7,7 +7,7 @@ import {
   Snackbar,
 } from '@mui/material'
 import { useUDBX } from './hooks/useUDBX'
-import { DatasetList } from './components/DatasetList'
+import { DatasetExplorer } from './components/DatasetExplorer'
 import { DataTable } from './components/DataTable'
 import { SpatialPreviewPanel } from './components/SpatialPreviewPanel'
 import { AppShell } from './components/AppShell'
@@ -79,9 +79,11 @@ function App() {
               />
             }
             datasetExplorer={
-              <DatasetList
+              <DatasetExplorer
                 datasets={datasets}
                 selectedDataset={selectedDataset}
+                activeTableDataset={activeTableDataset}
+                mapLayers={mapLayers}
                 onSelectDataset={handleSelectDataset}
               />
             }
