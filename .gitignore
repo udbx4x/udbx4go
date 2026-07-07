@@ -34,6 +34,7 @@ coverage.html
 bin/
 dist/
 build/
+.worktrees/
 
 # UDBX test files (generated during tests)
 *.udbx.tmp
