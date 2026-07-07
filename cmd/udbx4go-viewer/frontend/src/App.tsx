@@ -9,7 +9,7 @@ import {
 import { useUDBX } from './hooks/useUDBX'
 import { DatasetExplorer } from './components/DatasetExplorer'
 import { DataTable } from './components/DataTable'
-import { SpatialPreviewPanel } from './components/SpatialPreviewPanel'
+import { MapWorkspace } from './components/MapWorkspace'
 import { AppShell } from './components/AppShell'
 import { TopToolbar } from './components/TopToolbar'
 import { StatusBar } from './components/StatusBar'
@@ -24,14 +24,11 @@ function App() {
     pageData,
     mapLayers,
     selectedMapFeature,
-    selectedFeatureAttributes,
     loading,
     error,
     openFileDialog,
     closeFile,
     loadDataset,
-    setMapLayerVisible,
-    removeMapLayer,
     selectFeature,
   } = useUDBX()
 
@@ -88,13 +85,10 @@ function App() {
               />
             }
             mapWorkspace={
-              <SpatialPreviewPanel
+              <MapWorkspace
                 layers={mapLayers}
                 selectedFeature={selectedMapFeature}
-                selectedFeatureAttributes={selectedFeatureAttributes}
                 onFeatureSelect={selectFeature}
-                onLayerVisibleChange={setMapLayerVisible}
-                onRemoveLayer={removeMapLayer}
               />
             }
             inspector={<Box sx={{ height: '100%', bgcolor: 'background.paper' }} />}
