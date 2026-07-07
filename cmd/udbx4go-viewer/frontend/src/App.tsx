@@ -10,6 +10,7 @@ import {
 import { useUDBX } from './hooks/useUDBX'
 import { DatasetList } from './components/DatasetList'
 import { DataTable } from './components/DataTable'
+import { SpatialPreviewPanel } from './components/SpatialPreviewPanel'
 import { StatusBar } from './components/StatusBar'
 
 const theme = createTheme({
@@ -23,12 +24,19 @@ function App() {
     currentFile,
     datasets,
     selectedDataset,
+    activeTableDataset,
     pageData,
+    mapLayers,
+    selectedMapFeature,
+    selectedFeatureAttributes,
     loading,
     error,
     openFileDialog,
     closeFile,
     loadDataset,
+    setMapLayerVisible,
+    removeMapLayer,
+    selectFeature,
   } = useUDBX()
 
   const [errorOpen, setErrorOpen] = React.useState(false)
@@ -52,8 +60,8 @@ function App() {
   }
 
   const handlePageChange = (page: number) => {
-    if (selectedDataset) {
-      loadDataset(selectedDataset, page)
+    if (activeTableDataset) {
+      loadDataset(activeTableDataset, page)
     }
   }
 
@@ -84,13 +92,34 @@ function App() {
             />
           </Box>
 
-          {/* Right Content - Data Table */}
-          <Box sx={{ flex: 1, overflow: 'hidden' }}>
-            <DataTable
-              pageData={pageData}
-              datasetName={selectedDataset}
-              onPageChange={handlePageChange}
-            />
+          {/* Right Content - Map and Data Table */}
+          <Box
+            sx={{
+              flex: 1,
+              overflow: 'hidden',
+              display: 'grid',
+              gridTemplateRows: 'minmax(320px, 1fr) minmax(220px, 0.75fr)',
+            }}
+          >
+            <Box sx={{ overflow: 'hidden', borderBottom: 1, borderColor: 'divider' }}>
+              <SpatialPreviewPanel
+                layers={mapLayers}
+                selectedFeature={selectedMapFeature}
+                selectedFeatureAttributes={selectedFeatureAttributes}
+                onFeatureSelect={selectFeature}
+                onLayerVisibleChange={setMapLayerVisible}
+                onRemoveLayer={removeMapLayer}
+              />
+            </Box>
+            <Box sx={{ overflow: 'hidden' }}>
+              <DataTable
+                pageData={pageData}
+                datasetName={activeTableDataset}
+                selectedFeature={selectedMapFeature}
+                onFeatureSelect={selectFeature}
+                onPageChange={handlePageChange}
+              />
+            </Box>
           </Box>
         </Box>
 

@@ -3,6 +3,7 @@ import {
   DataGrid,
   GridColDef,
   GridPaginationModel,
+  GridRowSelectionModel,
 } from '@mui/x-data-grid'
 import {
   Paper,
@@ -16,12 +17,16 @@ import type { PageData } from '../types'
 interface DataTableProps {
   pageData: PageData | null
   datasetName: string | null
+  selectedFeature: { datasetName: string; featureID: number } | null
+  onFeatureSelect: (datasetName: string, featureID: number) => void
   onPageChange: (page: number) => void
 }
 
 export const DataTable: React.FC<DataTableProps> = ({
   pageData,
   datasetName,
+  selectedFeature,
+  onFeatureSelect,
   onPageChange,
 }) => {
   if (!pageData || !datasetName) {
@@ -52,7 +57,7 @@ export const DataTable: React.FC<DataTableProps> = ({
 
   // Build rows from pageData.rows
   const rows = pageData.rows.map((row, rowIndex) => {
-    const rowData: Record<string, string> = { id: rowIndex.toString() }
+    const rowData: Record<string, string> = { id: row[0] || rowIndex.toString() }
     row.forEach((cell, cellIndex) => {
       rowData[`col${cellIndex}`] = cell
     })
@@ -62,6 +67,11 @@ export const DataTable: React.FC<DataTableProps> = ({
   const handlePaginationChange = (_: React.ChangeEvent<unknown>, page: number) => {
     onPageChange(page)
   }
+
+  const rowSelectionModel: GridRowSelectionModel =
+    selectedFeature?.datasetName === datasetName
+      ? { type: 'include', ids: new Set([selectedFeature.featureID.toString()]) }
+      : { type: 'include', ids: new Set() }
 
   return (
     <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -80,7 +90,16 @@ export const DataTable: React.FC<DataTableProps> = ({
           columns={columns}
           hideFooterPagination
           hideFooter
-          disableRowSelectionOnClick
+          onRowClick={(params) => {
+            if (!datasetName) {
+              return
+            }
+            const featureID = Number(params.id)
+            if (Number.isFinite(featureID)) {
+              onFeatureSelect(datasetName, featureID)
+            }
+          }}
+          rowSelectionModel={rowSelectionModel}
           density="compact"
           sx={{
             border: 'none',
