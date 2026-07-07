@@ -35,6 +35,61 @@ type PageData struct {
 	TotalPages  int        `json:"totalPages"`
 }
 
+// BoundingBoxDTO represents an axis-aligned spatial extent.
+type BoundingBoxDTO struct {
+	MinX float64 `json:"minX"`
+	MinY float64 `json:"minY"`
+	MaxX float64 `json:"maxX"`
+	MaxY float64 `json:"maxY"`
+}
+
+// SpatialSummaryDTO describes whether and how a dataset can be previewed.
+type SpatialSummaryDTO struct {
+	DatasetName          string          `json:"datasetName"`
+	Kind                 string          `json:"kind"`
+	SRID                 *int            `json:"srid,omitempty"`
+	Extent               *BoundingBoxDTO `json:"extent,omitempty"`
+	ObjectCount          int             `json:"objectCount"`
+	EstimatedVertexCount int             `json:"estimatedVertexCount"`
+	PreviewSupported     bool            `json:"previewSupported"`
+	UnsupportedReason    string          `json:"unsupportedReason,omitempty"`
+}
+
+// SpatialPreviewRequestDTO limits the amount of geometry sent to the frontend.
+type SpatialPreviewRequestDTO struct {
+	Viewport    *BoundingBoxDTO `json:"viewport,omitempty"`
+	Limit       int             `json:"limit"`
+	MaxVertices int             `json:"maxVertices"`
+	Simplify    bool            `json:"simplify"`
+}
+
+// PreviewGeometryDTO is a renderer-neutral geometry payload for PoC adapters.
+type PreviewGeometryDTO struct {
+	Type        string        `json:"type"`
+	Coordinates []interface{} `json:"coordinates"`
+	HasZ        bool          `json:"hasZ"`
+}
+
+// PreviewFeatureDTO is the minimal spatial feature contract for table-map linking.
+type PreviewFeatureDTO struct {
+	ID         int                `json:"id"`
+	Geometry   PreviewGeometryDTO `json:"geometry"`
+	BBox       *BoundingBoxDTO    `json:"bbox,omitempty"`
+	Properties map[string]string  `json:"properties,omitempty"`
+}
+
+// SpatialPreviewDTO is a bounded preview response for a spatial dataset.
+type SpatialPreviewDTO struct {
+	DatasetName          string              `json:"datasetName"`
+	Kind                 string              `json:"kind"`
+	SRID                 *int                `json:"srid,omitempty"`
+	Extent               *BoundingBoxDTO     `json:"extent,omitempty"`
+	Features             []PreviewFeatureDTO `json:"features"`
+	EstimatedVertexCount int                 `json:"estimatedVertexCount"`
+	Sampled              bool                `json:"sampled"`
+	SampleReason         string              `json:"sampleReason,omitempty"`
+}
+
 // FileInfo represents information about an opened file
 type FileInfo struct {
 	Path         string `json:"path"`
@@ -247,6 +302,153 @@ func (a *App) LoadDatasetPage(datasetName string, page int) (*PageData, error) {
 	}, nil
 }
 
+// GetDatasetSpatialSummary returns a bounded summary for spatial preview.
+func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, error) {
+	info, ds, err := a.getDatasetForPreview(datasetName)
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &SpatialSummaryDTO{
+		DatasetName:      info.Name,
+		Kind:             info.Kind.String(),
+		SRID:             info.SRID,
+		ObjectCount:      info.ObjectCount,
+		PreviewSupported: info.Kind.IsSpatial(),
+	}
+	if !summary.PreviewSupported {
+		summary.UnsupportedReason = "非空间数据集不支持空间预览"
+		return summary, nil
+	}
+
+	fields, _ := ds.GetFields()
+	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{Limit: 1000})
+	if err != nil {
+		return nil, err
+	}
+	previewFeatures := a.formatPreviewFeatures(features, fields, 1000000)
+	for _, feature := range previewFeatures {
+		summary.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
+		summary.Extent = mergeBBox(summary.Extent, feature.BBox)
+	}
+	return summary, nil
+}
+
+// LoadSpatialPreview returns a bounded renderer-neutral geometry payload.
+func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewRequestDTO) (*SpatialPreviewDTO, error) {
+	info, ds, err := a.getDatasetForPreview(datasetName)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Kind.IsSpatial() {
+		return nil, fmt.Errorf("数据集 %s 不支持空间预览: 非空间数据集", datasetName)
+	}
+	if request.Limit <= 0 {
+		request.Limit = 100
+	}
+	if request.MaxVertices <= 0 {
+		request.MaxVertices = 10000
+	}
+
+	fields, err := ds.GetFields()
+	if err != nil {
+		return nil, err
+	}
+	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{Limit: request.Limit})
+	if err != nil {
+		return nil, err
+	}
+	previewFeatures := a.formatPreviewFeatures(features, fields, request.MaxVertices)
+
+	response := &SpatialPreviewDTO{
+		DatasetName: info.Name,
+		Kind:        info.Kind.String(),
+		SRID:        info.SRID,
+		Features:    previewFeatures,
+	}
+	for _, feature := range previewFeatures {
+		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
+		response.Extent = mergeBBox(response.Extent, feature.BBox)
+	}
+	if response.EstimatedVertexCount >= request.MaxVertices {
+		response.Sampled = true
+		response.SampleReason = "预览达到顶点上限"
+	}
+	return response, nil
+}
+
+func (a *App) getDatasetForPreview(datasetName string) (*types.DatasetInfo, interface {
+	GetFields() ([]*types.FieldInfo, error)
+}, error) {
+	if a.dataSource == nil {
+		return nil, nil, fmt.Errorf("没有打开的文件")
+	}
+
+	datasets, err := a.dataSource.ListDatasets()
+	if err != nil {
+		return nil, nil, err
+	}
+	var info *types.DatasetInfo
+	for _, ds := range datasets {
+		if ds.Name == datasetName {
+			info = ds
+			break
+		}
+	}
+	if info == nil {
+		return nil, nil, fmt.Errorf("数据集不存在: %s", datasetName)
+	}
+
+	ds, err := a.dataSource.GetDataset(datasetName)
+	if err != nil {
+		return nil, nil, err
+	}
+	fielded, ok := ds.(interface {
+		GetFields() ([]*types.FieldInfo, error)
+	})
+	if !ok {
+		return nil, nil, fmt.Errorf("数据集不支持字段读取: %s", datasetName)
+	}
+	return info, fielded, nil
+}
+
+func (a *App) listPreviewFeatures(ds interface{}, opts *types.QueryOptions) ([]*types.Feature, error) {
+	if vectorDs, ok := ds.(interface {
+		List(opts *types.QueryOptions) ([]*types.Feature, error)
+	}); ok {
+		return vectorDs.List(opts)
+	}
+	return nil, fmt.Errorf("数据集不支持空间要素读取")
+}
+
+func (a *App) formatPreviewFeatures(features []*types.Feature, fields []*types.FieldInfo, maxVertices int) []PreviewFeatureDTO {
+	var result []PreviewFeatureDTO
+	vertexCount := 0
+	for _, feature := range features {
+		geometry := toPreviewGeometry(feature.Geometry)
+		if geometry.Type == "" {
+			continue
+		}
+		vertexCount += countPreviewVertices(geometry)
+		if vertexCount > maxVertices {
+			break
+		}
+		props := make(map[string]string)
+		for _, field := range fields {
+			if value, ok := feature.Attributes[field.Name]; ok && value != nil {
+				props[field.Name] = fmt.Sprintf("%v", value)
+			}
+		}
+		result = append(result, PreviewFeatureDTO{
+			ID:         feature.ID,
+			Geometry:   geometry,
+			BBox:       bboxFromSlice(feature.Geometry.GetBBox()),
+			Properties: props,
+		})
+	}
+	return result
+}
+
 // formatFeatures formats feature data for display
 func (a *App) formatFeatures(features []*types.Feature, fields []*types.FieldInfo, kind types.DatasetKind) [][]string {
 	var rows [][]string
@@ -285,6 +487,153 @@ func (a *App) formatTabularRecords(records []*types.TabularRecord, fields []*typ
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+func toPreviewGeometry(g types.Geometry) PreviewGeometryDTO {
+	if g == nil {
+		return PreviewGeometryDTO{}
+	}
+	switch geom := g.(type) {
+	case *types.PointGeometry:
+		return PreviewGeometryDTO{Type: "Point", Coordinates: floatSliceToInterfaces(geom.Coordinates), HasZ: geom.HasZ()}
+	case *types.MultiLineStringGeometry:
+		return PreviewGeometryDTO{Type: "MultiLineString", Coordinates: multiLineToInterfaces(geom.Coordinates), HasZ: geom.HasZ()}
+	case *types.MultiPolygonGeometry:
+		return PreviewGeometryDTO{Type: "MultiPolygon", Coordinates: multiPolygonToInterfaces(geom.Coordinates), HasZ: geom.HasZ()}
+	case *types.TextGeometry:
+		return PreviewGeometryDTO{Type: "Text", Coordinates: floatSliceToInterfaces(geom.Anchor), HasZ: geom.HasZ()}
+	case *types.CadPointGeometry:
+		return PreviewGeometryDTO{Type: "Point", Coordinates: floatSliceToInterfaces([]float64{geom.XCoord, geom.YCoord}), HasZ: false}
+	case *types.CadLineGeometry:
+		return PreviewGeometryDTO{Type: "MultiLineString", Coordinates: cadLineToInterfaces(geom.Coordinates, geom.SubPointCounts), HasZ: false}
+	case *types.CadRegionGeometry:
+		return PreviewGeometryDTO{Type: "MultiPolygon", Coordinates: cadRegionToInterfaces(geom.Coordinates, geom.SubPointCounts), HasZ: false}
+	default:
+		return PreviewGeometryDTO{Type: g.GeometryType(), Coordinates: []interface{}{}, HasZ: g.HasZ()}
+	}
+}
+
+func floatSliceToInterfaces(values []float64) []interface{} {
+	result := make([]interface{}, len(values))
+	for i, value := range values {
+		result[i] = value
+	}
+	return result
+}
+
+func multiLineToInterfaces(lines [][][]float64) []interface{} {
+	result := make([]interface{}, 0, len(lines))
+	for _, line := range lines {
+		points := make([]interface{}, 0, len(line))
+		for _, point := range line {
+			points = append(points, floatSliceToInterfaces(point))
+		}
+		result = append(result, points)
+	}
+	return result
+}
+
+func multiPolygonToInterfaces(polygons [][][][]float64) []interface{} {
+	result := make([]interface{}, 0, len(polygons))
+	for _, polygon := range polygons {
+		rings := make([]interface{}, 0, len(polygon))
+		for _, ring := range polygon {
+			points := make([]interface{}, 0, len(ring))
+			for _, point := range ring {
+				points = append(points, floatSliceToInterfaces(point))
+			}
+			rings = append(rings, points)
+		}
+		result = append(result, rings)
+	}
+	return result
+}
+
+func cadLineToInterfaces(coordinates [][2]float64, subPointCounts []int) []interface{} {
+	lines := splitCADCoordinates(coordinates, subPointCounts)
+	result := make([]interface{}, 0, len(lines))
+	for _, line := range lines {
+		points := make([]interface{}, 0, len(line))
+		for _, point := range line {
+			points = append(points, []interface{}{point[0], point[1]})
+		}
+		result = append(result, points)
+	}
+	return result
+}
+
+func cadRegionToInterfaces(coordinates [][2]float64, subPointCounts []int) []interface{} {
+	rings := cadLineToInterfaces(coordinates, subPointCounts)
+	return []interface{}{rings}
+}
+
+func splitCADCoordinates(coordinates [][2]float64, subPointCounts []int) [][][2]float64 {
+	if len(subPointCounts) == 0 {
+		return [][][2]float64{coordinates}
+	}
+	var result [][][2]float64
+	offset := 0
+	for _, count := range subPointCounts {
+		if count <= 0 || offset >= len(coordinates) {
+			continue
+		}
+		end := offset + count
+		if end > len(coordinates) {
+			end = len(coordinates)
+		}
+		result = append(result, coordinates[offset:end])
+		offset = end
+	}
+	return result
+}
+
+func bboxFromSlice(values []float64) *BoundingBoxDTO {
+	if len(values) < 4 {
+		return nil
+	}
+	return &BoundingBoxDTO{MinX: values[0], MinY: values[1], MaxX: values[2], MaxY: values[3]}
+}
+
+func mergeBBox(current *BoundingBoxDTO, next *BoundingBoxDTO) *BoundingBoxDTO {
+	if next == nil {
+		return current
+	}
+	if current == nil {
+		return &BoundingBoxDTO{MinX: next.MinX, MinY: next.MinY, MaxX: next.MaxX, MaxY: next.MaxY}
+	}
+	if next.MinX < current.MinX {
+		current.MinX = next.MinX
+	}
+	if next.MinY < current.MinY {
+		current.MinY = next.MinY
+	}
+	if next.MaxX > current.MaxX {
+		current.MaxX = next.MaxX
+	}
+	if next.MaxY > current.MaxY {
+		current.MaxY = next.MaxY
+	}
+	return current
+}
+
+func countPreviewVertices(geometry PreviewGeometryDTO) int {
+	return countCoordinateVertices(geometry.Coordinates)
+}
+
+func countCoordinateVertices(values []interface{}) int {
+	if len(values) == 0 {
+		return 0
+	}
+	if _, ok := values[0].(float64); ok {
+		return 1
+	}
+	total := 0
+	for _, value := range values {
+		if nested, ok := value.([]interface{}); ok {
+			total += countCoordinateVertices(nested)
+		}
+	}
+	return total
 }
 
 // formatGeometry formats a geometry for display

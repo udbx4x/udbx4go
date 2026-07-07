@@ -14,6 +14,8 @@
     "@mui/icons-material": "^7.3.9",
     "@mui/material": "^7.3.9",
     "@mui/x-data-grid": "^8.28.2",
+    "maplibre-gl": "^5.24.0",
+    "ol": "^10.9.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
