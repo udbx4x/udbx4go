@@ -1,7 +1,6 @@
 import React, { useEffect } from 'react'
 import {
   ThemeProvider,
-  createTheme,
   CssBaseline,
   Box,
   Alert,
@@ -12,12 +11,7 @@ import { DatasetList } from './components/DatasetList'
 import { DataTable } from './components/DataTable'
 import { SpatialPreviewPanel } from './components/SpatialPreviewPanel'
 import { StatusBar } from './components/StatusBar'
-
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-  },
-})
+import { viewerTheme } from './theme/viewerTheme'
 
 function App() {
   const {
@@ -66,7 +60,7 @@ function App() {
   }
 
   return (
-    <ThemeProvider theme={theme}>
+    <ThemeProvider theme={viewerTheme}>
       <CssBaseline />
       <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
         {/* Menu Bar */}

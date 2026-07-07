@@ -1,26 +1,48 @@
-html {
-    background-color: rgba(27, 38, 54, 1);
-    text-align: center;
-    color: white;
+:root {
+  --viewer-bg: #F6F8FA;
+  --viewer-surface: #FFFFFF;
+  --viewer-surface-muted: #F9FAFB;
+  --viewer-map-bg: #EEF2F5;
+  --viewer-text-primary: #17202A;
+  --viewer-text-secondary: #52616F;
+  --viewer-text-tertiary: #8492A0;
+  --viewer-border: #DDE3EA;
+  --viewer-border-subtle: #E8EDF2;
+  --viewer-accent: #0B7FAB;
+  --viewer-accent-hover: #096C91;
+  --viewer-accent-soft: #E5F4F9;
+  --viewer-selection: #E85D04;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
 }
 
 body {
-    margin: 0;
-    color: white;
-    font-family: "Nunito", -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto",
-    "Oxygen", "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+  overflow: hidden;
+  background: var(--viewer-bg);
+  color: var(--viewer-text-primary);
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    "PingFang SC",
+    "Microsoft YaHei",
+    "Noto Sans CJK SC",
     sans-serif;
 }
 
-@font-face {
-    font-family: "Nunito";
-    font-style: normal;
-    font-weight: 400;
-    src: local(""),
-    url("assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
-}
-
-#app {
-    height: 100vh;
-    text-align: center;
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }
