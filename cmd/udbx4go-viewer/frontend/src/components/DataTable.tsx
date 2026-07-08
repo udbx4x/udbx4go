@@ -2,11 +2,9 @@ import React from 'react'
 import {
   DataGrid,
   GridColDef,
-  GridPaginationModel,
   GridRowSelectionModel,
 } from '@mui/x-data-grid'
 import {
-  Paper,
   Box,
   Typography,
   Pagination,
@@ -31,8 +29,7 @@ export const DataTable: React.FC<DataTableProps> = ({
 }) => {
   if (!pageData || !datasetName) {
     return (
-      <Paper
-        elevation={0}
+      <Box
         sx={{
           height: '100%',
           display: 'flex',
@@ -43,7 +40,7 @@ export const DataTable: React.FC<DataTableProps> = ({
         <Typography color="text.secondary">
           请从左侧选择一个数据集
         </Typography>
-      </Paper>
+      </Box>
     )
   }
 
@@ -74,17 +71,8 @@ export const DataTable: React.FC<DataTableProps> = ({
       : { type: 'include', ids: new Set() }
 
   return (
-    <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
-        <Typography variant="h6" component="div">
-          {datasetName}
-        </Typography>
-        <Typography variant="caption" color="text.secondary">
-          第 {pageData.currentPage} / {pageData.totalPages} 页 · 共 {rows.length} 条记录
-        </Typography>
-      </Box>
-
-      <Box sx={{ flex: 1, overflow: 'auto' }}>
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <DataGrid
           rows={rows}
           columns={columns}
@@ -113,7 +101,7 @@ export const DataTable: React.FC<DataTableProps> = ({
         />
       </Box>
 
-      <Box sx={{ p: 1, borderTop: 1, borderColor: 'divider' }}>
+      <Box sx={{ p: 0.75, borderTop: 1, borderColor: 'divider' }}>
         <Stack direction="row" justifyContent="center">
           <Pagination
             count={pageData.totalPages}
@@ -125,6 +113,6 @@ export const DataTable: React.FC<DataTableProps> = ({
           />
         </Stack>
       </Box>
-    </Paper>
+    </Box>
   )
 }

@@ -8,13 +8,13 @@ import {
 } from '@mui/material'
 import { useUDBX } from './hooks/useUDBX'
 import { DatasetExplorer } from './components/DatasetExplorer'
-import { DataTable } from './components/DataTable'
+import { AttributeTableDrawer } from './components/AttributeTableDrawer'
 import { MapWorkspace } from './components/MapWorkspace'
 import { AppShell } from './components/AppShell'
 import { TopToolbar } from './components/TopToolbar'
 import { StatusBar } from './components/StatusBar'
 import { InspectorPanel } from './components/InspectorPanel'
-import { viewerLayout, viewerTheme } from './theme/viewerTheme'
+import { viewerTheme } from './theme/viewerTheme'
 
 function App() {
   const {
@@ -104,23 +104,15 @@ function App() {
               />
             }
             tableDrawer={
-              <Box
-                sx={{
-                  height: tableOpen ? viewerLayout.tableExpandedHeight : viewerLayout.tableCollapsedHeight,
-                  overflow: 'hidden',
-                  bgcolor: 'background.paper',
-                }}
-              >
-                {tableOpen && (
-                  <DataTable
-                    pageData={pageData}
-                    datasetName={activeTableDataset}
-                    selectedFeature={selectedMapFeature}
-                    onFeatureSelect={selectFeature}
-                    onPageChange={handlePageChange}
-                  />
-                )}
-              </Box>
+              <AttributeTableDrawer
+                open={tableOpen}
+                pageData={pageData}
+                datasetName={activeTableDataset}
+                selectedFeature={selectedMapFeature}
+                onToggleOpen={() => setTableOpen((open) => !open)}
+                onFeatureSelect={selectFeature}
+                onPageChange={handlePageChange}
+              />
             }
           />
         </Box>
