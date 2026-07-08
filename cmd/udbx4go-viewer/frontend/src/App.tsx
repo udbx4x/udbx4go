@@ -2,7 +2,6 @@ import React, { useEffect } from 'react'
 import {
   ThemeProvider,
   CssBaseline,
-  Box,
   Alert,
   Snackbar,
 } from '@mui/material'
@@ -12,7 +11,6 @@ import { AttributeTableDrawer } from './components/AttributeTableDrawer'
 import { MapWorkspace } from './components/MapWorkspace'
 import { AppShell } from './components/AppShell'
 import { TopToolbar } from './components/TopToolbar'
-import { StatusBar } from './components/StatusBar'
 import { InspectorPanel } from './components/InspectorPanel'
 import { viewerTheme } from './theme/viewerTheme'
 
@@ -66,72 +64,64 @@ function App() {
   return (
     <ThemeProvider theme={viewerTheme}>
       <CssBaseline />
-      <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-        <Box sx={{ flex: 1, minHeight: 0 }}>
-          <AppShell
-            toolbar={
-              <TopToolbar
-                currentFile={currentFile}
-                loading={loading}
-                tableOpen={tableOpen}
-                onOpenFile={handleOpenFile}
-                onCloseFile={handleCloseFile}
-                onToggleTable={() => setTableOpen((open) => !open)}
-              />
-            }
-            datasetExplorer={
-              <DatasetExplorer
-                datasets={datasets}
-                selectedDataset={selectedDataset}
-                activeTableDataset={activeTableDataset}
-                mapLayers={mapLayers}
-                onSelectDataset={handleSelectDataset}
-              />
-            }
-            mapWorkspace={
-              <MapWorkspace
-                layers={mapLayers}
-                selectedFeature={selectedMapFeature}
-                onFeatureSelect={selectFeature}
-              />
-            }
-            inspector={
-              <InspectorPanel
-                layers={mapLayers}
-                selectedFeatureAttributes={selectedFeatureAttributes}
-                onLayerVisibleChange={setMapLayerVisible}
-                onRemoveLayer={removeMapLayer}
-              />
-            }
-            tableDrawer={
-              <AttributeTableDrawer
-                open={tableOpen}
-                pageData={pageData}
-                datasetName={activeTableDataset}
-                selectedFeature={selectedMapFeature}
-                onToggleOpen={() => setTableOpen((open) => !open)}
-                onFeatureSelect={selectFeature}
-                onPageChange={handlePageChange}
-              />
-            }
+      <AppShell
+        toolbar={
+          <TopToolbar
+            currentFile={currentFile}
+            loading={loading}
+            tableOpen={tableOpen}
+            onOpenFile={handleOpenFile}
+            onCloseFile={handleCloseFile}
+            onToggleTable={() => setTableOpen((open) => !open)}
           />
-        </Box>
+        }
+        datasetExplorer={
+          <DatasetExplorer
+            datasets={datasets}
+            selectedDataset={selectedDataset}
+            activeTableDataset={activeTableDataset}
+            mapLayers={mapLayers}
+            onSelectDataset={handleSelectDataset}
+          />
+        }
+        mapWorkspace={
+          <MapWorkspace
+            layers={mapLayers}
+            selectedFeature={selectedMapFeature}
+            onFeatureSelect={selectFeature}
+          />
+        }
+        inspector={
+          <InspectorPanel
+            layers={mapLayers}
+            selectedFeatureAttributes={selectedFeatureAttributes}
+            onLayerVisibleChange={setMapLayerVisible}
+            onRemoveLayer={removeMapLayer}
+          />
+        }
+        tableDrawer={
+          <AttributeTableDrawer
+            open={tableOpen}
+            pageData={pageData}
+            datasetName={activeTableDataset}
+            selectedFeature={selectedMapFeature}
+            onToggleOpen={() => setTableOpen((open) => !open)}
+            onFeatureSelect={selectFeature}
+            onPageChange={handlePageChange}
+          />
+        }
+      />
 
-        {/* Status Bar */}
-        <StatusBar currentFile={currentFile} loading={loading} />
-
-        {/* Error Snackbar */}
-        <Snackbar
-          open={errorOpen}
-          autoHideDuration={6000}
-          onClose={() => setErrorOpen(false)}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        >
-          <Alert severity="error" onClose={() => setErrorOpen(false)}>
-            {error}
-          </Alert>
-        </Snackbar>
-      </Box>
+      <Snackbar
+        open={errorOpen}
+        autoHideDuration={6000}
+        onClose={() => setErrorOpen(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert severity="error" onClose={() => setErrorOpen(false)}>
+          {error}
+        </Alert>
+      </Snackbar>
     </ThemeProvider>
   )
 }
