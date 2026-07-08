@@ -13,6 +13,7 @@ import { MapWorkspace } from './components/MapWorkspace'
 import { AppShell } from './components/AppShell'
 import { TopToolbar } from './components/TopToolbar'
 import { StatusBar } from './components/StatusBar'
+import { InspectorPanel } from './components/InspectorPanel'
 import { viewerLayout, viewerTheme } from './theme/viewerTheme'
 
 function App() {
@@ -24,11 +25,14 @@ function App() {
     pageData,
     mapLayers,
     selectedMapFeature,
+    selectedFeatureAttributes,
     loading,
     error,
     openFileDialog,
     closeFile,
     loadDataset,
+    setMapLayerVisible,
+    removeMapLayer,
     selectFeature,
   } = useUDBX()
 
@@ -91,7 +95,14 @@ function App() {
                 onFeatureSelect={selectFeature}
               />
             }
-            inspector={<Box sx={{ height: '100%', bgcolor: 'background.paper' }} />}
+            inspector={
+              <InspectorPanel
+                layers={mapLayers}
+                selectedFeatureAttributes={selectedFeatureAttributes}
+                onLayerVisibleChange={setMapLayerVisible}
+                onRemoveLayer={removeMapLayer}
+              />
+            }
             tableDrawer={
               <Box
                 sx={{
