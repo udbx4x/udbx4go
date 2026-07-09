@@ -75,17 +75,104 @@ func TestViewerSettingsJSONContract(t *testing.T) {
 }
 
 func TestNormalizeViewerSettingsClampsRanges(t *testing.T) {
-	settings := DefaultViewerSettings()
-	settings.SpatialPreview.FeatureLimit = 1
-	settings.SpatialPreview.VertexBudget = 1
-
-	normalized := NormalizeViewerSettings(settings)
-
-	if normalized.SpatialPreview.FeatureLimit != minSpatialPreviewFeatureLimit {
-		t.Fatalf("FeatureLimit = %d, want %d", normalized.SpatialPreview.FeatureLimit, minSpatialPreviewFeatureLimit)
+	tests := []struct {
+		name                  string
+		featureLimit          int
+		vertexBudget          int
+		wantFeatureLimit      int
+		wantVertexBudget      int
+		autoFitOnLayerChange  bool
+		zoomToSelectedFeature bool
+		defaultOpen           bool
+		wantAutoFitOnLayer    bool
+		wantZoomToSelected    bool
+		wantDefaultOpen       bool
+	}{
+		{
+			name:                  "below minimum clamps to minimum",
+			featureLimit:          1,
+			vertexBudget:          1,
+			wantFeatureLimit:      minSpatialPreviewFeatureLimit,
+			wantVertexBudget:      minSpatialPreviewVertexBudget,
+			autoFitOnLayerChange:  true,
+			zoomToSelectedFeature: true,
+			defaultOpen:           true,
+			wantAutoFitOnLayer:    true,
+			wantZoomToSelected:    true,
+			wantDefaultOpen:       true,
+		},
+		{
+			name:                  "above maximum clamps to maximum",
+			featureLimit:          maxSpatialPreviewFeatureLimit + 1,
+			vertexBudget:          maxSpatialPreviewVertexBudget + 1,
+			wantFeatureLimit:      maxSpatialPreviewFeatureLimit,
+			wantVertexBudget:      maxSpatialPreviewVertexBudget,
+			autoFitOnLayerChange:  true,
+			zoomToSelectedFeature: true,
+			defaultOpen:           true,
+			wantAutoFitOnLayer:    true,
+			wantZoomToSelected:    true,
+			wantDefaultOpen:       true,
+		},
+		{
+			name:                  "zero uses defaults and false bools are preserved",
+			featureLimit:          0,
+			vertexBudget:          0,
+			wantFeatureLimit:      DefaultViewerSettings().SpatialPreview.FeatureLimit,
+			wantVertexBudget:      DefaultViewerSettings().SpatialPreview.VertexBudget,
+			autoFitOnLayerChange:  false,
+			zoomToSelectedFeature: false,
+			defaultOpen:           false,
+			wantAutoFitOnLayer:    false,
+			wantZoomToSelected:    false,
+			wantDefaultOpen:       false,
+		},
 	}
-	if normalized.SpatialPreview.VertexBudget != minSpatialPreviewVertexBudget {
-		t.Fatalf("VertexBudget = %d, want %d", normalized.SpatialPreview.VertexBudget, minSpatialPreviewVertexBudget)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			settings := DefaultViewerSettings()
+			settings.SpatialPreview.FeatureLimit = tt.featureLimit
+			settings.SpatialPreview.VertexBudget = tt.vertexBudget
+			settings.SpatialPreview.AutoFitOnLayerChange = tt.autoFitOnLayerChange
+			settings.MapInteraction.ZoomToSelectedFeature = tt.zoomToSelectedFeature
+			settings.Table.DefaultOpen = tt.defaultOpen
+
+			normalized := NormalizeViewerSettings(settings)
+
+			if normalized.SpatialPreview.FeatureLimit != tt.wantFeatureLimit {
+				t.Fatalf("FeatureLimit = %d, want %d", normalized.SpatialPreview.FeatureLimit, tt.wantFeatureLimit)
+			}
+			if normalized.SpatialPreview.VertexBudget != tt.wantVertexBudget {
+				t.Fatalf("VertexBudget = %d, want %d", normalized.SpatialPreview.VertexBudget, tt.wantVertexBudget)
+			}
+			if normalized.SpatialPreview.AutoFitOnLayerChange != tt.wantAutoFitOnLayer {
+				t.Fatalf("AutoFitOnLayerChange = %v, want %v", normalized.SpatialPreview.AutoFitOnLayerChange, tt.wantAutoFitOnLayer)
+			}
+			if normalized.MapInteraction.ZoomToSelectedFeature != tt.wantZoomToSelected {
+				t.Fatalf("ZoomToSelectedFeature = %v, want %v", normalized.MapInteraction.ZoomToSelectedFeature, tt.wantZoomToSelected)
+			}
+			if normalized.Table.DefaultOpen != tt.wantDefaultOpen {
+				t.Fatalf("Table.DefaultOpen = %v, want %v", normalized.Table.DefaultOpen, tt.wantDefaultOpen)
+			}
+		})
+	}
+}
+
+func TestGetViewerSettingsMissingFileReturnsDefaults(t *testing.T) {
+	app := NewApp()
+	app.settingsPathOverride = filepath.Join(t.TempDir(), "missing", "settings.json")
+
+	loaded, err := app.GetViewerSettings()
+	if err != nil {
+		t.Fatalf("GetViewerSettings() error = %v", err)
+	}
+	want := DefaultViewerSettings()
+	if *loaded != want {
+		t.Fatalf("GetViewerSettings() = %+v, want %+v", *loaded, want)
+	}
+	if _, err := os.Stat(app.settingsPathOverride); !os.IsNotExist(err) {
+		t.Fatalf("os.Stat() error = %v, want os.ErrNotExist", err)
 	}
 }
 
