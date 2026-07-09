@@ -8,6 +8,12 @@ import { main } from '../../wailsjs/go/models'
 import type { ViewerSettings } from '../settings/viewerSettings'
 import { defaultViewerSettings } from '../settings/viewerSettings'
 
+function getErrorMessage(err: unknown, fallback: string) {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  return fallback
+}
+
 export function useViewerSettings() {
   const [settings, setSettings] = useState<ViewerSettings>(defaultViewerSettings)
   const [loading, setLoading] = useState(true)
@@ -21,7 +27,7 @@ export function useViewerSettings() {
       setSettings(loaded as ViewerSettings)
     } catch (err) {
       setSettings(defaultViewerSettings)
-      setError(err instanceof Error ? err.message : '设置读取失败，已使用默认设置')
+      setError(getErrorMessage(err, '设置读取失败，已使用默认设置'))
     } finally {
       setLoading(false)
     }
@@ -34,7 +40,7 @@ export function useViewerSettings() {
       setSettings(saved as ViewerSettings)
       return saved as ViewerSettings
     } catch (err) {
-      setError(`设置保存失败：${err instanceof Error ? err.message : '未知错误'}`)
+      setError(`设置保存失败：${getErrorMessage(err, '未知错误')}`)
       throw err
     }
   }, [])
@@ -46,7 +52,7 @@ export function useViewerSettings() {
       setSettings(reset as ViewerSettings)
       return reset as ViewerSettings
     } catch (err) {
-      setError(`设置重置失败：${err instanceof Error ? err.message : '未知错误'}`)
+      setError(`设置重置失败：${getErrorMessage(err, '未知错误')}`)
       throw err
     }
   }, [])

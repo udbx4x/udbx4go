@@ -66,7 +66,7 @@ function ViewerSettingsHarness() {
       await saveSettings(savedSettings)
       setActionError(null)
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : '保存调用失败')
+      setActionError(err instanceof Error ? err.message : typeof err === 'string' ? err : '保存调用失败')
     }
   }
 
@@ -75,7 +75,7 @@ function ViewerSettingsHarness() {
       await resetSettings()
       setActionError(null)
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : '重置调用失败')
+      setActionError(err instanceof Error ? err.message : typeof err === 'string' ? err : '重置调用失败')
     }
   }
 
@@ -151,6 +151,35 @@ describe('useViewerSettings', () => {
 
     await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('设置保存失败：磁盘不可写'))
     expect(screen.getByTestId('action-error')).toHaveTextContent('磁盘不可写')
+    expect(screen.getByTestId('feature-limit')).toHaveTextContent('2500')
+  })
+
+  it('clears an existing error and restores defaults when reset succeeds', async () => {
+    mockGetViewerSettings.mockRejectedValueOnce(new Error('旧错误'))
+
+    render(<ViewerSettingsHarness />)
+
+    await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('旧错误'))
+
+    fireEvent.click(screen.getByRole('button', { name: '重置' }))
+
+    await waitFor(() => expect(screen.getByTestId('feature-limit')).toHaveTextContent('1000'))
+    expect(screen.getByTestId('show-preview-stats')).toHaveTextContent('false')
+    expect(screen.getByTestId('error')).toBeEmptyDOMElement()
+    expect(screen.getByTestId('action-error')).toBeEmptyDOMElement()
+  })
+
+  it('sets an error and rethrows when reset fails', async () => {
+    mockResetViewerSettings.mockRejectedValueOnce('后端重置失败')
+
+    render(<ViewerSettingsHarness />)
+
+    await waitFor(() => expect(screen.getByTestId('loading')).toHaveTextContent('false'))
+
+    fireEvent.click(screen.getByRole('button', { name: '重置' }))
+
+    await waitFor(() => expect(screen.getByTestId('error')).toHaveTextContent('设置重置失败：后端重置失败'))
+    expect(screen.getByTestId('action-error')).toHaveTextContent('后端重置失败')
     expect(screen.getByTestId('feature-limit')).toHaveTextContent('2500')
   })
 })
