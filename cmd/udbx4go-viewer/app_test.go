@@ -131,8 +131,12 @@ func TestViewerSpatialSummaryAndPreviewUseRendererNeutralContract(t *testing.T) 
 	if preview.Sampled {
 		t.Fatal("Sampled = true for small limit preview")
 	}
-	if len(preview.Features) == 0 {
-		t.Fatal("LoadSpatialPreview() returned no features")
+	wantFeatureCount := summary.ObjectCount
+	if wantFeatureCount > minSpatialPreviewFeatureLimit {
+		wantFeatureCount = minSpatialPreviewFeatureLimit
+	}
+	if len(preview.Features) != wantFeatureCount {
+		t.Fatalf("len(Features) = %d, want clamped limit count %d", len(preview.Features), wantFeatureCount)
 	}
 	first := preview.Features[0]
 	if first.ID == 0 {
@@ -245,6 +249,32 @@ func TestViewerSpatialPreviewUsesExplicitRequestLimitsBeforeSettings(t *testing.
 	}
 	if len(preview.Features) != requestLimit {
 		t.Fatalf("len(preview.Features) = %d, want explicit request limit %d", len(preview.Features), requestLimit)
+	}
+}
+
+func TestViewerSpatialPreviewClampsExplicitRequestLimits(t *testing.T) {
+	app := NewApp()
+	app.settingsPathOverride = filepath.Join(t.TempDir(), "settings.json")
+
+	settings := DefaultViewerSettings()
+	settings.SpatialPreview.FeatureLimit = 1000
+	settings.SpatialPreview.VertexBudget = maxSpatialPreviewVertexBudget
+	if _, err := app.SaveViewerSettings(settings); err != nil {
+		t.Fatalf("SaveViewerSettings() error = %v", err)
+	}
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	preview, err := app.LoadSpatialPreview("Jingjin_Network_Node", SpatialPreviewRequestDTO{
+		Limit:       1,
+		MaxVertices: 1,
+	})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview() error = %v", err)
+	}
+	if len(preview.Features) != minSpatialPreviewFeatureLimit {
+		t.Fatalf("len(preview.Features) = %d, want clamped request limit %d", len(preview.Features), minSpatialPreviewFeatureLimit)
 	}
 }
 
