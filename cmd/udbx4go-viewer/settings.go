@@ -1,5 +1,6 @@
 package main
 
+// ViewerSettingsDTO describes viewer settings exchanged with the frontend.
 type ViewerSettingsDTO struct {
 	SpatialPreview SpatialPreviewSettingsDTO `json:"spatialPreview"`
 	MapInteraction MapInteractionSettingsDTO `json:"mapInteraction"`
@@ -7,20 +8,24 @@ type ViewerSettingsDTO struct {
 	Advanced       AdvancedSettingsDTO       `json:"advanced"`
 }
 
+// SpatialPreviewSettingsDTO describes spatial preview loading behavior.
 type SpatialPreviewSettingsDTO struct {
 	FeatureLimit         int  `json:"featureLimit"`
 	VertexBudget         int  `json:"vertexBudget"`
 	AutoFitOnLayerChange bool `json:"autoFitOnLayerChange"`
 }
 
+// MapInteractionSettingsDTO describes map interaction behavior.
 type MapInteractionSettingsDTO struct {
 	ZoomToSelectedFeature bool `json:"zoomToSelectedFeature"`
 }
 
+// TableSettingsDTO describes attribute table behavior.
 type TableSettingsDTO struct {
 	DefaultOpen bool `json:"defaultOpen"`
 }
 
+// AdvancedSettingsDTO describes advanced viewer diagnostics.
 type AdvancedSettingsDTO struct {
 	ShowPreviewStats bool `json:"showPreviewStats"`
 }
@@ -35,8 +40,8 @@ const (
 func DefaultViewerSettings() ViewerSettingsDTO {
 	return ViewerSettingsDTO{
 		SpatialPreview: SpatialPreviewSettingsDTO{
-			FeatureLimit:         1000,
-			VertexBudget:         1000000,
+			FeatureLimit:         defaultSpatialPreviewLimit,
+			VertexBudget:         defaultSpatialVertexBudget,
 			AutoFitOnLayerChange: true,
 		},
 		MapInteraction: MapInteractionSettingsDTO{
