@@ -357,12 +357,19 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 	if !info.Kind.IsSpatial() {
 		return nil, fmt.Errorf("数据集 %s 不支持空间预览: 非空间数据集", datasetName)
 	}
+	settings, err := a.GetViewerSettings()
+	if err != nil {
+		defaults := DefaultViewerSettings()
+		settings = &defaults
+	}
 	if request.Limit <= 0 {
-		request.Limit = defaultSpatialPreviewLimit
+		request.Limit = settings.SpatialPreview.FeatureLimit
 	}
-	if request.MaxVertices < defaultSpatialVertexBudget {
-		request.MaxVertices = defaultSpatialVertexBudget
+	if request.MaxVertices <= 0 {
+		request.MaxVertices = settings.SpatialPreview.VertexBudget
 	}
+	request.Limit = clampInt(request.Limit, minSpatialPreviewFeatureLimit, maxSpatialPreviewFeatureLimit)
+	request.MaxVertices = clampInt(request.MaxVertices, minSpatialPreviewVertexBudget, maxSpatialPreviewVertexBudget)
 
 	fields, err := ds.GetFields()
 	if err != nil {
