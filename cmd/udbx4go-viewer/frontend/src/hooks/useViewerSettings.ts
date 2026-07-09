@@ -28,15 +28,27 @@ export function useViewerSettings() {
   }, [])
 
   const saveSettings = useCallback(async (nextSettings: ViewerSettings) => {
-    const saved = await SaveViewerSettings(new main.ViewerSettingsDTO(nextSettings))
-    setSettings(saved as ViewerSettings)
-    return saved as ViewerSettings
+    try {
+      setError(null)
+      const saved = await SaveViewerSettings(new main.ViewerSettingsDTO(nextSettings))
+      setSettings(saved as ViewerSettings)
+      return saved as ViewerSettings
+    } catch (err) {
+      setError(`设置保存失败：${err instanceof Error ? err.message : '未知错误'}`)
+      throw err
+    }
   }, [])
 
   const resetSettings = useCallback(async () => {
-    const reset = await ResetViewerSettings()
-    setSettings(reset as ViewerSettings)
-    return reset as ViewerSettings
+    try {
+      setError(null)
+      const reset = await ResetViewerSettings()
+      setSettings(reset as ViewerSettings)
+      return reset as ViewerSettings
+    } catch (err) {
+      setError(`设置重置失败：${err instanceof Error ? err.message : '未知错误'}`)
+      throw err
+    }
   }, [])
 
   useEffect(() => {

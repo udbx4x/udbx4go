@@ -1,12 +1,12 @@
 export namespace main {
-	
+
 	export class AdvancedSettingsDTO {
 	    showPreviewStats: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AdvancedSettingsDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.showPreviewStats = source["showPreviewStats"];
@@ -17,11 +17,11 @@ export namespace main {
 	    minY: number;
 	    maxX: number;
 	    maxY: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new BoundingBoxDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.minX = source["minX"];
@@ -35,11 +35,11 @@ export namespace main {
 	    kind: string;
 	    objectCount: number;
 	    iconType: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new DatasetInfoDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
@@ -54,11 +54,11 @@ export namespace main {
 	    geometryType: string;
 	    bbox?: BoundingBoxDTO;
 	    properties: Record<string, string>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FeatureAttributesDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.datasetName = source["datasetName"];
@@ -67,7 +67,7 @@ export namespace main {
 	        this.bbox = this.convertValues(source["bbox"], BoundingBoxDTO);
 	        this.properties = source["properties"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -89,11 +89,11 @@ export namespace main {
 	export class FileInfo {
 	    path: string;
 	    datasetCount: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FileInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
@@ -102,11 +102,11 @@ export namespace main {
 	}
 	export class MapInteractionSettingsDTO {
 	    zoomToSelectedFeature: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new MapInteractionSettingsDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.zoomToSelectedFeature = source["zoomToSelectedFeature"];
@@ -117,11 +117,11 @@ export namespace main {
 	    columns: string[];
 	    currentPage: number;
 	    totalPages: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PageData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.rows = source["rows"];
@@ -134,11 +134,11 @@ export namespace main {
 	    type: string;
 	    coordinates: any[];
 	    hasZ: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PreviewGeometryDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
@@ -151,11 +151,11 @@ export namespace main {
 	    geometry: PreviewGeometryDTO;
 	    bbox?: BoundingBoxDTO;
 	    properties?: Record<string, string>;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new PreviewFeatureDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -163,7 +163,7 @@ export namespace main {
 	        this.bbox = this.convertValues(source["bbox"], BoundingBoxDTO);
 	        this.properties = source["properties"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -182,7 +182,7 @@ export namespace main {
 		    return a;
 		}
 	}
-	
+
 	export class SpatialPreviewDTO {
 	    datasetName: string;
 	    kind: string;
@@ -192,11 +192,11 @@ export namespace main {
 	    estimatedVertexCount: number;
 	    sampled: boolean;
 	    sampleReason?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SpatialPreviewDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.datasetName = source["datasetName"];
@@ -208,7 +208,7 @@ export namespace main {
 	        this.sampled = source["sampled"];
 	        this.sampleReason = source["sampleReason"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -232,11 +232,11 @@ export namespace main {
 	    limit: number;
 	    maxVertices: number;
 	    simplify: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SpatialPreviewRequestDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.viewport = this.convertValues(source["viewport"], BoundingBoxDTO);
@@ -244,7 +244,7 @@ export namespace main {
 	        this.maxVertices = source["maxVertices"];
 	        this.simplify = source["simplify"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -267,11 +267,11 @@ export namespace main {
 	    featureLimit: number;
 	    vertexBudget: number;
 	    autoFitOnLayerChange: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SpatialPreviewSettingsDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.featureLimit = source["featureLimit"];
@@ -288,11 +288,11 @@ export namespace main {
 	    estimatedVertexCount: number;
 	    previewSupported: boolean;
 	    unsupportedReason?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SpatialSummaryDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.datasetName = source["datasetName"];
@@ -304,7 +304,7 @@ export namespace main {
 	        this.previewSupported = source["previewSupported"];
 	        this.unsupportedReason = source["unsupportedReason"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -325,11 +325,11 @@ export namespace main {
 	}
 	export class TableSettingsDTO {
 	    defaultOpen: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new TableSettingsDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.defaultOpen = source["defaultOpen"];
@@ -340,11 +340,11 @@ export namespace main {
 	    mapInteraction: MapInteractionSettingsDTO;
 	    table: TableSettingsDTO;
 	    advanced: AdvancedSettingsDTO;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new ViewerSettingsDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.spatialPreview = this.convertValues(source["spatialPreview"], SpatialPreviewSettingsDTO);
@@ -352,7 +352,7 @@ export namespace main {
 	        this.table = this.convertValues(source["table"], TableSettingsDTO);
 	        this.advanced = this.convertValues(source["advanced"], AdvancedSettingsDTO);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
