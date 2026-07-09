@@ -1,0 +1,228 @@
+import React, { useEffect } from 'react'
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Divider,
+  FormControlLabel,
+  Stack,
+  Switch,
+  Tab,
+  Tabs,
+  TextField,
+  Typography,
+} from '@mui/material'
+import type { ViewerSettings } from '../settings/viewerSettings'
+
+interface SettingsDialogProps {
+  open: boolean
+  settings: ViewerSettings
+  disabled: boolean
+  onClose: () => void
+  onSave: (settings: ViewerSettings) => void | Promise<void>
+  onReset: () => void | Promise<void>
+}
+
+type SettingsTab = 'spatialPreview' | 'mapInteraction' | 'table' | 'advanced'
+
+const cloneSettings = (settings: ViewerSettings): ViewerSettings => ({
+  spatialPreview: { ...settings.spatialPreview },
+  mapInteraction: { ...settings.mapInteraction },
+  table: { ...settings.table },
+  advanced: { ...settings.advanced },
+})
+
+export const SettingsDialog: React.FC<SettingsDialogProps> = ({
+  open,
+  settings,
+  disabled,
+  onClose,
+  onSave,
+  onReset,
+}) => {
+  const [tab, setTab] = React.useState<SettingsTab>('spatialPreview')
+  const [draft, setDraft] = React.useState<ViewerSettings>(() => cloneSettings(settings))
+
+  useEffect(() => {
+    if (open) {
+      setDraft(cloneSettings(settings))
+      setTab('spatialPreview')
+    }
+  }, [open, settings])
+
+  const updateSpatialPreview = <Key extends keyof ViewerSettings['spatialPreview']>(
+    key: Key,
+    value: ViewerSettings['spatialPreview'][Key],
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      spatialPreview: {
+        ...current.spatialPreview,
+        [key]: value,
+      },
+    }))
+  }
+
+  const updateMapInteraction = <Key extends keyof ViewerSettings['mapInteraction']>(
+    key: Key,
+    value: ViewerSettings['mapInteraction'][Key],
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      mapInteraction: {
+        ...current.mapInteraction,
+        [key]: value,
+      },
+    }))
+  }
+
+  const updateTable = <Key extends keyof ViewerSettings['table']>(
+    key: Key,
+    value: ViewerSettings['table'][Key],
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      table: {
+        ...current.table,
+        [key]: value,
+      },
+    }))
+  }
+
+  const updateAdvanced = <Key extends keyof ViewerSettings['advanced']>(
+    key: Key,
+    value: ViewerSettings['advanced'][Key],
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      advanced: {
+        ...current.advanced,
+        [key]: value,
+      },
+    }))
+  }
+
+  const handleReset = () => {
+    if (window.confirm('确定要恢复默认设置吗？')) {
+      void onReset()
+    }
+  }
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>设置</DialogTitle>
+      <DialogContent dividers sx={{ p: 0 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: '180px 1fr', minHeight: 360 }}>
+          <Tabs
+            orientation="vertical"
+            value={tab}
+            onChange={(_, nextTab: SettingsTab) => setTab(nextTab)}
+            aria-label="设置分类"
+            sx={{ borderRight: 1, borderColor: 'divider', py: 1 }}
+          >
+            <Tab value="spatialPreview" label="空间预览" />
+            <Tab value="mapInteraction" label="地图交互" />
+            <Tab value="table" label="属性表" />
+            <Tab value="advanced" label="高级" />
+          </Tabs>
+
+          <Box sx={{ p: 3 }}>
+            {tab === 'spatialPreview' && (
+              <Stack spacing={2.5}>
+                <Typography variant="subtitle2">空间预览</Typography>
+                <TextField
+                  label="空间预览要素上限"
+                  type="number"
+                  size="small"
+                  value={draft.spatialPreview.featureLimit}
+                  onChange={(event) => updateSpatialPreview('featureLimit', Number(event.target.value))}
+                  inputProps={{ min: 0 }}
+                  fullWidth
+                />
+                <TextField
+                  label="空间预览顶点预算"
+                  type="number"
+                  size="small"
+                  value={draft.spatialPreview.vertexBudget}
+                  onChange={(event) => updateSpatialPreview('vertexBudget', Number(event.target.value))}
+                  inputProps={{ min: 0 }}
+                  fullWidth
+                />
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={draft.spatialPreview.autoFitOnLayerChange}
+                      onChange={(event) => updateSpatialPreview('autoFitOnLayerChange', event.target.checked)}
+                    />
+                  }
+                  label="加载图层后自动适配范围"
+                />
+              </Stack>
+            )}
+
+            {tab === 'mapInteraction' && (
+              <Stack spacing={2.5}>
+                <Typography variant="subtitle2">地图交互</Typography>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={draft.mapInteraction.zoomToSelectedFeature}
+                      onChange={(event) => updateMapInteraction('zoomToSelectedFeature', event.target.checked)}
+                    />
+                  }
+                  label="选择要素时自动定位"
+                />
+              </Stack>
+            )}
+
+            {tab === 'table' && (
+              <Stack spacing={2.5}>
+                <Typography variant="subtitle2">属性表</Typography>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={draft.table.defaultOpen}
+                      onChange={(event) => updateTable('defaultOpen', event.target.checked)}
+                    />
+                  }
+                  label="默认展开属性表"
+                />
+              </Stack>
+            )}
+
+            {tab === 'advanced' && (
+              <Stack spacing={2.5}>
+                <Typography variant="subtitle2">高级</Typography>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={draft.advanced.showPreviewStats}
+                      onChange={(event) => updateAdvanced('showPreviewStats', event.target.checked)}
+                    />
+                  }
+                  label="显示空间预览统计"
+                />
+              </Stack>
+            )}
+          </Box>
+        </Box>
+      </DialogContent>
+      <Divider />
+      <DialogActions>
+        <Button color="inherit" disabled={disabled} onClick={handleReset}>
+          恢复默认
+        </Button>
+        <Box sx={{ flex: 1 }} />
+        <Button color="inherit" onClick={onClose}>
+          取消
+        </Button>
+        <Button variant="contained" disabled={disabled} onClick={() => void onSave(draft)}>
+          保存
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
+}

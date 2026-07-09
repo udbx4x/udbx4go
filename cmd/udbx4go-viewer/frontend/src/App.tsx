@@ -6,12 +6,14 @@ import {
   Snackbar,
 } from '@mui/material'
 import { useUDBX } from './hooks/useUDBX'
+import { useViewerSettings } from './hooks/useViewerSettings'
 import { DatasetExplorer } from './components/DatasetExplorer'
 import { AttributeTableDrawer } from './components/AttributeTableDrawer'
 import { MapWorkspace } from './components/MapWorkspace'
 import { AppShell } from './components/AppShell'
 import { TopToolbar } from './components/TopToolbar'
 import { InspectorPanel } from './components/InspectorPanel'
+import { SettingsDialog } from './components/SettingsDialog'
 import { viewerTheme } from './theme/viewerTheme'
 
 function App() {
@@ -33,15 +35,29 @@ function App() {
     removeMapLayer,
     selectFeature,
   } = useUDBX()
+  const {
+    settings,
+    loading: settingsLoading,
+    error: settingsError,
+    saveSettings,
+    resetSettings,
+  } = useViewerSettings()
 
   const [errorOpen, setErrorOpen] = React.useState(false)
   const [tableOpen, setTableOpen] = React.useState(true)
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [settingsSaving, setSettingsSaving] = React.useState(false)
+  const displayError = error || settingsError
 
   useEffect(() => {
-    if (error) {
+    if (displayError) {
       setErrorOpen(true)
     }
-  }, [error])
+  }, [displayError])
+
+  useEffect(() => {
+    setTableOpen(settings.table.defaultOpen)
+  }, [settings.table.defaultOpen])
 
   const handleOpenFile = async () => {
     await openFileDialog()
@@ -73,6 +89,7 @@ function App() {
             onOpenFile={handleOpenFile}
             onCloseFile={handleCloseFile}
             onToggleTable={() => setTableOpen((open) => !open)}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
         }
         datasetExplorer={
@@ -112,6 +129,30 @@ function App() {
         }
       />
 
+      <SettingsDialog
+        open={settingsOpen}
+        settings={settings}
+        disabled={settingsLoading || settingsSaving}
+        onClose={() => setSettingsOpen(false)}
+        onSave={async (nextSettings) => {
+          setSettingsSaving(true)
+          try {
+            await saveSettings(nextSettings)
+            setSettingsOpen(false)
+          } finally {
+            setSettingsSaving(false)
+          }
+        }}
+        onReset={async () => {
+          setSettingsSaving(true)
+          try {
+            await resetSettings()
+          } finally {
+            setSettingsSaving(false)
+          }
+        }}
+      />
+
       <Snackbar
         open={errorOpen}
         autoHideDuration={6000}
@@ -119,7 +160,7 @@ function App() {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
       >
         <Alert severity="error" onClose={() => setErrorOpen(false)}>
-          {error}
+          {displayError}
         </Alert>
       </Snackbar>
     </ThemeProvider>

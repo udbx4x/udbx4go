@@ -16,6 +16,7 @@ type TopToolbarProps = {
   onOpenFile: () => void
   onCloseFile: () => void
   onToggleTable: () => void
+  onOpenSettings: () => void
 }
 
 let TopToolbar: React.FC<TopToolbarProps>
@@ -28,6 +29,7 @@ const renderToolbar = (props: Partial<TopToolbarProps> = {}) => {
     onOpenFile: vi.fn(),
     onCloseFile: vi.fn(),
     onToggleTable: vi.fn(),
+    onOpenSettings: vi.fn(),
   }
 
   return {
@@ -74,5 +76,15 @@ describe('TopToolbar', () => {
     expect(onOpenFile).toHaveBeenCalledTimes(1)
     expect(onCloseFile).toHaveBeenCalledTimes(1)
     expect(onToggleTable).toHaveBeenCalledTimes(1)
+  })
+
+  it('点击设置按钮会调用设置回调', () => {
+    const onOpenSettings = vi.fn()
+
+    renderToolbar({ onOpenSettings })
+
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+
+    expect(onOpenSettings).toHaveBeenCalledTimes(1)
   })
 })

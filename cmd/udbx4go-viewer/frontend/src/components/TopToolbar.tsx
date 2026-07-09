@@ -12,6 +12,7 @@ import {
   Close as CloseIcon,
   KeyboardArrowDown as CollapseTableIcon,
   KeyboardArrowUp as ExpandTableIcon,
+  Settings as SettingsIcon,
 } from '@mui/icons-material'
 import { viewerLayout } from '../theme/viewerTheme'
 
@@ -22,6 +23,7 @@ interface TopToolbarProps {
   onOpenFile: () => void
   onCloseFile: () => void
   onToggleTable: () => void
+  onOpenSettings: () => void
 }
 
 const getFileName = (path: string | null) => {
@@ -38,6 +40,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   onOpenFile,
   onCloseFile,
   onToggleTable,
+  onOpenSettings,
 }) => {
   const tableToggleLabel = tableOpen ? '收起属性表' : '展开属性表'
 
@@ -94,6 +97,11 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         <Tooltip title={tableToggleLabel}>
           <IconButton size="small" aria-label={tableToggleLabel} onClick={onToggleTable}>
             {tableOpen ? <CollapseTableIcon fontSize="small" /> : <ExpandTableIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="设置">
+          <IconButton size="small" aria-label="设置" onClick={onOpenSettings}>
+            <SettingsIcon fontSize="small" />
           </IconButton>
         </Tooltip>
       </Stack>
