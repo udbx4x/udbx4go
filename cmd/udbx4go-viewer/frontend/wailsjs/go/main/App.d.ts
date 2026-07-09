@@ -12,6 +12,8 @@ export function GetDatasetSpatialSummary(arg1:string):Promise<main.SpatialSummar
 
 export function GetFeatureAttributes(arg1:string,arg2:number):Promise<main.FeatureAttributesDTO>;
 
+export function GetViewerSettings():Promise<main.ViewerSettingsDTO>;
+
 export function ListDatasets():Promise<Array<main.DatasetInfoDTO>>;
 
 export function LoadDatasetPage(arg1:string,arg2:number):Promise<main.PageData>;
@@ -21,3 +23,7 @@ export function LoadSpatialPreview(arg1:string,arg2:main.SpatialPreviewRequestDT
 export function OpenFileDialog():Promise<string>;
 
 export function OpenUDBXFile(arg1:string):Promise<main.FileInfo>;
+
+export function ResetViewerSettings():Promise<main.ViewerSettingsDTO>;
+
+export function SaveViewerSettings(arg1:main.ViewerSettingsDTO):Promise<main.ViewerSettingsDTO>;

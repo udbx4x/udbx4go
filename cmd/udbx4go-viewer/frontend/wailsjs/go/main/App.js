@@ -22,6 +22,10 @@ export function GetFeatureAttributes(arg1, arg2) {
   return window['go']['main']['App']['GetFeatureAttributes'](arg1, arg2);
 }
 
+export function GetViewerSettings() {
+  return window['go']['main']['App']['GetViewerSettings']();
+}
+
 export function ListDatasets() {
   return window['go']['main']['App']['ListDatasets']();
 }
@@ -40,4 +44,12 @@ export function OpenFileDialog() {
 
 export function OpenUDBXFile(arg1) {
   return window['go']['main']['App']['OpenUDBXFile'](arg1);
+}
+
+export function ResetViewerSettings() {
+  return window['go']['main']['App']['ResetViewerSettings']();
+}
+
+export function SaveViewerSettings(arg1) {
+  return window['go']['main']['App']['SaveViewerSettings'](arg1);
 }
