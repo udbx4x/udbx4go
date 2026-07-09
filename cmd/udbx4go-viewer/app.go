@@ -10,7 +10,11 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const pageSize = 100
+const (
+	pageSize                   = 100
+	defaultSpatialPreviewLimit = 1000
+	defaultSpatialVertexBudget = 1000000
+)
 
 // App struct
 type App struct {
@@ -331,11 +335,11 @@ func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, 
 	}
 
 	fields, _ := ds.GetFields()
-	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{Limit: 1000})
+	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{Limit: defaultSpatialPreviewLimit})
 	if err != nil {
 		return nil, err
 	}
-	previewFeatures := a.formatPreviewFeatures(features, fields, 1000000)
+	previewFeatures := a.formatPreviewFeatures(features, fields, defaultSpatialVertexBudget)
 	for _, feature := range previewFeatures {
 		summary.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		summary.Extent = mergeBBox(summary.Extent, feature.BBox)
@@ -353,10 +357,10 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		return nil, fmt.Errorf("数据集 %s 不支持空间预览: 非空间数据集", datasetName)
 	}
 	if request.Limit <= 0 {
-		request.Limit = 100
+		request.Limit = defaultSpatialPreviewLimit
 	}
-	if request.MaxVertices <= 0 {
-		request.MaxVertices = 10000
+	if request.MaxVertices < defaultSpatialVertexBudget {
+		request.MaxVertices = defaultSpatialVertexBudget
 	}
 
 	fields, err := ds.GetFields()

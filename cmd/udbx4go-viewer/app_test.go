@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,15 @@ func sampleDataPath(t *testing.T) string {
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "data", "SampleData.udbx"))
 	if err != nil {
 		t.Fatalf("resolve sample path: %v", err)
+	}
+	return path
+}
+
+func henanDataPath(t *testing.T) string {
+	t.Helper()
+	path, err := filepath.Abs(filepath.Join("..", "..", "..", "data", "henan.udbx"))
+	if err != nil {
+		t.Fatalf("resolve henan path: %v", err)
 	}
 	return path
 }
@@ -186,6 +196,37 @@ func TestViewerSpatialPreviewSupportsPointLineAndRegionDatasets(t *testing.T) {
 			t.Fatalf("%s geometry type = %q, want %q", tc.name, preview.Features[0].Geometry.Type, tc.wantGeomType)
 		}
 	}
+}
+
+func TestViewerSpatialPreviewLoadsAllHenanCountyRegionsForTableSelection(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(henanDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(henan) error = %v", err)
+	}
+
+	const datasetName = "县级行政区划"
+	preview, err := app.LoadSpatialPreview(datasetName, SpatialPreviewRequestDTO{Limit: 1000, MaxVertices: 50000})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview(%s) error = %v", datasetName, err)
+	}
+	if len(preview.Features) != 164 {
+		t.Fatalf("len(preview.Features) = %d, want all 164 county regions", len(preview.Features))
+	}
+
+	secondPage, err := app.LoadDatasetPage(datasetName, 2)
+	if err != nil {
+		t.Fatalf("LoadDatasetPage(%s, 2) error = %v", datasetName, err)
+	}
+	if len(secondPage.Rows) == 0 {
+		t.Fatal("LoadDatasetPage second page returned no rows")
+	}
+	secondPageFeatureID := secondPage.Rows[0][0]
+	for _, feature := range preview.Features {
+		if strconv.Itoa(feature.ID) == secondPageFeatureID {
+			return
+		}
+	}
+	t.Fatalf("preview does not contain second-page SmID %s, so table selection cannot highlight it on the map", secondPageFeatureID)
 }
 
 func TestViewerGetFeatureAttributesUsesDatasetNameAndSmID(t *testing.T) {

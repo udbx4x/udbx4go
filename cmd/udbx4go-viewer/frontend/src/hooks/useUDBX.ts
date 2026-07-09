@@ -58,6 +58,9 @@ function createDefaultLayerStyle(kind: string): LayerStyle {
   }
 }
 
+const spatialPreviewLimit = 1000
+const spatialPreviewVertexBudget = 1000000
+
 export function useUDBX() {
   const [currentFile, setCurrentFile] = useState<string | null>(null)
   const [datasets, setDatasets] = useState<DatasetInfo[]>([])
@@ -169,8 +172,8 @@ export function useUDBX() {
 
       const previewRequest = new main.SpatialPreviewRequestDTO({
         viewport: undefined,
-        limit: 1000,
-        maxVertices: 50000,
+        limit: spatialPreviewLimit,
+        maxVertices: spatialPreviewVertexBudget,
         simplify: false,
       })
       const preview: SpatialPreview = await LoadSpatialPreview(datasetName, previewRequest)
