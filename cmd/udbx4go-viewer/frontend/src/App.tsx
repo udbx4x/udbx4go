@@ -47,6 +47,7 @@ function App() {
   const [tableOpen, setTableOpen] = React.useState(true)
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [settingsSaving, setSettingsSaving] = React.useState(false)
+  const settingsDefaultAppliedRef = React.useRef(false)
   const displayError = error || settingsError
 
   useEffect(() => {
@@ -56,8 +57,11 @@ function App() {
   }, [displayError])
 
   useEffect(() => {
-    setTableOpen(settings.table.defaultOpen)
-  }, [settings.table.defaultOpen])
+    if (!settingsLoading && !settingsDefaultAppliedRef.current) {
+      setTableOpen(settings.table.defaultOpen)
+      settingsDefaultAppliedRef.current = true
+    }
+  }, [settingsLoading, settings.table.defaultOpen])
 
   const handleOpenFile = async () => {
     await openFileDialog()

@@ -15,6 +15,11 @@ export interface ViewerSettings {
   }
 }
 
+export const viewerSettingsConstraints = {
+  featureLimit: { min: 100, max: 10000 },
+  vertexBudget: { min: 50000, max: 10000000 },
+}
+
 export const defaultViewerSettings: ViewerSettings = {
   spatialPreview: {
     featureLimit: 1000,
