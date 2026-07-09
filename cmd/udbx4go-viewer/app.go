@@ -18,9 +18,10 @@ const (
 
 // App struct
 type App struct {
-	ctx         context.Context
-	dataSource  *udbx4go.DataSource
-	currentPath string
+	ctx                  context.Context
+	dataSource           *udbx4go.DataSource
+	currentPath          string
+	settingsPathOverride string
 }
 
 // DatasetInfoDTO represents dataset information for the frontend

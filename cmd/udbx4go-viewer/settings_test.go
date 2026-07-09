@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -70,6 +72,85 @@ func TestViewerSettingsJSONContract(t *testing.T) {
 
 	advanced := requireObjectField(t, settings, "advanced")
 	requireBoolField(t, advanced, "showPreviewStats")
+}
+
+func TestNormalizeViewerSettingsClampsRanges(t *testing.T) {
+	settings := DefaultViewerSettings()
+	settings.SpatialPreview.FeatureLimit = 1
+	settings.SpatialPreview.VertexBudget = 1
+
+	normalized := NormalizeViewerSettings(settings)
+
+	if normalized.SpatialPreview.FeatureLimit != minSpatialPreviewFeatureLimit {
+		t.Fatalf("FeatureLimit = %d, want %d", normalized.SpatialPreview.FeatureLimit, minSpatialPreviewFeatureLimit)
+	}
+	if normalized.SpatialPreview.VertexBudget != minSpatialPreviewVertexBudget {
+		t.Fatalf("VertexBudget = %d, want %d", normalized.SpatialPreview.VertexBudget, minSpatialPreviewVertexBudget)
+	}
+}
+
+func TestViewerSettingsPersistence(t *testing.T) {
+	app := NewApp()
+	app.settingsPathOverride = filepath.Join(t.TempDir(), "settings.json")
+
+	settings := DefaultViewerSettings()
+	settings.SpatialPreview.FeatureLimit = 2000
+	settings.Table.DefaultOpen = false
+
+	saved, err := app.SaveViewerSettings(settings)
+	if err != nil {
+		t.Fatalf("SaveViewerSettings() error = %v", err)
+	}
+	if saved.SpatialPreview.FeatureLimit != 2000 {
+		t.Fatalf("saved FeatureLimit = %d, want 2000", saved.SpatialPreview.FeatureLimit)
+	}
+
+	loaded, err := app.GetViewerSettings()
+	if err != nil {
+		t.Fatalf("GetViewerSettings() error = %v", err)
+	}
+	if loaded.SpatialPreview.FeatureLimit != 2000 {
+		t.Fatalf("loaded FeatureLimit = %d, want 2000", loaded.SpatialPreview.FeatureLimit)
+	}
+	if loaded.Table.DefaultOpen {
+		t.Fatal("loaded Table.DefaultOpen = true, want false")
+	}
+}
+
+func TestResetViewerSettings(t *testing.T) {
+	app := NewApp()
+	app.settingsPathOverride = filepath.Join(t.TempDir(), "settings.json")
+
+	settings := DefaultViewerSettings()
+	settings.SpatialPreview.FeatureLimit = 2000
+	if _, err := app.SaveViewerSettings(settings); err != nil {
+		t.Fatalf("SaveViewerSettings() error = %v", err)
+	}
+
+	reset, err := app.ResetViewerSettings()
+	if err != nil {
+		t.Fatalf("ResetViewerSettings() error = %v", err)
+	}
+	if reset.SpatialPreview.FeatureLimit != DefaultViewerSettings().SpatialPreview.FeatureLimit {
+		t.Fatalf("reset FeatureLimit = %d, want default", reset.SpatialPreview.FeatureLimit)
+	}
+}
+
+func TestViewerSettingsCorruptFileReturnsDefaults(t *testing.T) {
+	app := NewApp()
+	app.settingsPathOverride = filepath.Join(t.TempDir(), "settings.json")
+
+	if err := os.WriteFile(app.settingsPathOverride, []byte("{bad json"), 0o644); err != nil {
+		t.Fatalf("os.WriteFile() error = %v", err)
+	}
+
+	loaded, err := app.GetViewerSettings()
+	if err != nil {
+		t.Fatalf("GetViewerSettings() error = %v", err)
+	}
+	if loaded.SpatialPreview.FeatureLimit != DefaultViewerSettings().SpatialPreview.FeatureLimit {
+		t.Fatalf("loaded FeatureLimit = %d, want default", loaded.SpatialPreview.FeatureLimit)
+	}
 }
 
 func requireObjectField(t *testing.T, object map[string]any, name string) map[string]any {
