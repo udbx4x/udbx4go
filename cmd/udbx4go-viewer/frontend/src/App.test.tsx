@@ -24,9 +24,13 @@ type CapturedMapWorkspaceProps = {
   autoFitOnLayerChange: boolean
   zoomToSelectedFeature: boolean
 }
+type CapturedInspectorPanelProps = {
+  showPreviewStats: boolean
+}
 
 let capturedSettingsDialogProps: CapturedSettingsDialogProps | null = null
 let capturedMapWorkspaceProps: CapturedMapWorkspaceProps | null = null
+let capturedInspectorPanelProps: CapturedInspectorPanelProps | null = null
 
 vi.mock('./hooks/useUDBX', () => ({
   useUDBX: (options: unknown) => mockUseUDBX(options),
@@ -40,15 +44,18 @@ vi.mock('./components/AppShell', () => ({
   AppShell: ({
     toolbar,
     mapWorkspace,
+    inspector,
     tableDrawer,
   }: {
     toolbar: ReactNode
     mapWorkspace: ReactNode
+    inspector: ReactNode
     tableDrawer: ReactNode
   }) => (
     <div>
       {toolbar}
       {mapWorkspace}
+      {inspector}
       {tableDrawer}
     </div>
   ),
@@ -101,7 +108,10 @@ vi.mock('./components/MapWorkspace', () => ({
 }))
 
 vi.mock('./components/InspectorPanel', () => ({
-  InspectorPanel: () => null,
+  InspectorPanel: (props: CapturedInspectorPanelProps) => {
+    capturedInspectorPanelProps = props
+    return null
+  },
 }))
 
 vi.mock('./components/SettingsDialog', () => ({
@@ -154,6 +164,7 @@ describe('App settings integration', () => {
     vi.clearAllMocks()
     capturedSettingsDialogProps = null
     capturedMapWorkspaceProps = null
+    capturedInspectorPanelProps = null
     mockUseUDBX.mockReturnValue(baseUdbxState)
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
@@ -206,6 +217,9 @@ describe('App settings integration', () => {
       mapInteraction: {
         zoomToSelectedFeature: false,
       },
+      advanced: {
+        showPreviewStats: true,
+      },
     }
 
     mockUseViewerSettings.mockReturnValue({
@@ -224,6 +238,7 @@ describe('App settings integration', () => {
     })
     expect(capturedMapWorkspaceProps?.autoFitOnLayerChange).toBe(false)
     expect(capturedMapWorkspaceProps?.zoomToSelectedFeature).toBe(false)
+    expect(capturedInspectorPanelProps?.showPreviewStats).toBe(true)
   })
 
   it('点击工具栏设置入口会打开设置弹窗', async () => {

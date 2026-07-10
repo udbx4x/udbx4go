@@ -15,6 +15,7 @@ import type { MapLayerState } from '../types'
 
 interface LayerPanelProps {
   layers: MapLayerState[]
+  showPreviewStats: boolean
   onVisibleChange: (datasetName: string, visible: boolean) => void
   onRemoveLayer: (datasetName: string) => void
 }
@@ -45,6 +46,7 @@ function getLayerStatus(layer: MapLayerState): string {
 
 export const LayerPanel: React.FC<LayerPanelProps> = ({
   layers,
+  showPreviewStats,
   onVisibleChange,
   onRemoveLayer,
 }) => {
@@ -113,11 +115,37 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
               />
               <ListItemText
                 primary={layer.datasetName}
-                secondary={getLayerStatus(layer)}
+                secondary={
+                  <Box component="div">
+                    <Typography
+                      component="span"
+                      variant="body2"
+                      color={layer.error ? 'error' : 'text.secondary'}
+                      noWrap
+                      title={getLayerStatus(layer)}
+                      sx={{ display: 'block' }}
+                    >
+                      {getLayerStatus(layer)}
+                    </Typography>
+                    {showPreviewStats && layer.preview && (
+                      <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+                        <Typography variant="caption" color="text.secondary">
+                          预览要素 {layer.preview.features.length}
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          顶点 {layer.preview.estimatedVertexCount}
+                        </Typography>
+                        {layer.preview.sampled && (
+                          <Typography variant="caption" color="warning.main">
+                            {layer.preview.sampleReason || '已采样'}
+                          </Typography>
+                        )}
+                      </Stack>
+                    )}
+                  </Box>
+                }
                 secondaryTypographyProps={{
-                  color: layer.error ? 'error' : 'text.secondary',
-                  noWrap: true,
-                  title: getLayerStatus(layer),
+                  component: 'div',
                 }}
               />
             </ListItem>

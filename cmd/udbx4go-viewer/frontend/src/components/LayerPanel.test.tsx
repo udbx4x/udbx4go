@@ -8,6 +8,7 @@ import type { MapLayerState } from '../types'
 
 type LayerPanelProps = {
   layers: MapLayerState[]
+  showPreviewStats: boolean
   onVisibleChange: (datasetName: string, visible: boolean) => void
   onRemoveLayer: (datasetName: string) => void
 }
@@ -15,6 +16,7 @@ type LayerPanelProps = {
 const renderLayerPanel = (props: Partial<LayerPanelProps> = {}) => {
   const defaultProps: LayerPanelProps = {
     layers: mapLayerFixtures,
+    showPreviewStats: false,
     onVisibleChange: vi.fn(),
     onRemoveLayer: vi.fn(),
   }
@@ -47,5 +49,35 @@ describe('LayerPanel', () => {
 
     expect(onVisibleChange).toHaveBeenCalledWith('BaseMap_P', false)
     expect(onRemoveLayer).toHaveBeenCalledWith('BaseMap_P')
+  })
+
+  it('开启预览统计时显示要素数、顶点数和采样提示', () => {
+    const [layer] = mapLayerFixtures
+    const sampledLayer: MapLayerState = {
+      ...layer,
+      preview: layer.preview && {
+        ...layer.preview,
+        features: [
+          {
+            id: 1,
+            geometry: {
+              type: 'Point',
+              coordinates: [113.5, 34.8],
+              hasZ: false,
+            },
+            properties: {},
+          },
+        ],
+        estimatedVertexCount: 1,
+        sampled: true,
+        sampleReason: '达到预览上限',
+      },
+    }
+
+    renderLayerPanel({ layers: [sampledLayer], showPreviewStats: true })
+
+    expect(screen.getByText('预览要素 1')).toBeInTheDocument()
+    expect(screen.getByText('顶点 1')).toBeInTheDocument()
+    expect(screen.getByText('达到预览上限')).toBeInTheDocument()
   })
 })

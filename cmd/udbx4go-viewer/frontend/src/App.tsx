@@ -121,6 +121,7 @@ function App() {
         inspector={
           <InspectorPanel
             layers={mapLayers}
+            showPreviewStats={settings.advanced.showPreviewStats}
             selectedFeatureAttributes={selectedFeatureAttributes}
             onLayerVisibleChange={setMapLayerVisible}
             onRemoveLayer={removeMapLayer}

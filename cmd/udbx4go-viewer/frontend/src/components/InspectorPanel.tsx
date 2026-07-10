@@ -6,6 +6,7 @@ import type { FeatureAttributes, MapLayerState } from '../types'
 
 interface InspectorPanelProps {
   layers: MapLayerState[]
+  showPreviewStats: boolean
   selectedFeatureAttributes: FeatureAttributes | null
   onLayerVisibleChange: (datasetName: string, visible: boolean) => void
   onRemoveLayer: (datasetName: string) => void
@@ -13,6 +14,7 @@ interface InspectorPanelProps {
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   layers,
+  showPreviewStats,
   selectedFeatureAttributes,
   onLayerVisibleChange,
   onRemoveLayer,
@@ -22,6 +24,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
       <Box sx={{ flex: 1, minHeight: 0 }}>
         <LayerPanel
           layers={layers}
+          showPreviewStats={showPreviewStats}
           onVisibleChange={onLayerVisibleChange}
           onRemoveLayer={onRemoveLayer}
         />
