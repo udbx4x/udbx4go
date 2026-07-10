@@ -19,6 +19,7 @@
 - 点、线、面图层使用内置默认样式渲染，并在内部保留 `LayerStyle` 结构供后续样式设置 UI 使用。
 - 在地图、图层和属性表之间按 `datasetName + SmID` 做单选联动。
 - 点击地图要素或属性表行查看属性摘要。
+- 支持本机设置模块，配置空间预览上限、地图定位行为、属性表默认状态和预览统计显示。
 - 显示加载状态和错误信息。
 - 关闭或切换文件时释放当前 `DataSource`。
 
@@ -76,6 +77,9 @@ wails build
 - `GetDatasetSpatialSummary(datasetName)`：读取空间预览摘要。
 - `LoadSpatialPreview(datasetName, request)`：读取有限数量空间预览要素。
 - `GetFeatureAttributes(datasetName, featureID)`：按 `SmID` 查询要素属性摘要。
+- `GetViewerSettings()`：读取 viewer 本机设置。
+- `SaveViewerSettings(settings)`：保存 viewer 本机设置。
+- `ResetViewerSettings()`：恢复默认 viewer 设置。
 
 ## 验证
 
@@ -118,6 +122,10 @@ npm run build
 10. 收起底部属性表后，地图获得更大预览空间。
 11. 选择 TabularDT 后，属性表切换为 TabularDT，地图已有空间图层不被清空。
 12. 打开不存在或损坏文件时显示错误提示，已打开文件状态不被错误数据污染。
+13. 打开设置，修改空间预览顶点预算并保存，重新打开设置后值保持。
+14. 关闭“加载图层后自动适配范围”后新增图层，地图不自动 fit；重新开启后恢复自动 fit。
+15. 开启“显示空间预览统计”后，右侧图层面板显示预览要素数、顶点数和采样状态。
+16. 使用 henan.udbx 的县级行政区划数据验证 164 条面要素可完整预览，并且属性表第 2 页记录点击后可在地图上高亮和定位。
 ```
 
 后续稳定化任务应继续补充前端测试覆盖，重点覆盖加载状态、错误提示、数据集选择、分页交互和地图联动。
