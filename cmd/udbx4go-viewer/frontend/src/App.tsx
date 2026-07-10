@@ -143,6 +143,8 @@ function App() {
           try {
             await saveSettings(nextSettings)
             setSettingsOpen(false)
+          } catch {
+            // useViewerSettings exposes the error through settingsError.
           } finally {
             setSettingsSaving(false)
           }
@@ -151,6 +153,8 @@ function App() {
           setSettingsSaving(true)
           try {
             await resetSettings()
+          } catch {
+            // useViewerSettings exposes the error through settingsError.
           } finally {
             setSettingsSaving(false)
           }

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultViewerSettings } from './settings/viewerSettings'
@@ -12,6 +12,16 @@ declare global {
 
 const mockUseUDBX = vi.fn()
 const mockUseViewerSettings = vi.fn()
+type CapturedSettingsDialogProps = {
+  open: boolean
+  settings: ViewerSettings
+  disabled: boolean
+  onClose: () => void
+  onSave: (settings: ViewerSettings) => void | Promise<void>
+  onReset: () => void | Promise<void>
+}
+
+let capturedSettingsDialogProps: CapturedSettingsDialogProps | null = null
 
 vi.mock('./hooks/useUDBX', () => ({
   useUDBX: () => mockUseUDBX(),
@@ -34,13 +44,20 @@ vi.mock('./components/TopToolbar', () => ({
   TopToolbar: ({
     tableOpen,
     onToggleTable,
+    onOpenSettings,
   }: {
     tableOpen: boolean
     onToggleTable: () => void
+    onOpenSettings: () => void
   }) => (
-    <button type="button" onClick={onToggleTable}>
-      {tableOpen ? '收起属性表' : '展开属性表'}
-    </button>
+    <div>
+      <button type="button" onClick={onToggleTable}>
+        {tableOpen ? '收起属性表' : '展开属性表'}
+      </button>
+      <button type="button" onClick={onOpenSettings}>
+        设置
+      </button>
+    </div>
   ),
 }))
 
@@ -71,7 +88,15 @@ vi.mock('./components/InspectorPanel', () => ({
 }))
 
 vi.mock('./components/SettingsDialog', () => ({
-  SettingsDialog: () => null,
+  SettingsDialog: (props: CapturedSettingsDialogProps) => {
+    capturedSettingsDialogProps = props
+    return (
+      <div data-testid="settings-dialog">
+        <span data-testid="settings-dialog-open">{String(props.open)}</span>
+        <span data-testid="settings-dialog-disabled">{String(props.disabled)}</span>
+      </div>
+    )
+  },
 }))
 
 let App: typeof import('./App').default
@@ -110,6 +135,7 @@ describe('App settings integration', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    capturedSettingsDialogProps = null
     mockUseUDBX.mockReturnValue(baseUdbxState)
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
@@ -149,5 +175,96 @@ describe('App settings integration', () => {
     rerender(<App />)
 
     await waitFor(() => expect(screen.getByRole('button', { name: '展开属性表' })).toBeInTheDocument())
+  })
+
+  it('点击工具栏设置入口会打开设置弹窗', async () => {
+    mockUseViewerSettings.mockReturnValue({
+      settings: defaultViewerSettings,
+      loading: false,
+      error: null,
+      saveSettings: vi.fn(),
+      resetSettings: vi.fn(),
+    })
+
+    render(<App />)
+
+    expect(screen.getByTestId('settings-dialog-open')).toHaveTextContent('false')
+
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+
+    await waitFor(() => expect(screen.getByTestId('settings-dialog-open')).toHaveTextContent('true'))
+    expect(capturedSettingsDialogProps?.open).toBe(true)
+  })
+
+  it('设置保存成功时调用 saveSettings 并关闭弹窗', async () => {
+    const saveSettings = vi.fn().mockResolvedValue(defaultViewerSettings)
+
+    mockUseViewerSettings.mockReturnValue({
+      settings: defaultViewerSettings,
+      loading: false,
+      error: null,
+      saveSettings,
+      resetSettings: vi.fn(),
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+
+    await waitFor(() => expect(capturedSettingsDialogProps?.open).toBe(true))
+    await act(async () => {
+      await expect(capturedSettingsDialogProps?.onSave(defaultViewerSettings)).resolves.toBeUndefined()
+    })
+
+    expect(saveSettings).toHaveBeenCalledWith(defaultViewerSettings)
+    await waitFor(() => expect(screen.getByTestId('settings-dialog-open')).toHaveTextContent('false'))
+    expect(screen.getByTestId('settings-dialog-disabled')).toHaveTextContent('false')
+  })
+
+  it('设置保存失败时不抛出、不关闭弹窗并恢复可操作状态', async () => {
+    const saveSettings = vi.fn().mockRejectedValue(new Error('保存失败'))
+
+    mockUseViewerSettings.mockReturnValue({
+      settings: defaultViewerSettings,
+      loading: false,
+      error: null,
+      saveSettings,
+      resetSettings: vi.fn(),
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+
+    await waitFor(() => expect(capturedSettingsDialogProps?.open).toBe(true))
+    await act(async () => {
+      await expect(capturedSettingsDialogProps?.onSave(defaultViewerSettings)).resolves.toBeUndefined()
+    })
+
+    expect(saveSettings).toHaveBeenCalledWith(defaultViewerSettings)
+    expect(screen.getByTestId('settings-dialog-open')).toHaveTextContent('true')
+    expect(screen.getByTestId('settings-dialog-disabled')).toHaveTextContent('false')
+  })
+
+  it('设置重置失败时不抛出并恢复可操作状态', async () => {
+    const resetSettings = vi.fn().mockRejectedValue(new Error('重置失败'))
+
+    mockUseViewerSettings.mockReturnValue({
+      settings: defaultViewerSettings,
+      loading: false,
+      error: null,
+      saveSettings: vi.fn(),
+      resetSettings,
+    })
+
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: '设置' }))
+
+    await waitFor(() => expect(capturedSettingsDialogProps?.open).toBe(true))
+    await act(async () => {
+      await expect(capturedSettingsDialogProps?.onReset()).resolves.toBeUndefined()
+    })
+
+    expect(resetSettings).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('settings-dialog-open')).toHaveTextContent('true')
+    expect(screen.getByTestId('settings-dialog-disabled')).toHaveTextContent('false')
   })
 })
