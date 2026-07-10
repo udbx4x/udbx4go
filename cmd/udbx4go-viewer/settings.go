@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -107,7 +108,7 @@ func (a *App) GetViewerSettings() (*ViewerSettingsDTO, error) {
 	settings := DefaultViewerSettings()
 	if err := json.Unmarshal(content, &settings); err != nil {
 		settings := DefaultViewerSettings()
-		return &settings, nil
+		return &settings, fmt.Errorf("viewer 设置文件损坏，已使用默认设置: %w", err)
 	}
 
 	settings = NormalizeViewerSettings(settings)

@@ -232,8 +232,8 @@ func TestViewerSettingsCorruptFileReturnsDefaults(t *testing.T) {
 	}
 
 	loaded, err := app.GetViewerSettings()
-	if err != nil {
-		t.Fatalf("GetViewerSettings() error = %v", err)
+	if err == nil {
+		t.Fatal("GetViewerSettings() error = nil, want corrupt settings warning")
 	}
 	if loaded.SpatialPreview.FeatureLimit != DefaultViewerSettings().SpatialPreview.FeatureLimit {
 		t.Fatalf("loaded FeatureLimit = %d, want default", loaded.SpatialPreview.FeatureLimit)

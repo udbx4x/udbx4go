@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	udbx4go "github.com/udbx4x/udbx4go"
 	"github.com/udbx4x/udbx4go/pkg/types"
@@ -391,9 +392,16 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		response.Extent = mergeBBox(response.Extent, feature.BBox)
 	}
+	sampleReasons := make([]string, 0, 2)
+	if info.ObjectCount > len(previewFeatures) && len(previewFeatures) >= request.Limit {
+		sampleReasons = append(sampleReasons, "预览达到要素上限")
+	}
 	if response.EstimatedVertexCount >= request.MaxVertices {
+		sampleReasons = append(sampleReasons, "预览达到顶点上限")
+	}
+	if len(sampleReasons) > 0 {
 		response.Sampled = true
-		response.SampleReason = "预览达到顶点上限"
+		response.SampleReason = strings.Join(sampleReasons, "，")
 	}
 	return response, nil
 }

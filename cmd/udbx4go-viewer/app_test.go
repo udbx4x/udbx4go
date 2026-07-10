@@ -252,6 +252,27 @@ func TestViewerSpatialPreviewUsesExplicitRequestLimitsBeforeSettings(t *testing.
 	}
 }
 
+func TestViewerSpatialPreviewMarksSampledWhenFeatureLimitIsReached(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	preview, err := app.LoadSpatialPreview("Jingjin_Network_Node", SpatialPreviewRequestDTO{
+		Limit:       minSpatialPreviewFeatureLimit,
+		MaxVertices: maxSpatialPreviewVertexBudget,
+	})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview() error = %v", err)
+	}
+	if !preview.Sampled {
+		t.Fatal("Sampled = false, want true when preview reaches feature limit")
+	}
+	if !strings.Contains(preview.SampleReason, "要素上限") {
+		t.Fatalf("SampleReason = %q, want feature limit reason", preview.SampleReason)
+	}
+}
+
 func TestViewerSpatialPreviewClampsExplicitRequestLimits(t *testing.T) {
 	app := NewApp()
 	app.settingsPathOverride = filepath.Join(t.TempDir(), "settings.json")
