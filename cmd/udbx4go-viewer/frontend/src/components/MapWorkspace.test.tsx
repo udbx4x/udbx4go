@@ -67,6 +67,35 @@ describe('MapWorkspace settings behavior', () => {
     expect(latestAdapter().fitFeature).not.toHaveBeenCalled()
   })
 
+  it('zoomToSelectedFeature=false 时仅改变选中要素不会触发自动适配图层', () => {
+    const { rerender } = render(
+      <MapWorkspace
+        layers={mapLayerFixtures}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={false}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+    const adapter = latestAdapter()
+
+    adapter.fitAllVisibleLayers.mockClear()
+    adapter.fitFeature.mockClear()
+    rerender(
+      <MapWorkspace
+        layers={mapLayerFixtures}
+        selectedFeature={selectedFeatureFixture}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={false}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(adapter.setSelection).toHaveBeenCalledWith(selectedFeatureFixture)
+    expect(adapter.fitAllVisibleLayers).not.toHaveBeenCalled()
+    expect(adapter.fitFeature).not.toHaveBeenCalled()
+  })
+
   it('zoomToSelectedFeature=true 时选中要素后缩放到该要素', () => {
     render(
       <MapWorkspace
