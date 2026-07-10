@@ -24,6 +24,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const adapterRef = useRef<OpenLayersSpatialRendererAdapter | null>(null)
   const renderedLayerNamesRef = useRef<Set<string>>(new Set())
+  const layerPreviewReadyRef = useRef<Map<string, boolean>>(new Map())
+  const hasSyncedLayersRef = useRef(false)
   const featureSelectHandlerRef = useRef(onFeatureSelect)
 
   useEffect(() => {
@@ -46,6 +48,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       adapter.destroy()
       adapterRef.current = null
       renderedLayerNamesRef.current.clear()
+      layerPreviewReadyRef.current.clear()
+      hasSyncedLayersRef.current = false
     }
   }, [])
 
@@ -62,7 +66,22 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       }
     })
 
+    const previousPreviewReady = layerPreviewReadyRef.current
+    const nextPreviewReady = new Map<string, boolean>()
+    const selectedLayer = selectedFeature
+      ? layers.find((layer) => layer.datasetName === selectedFeature.datasetName)
+      : undefined
+    const shouldFitSelectedAfterLayerSync =
+      Boolean(
+        hasSyncedLayersRef.current &&
+          selectedFeature &&
+          zoomToSelectedFeature &&
+          selectedLayer?.preview &&
+          previousPreviewReady.get(selectedFeature.datasetName) !== true,
+      )
+
     layers.forEach((layer) => {
+      nextPreviewReady.set(layer.datasetName, Boolean(layer.preview))
       if (layer.preview) {
         adapter.setLayer(layer)
         adapter.setLayerVisible(layer.datasetName, layer.visible)
@@ -72,10 +91,15 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     })
 
     renderedLayerNamesRef.current = nextLayerNames
+    layerPreviewReadyRef.current = nextPreviewReady
+    hasSyncedLayersRef.current = true
     if (autoFitOnLayerChange) {
       adapter.fitAllVisibleLayers()
     }
-  }, [autoFitOnLayerChange, layers])
+    if (shouldFitSelectedAfterLayerSync && selectedFeature) {
+      adapter.fitFeature(selectedFeature.datasetName, selectedFeature.featureID)
+    }
+  }, [autoFitOnLayerChange, layers, selectedFeature, zoomToSelectedFeature])
 
   useEffect(() => {
     const adapter = adapterRef.current
