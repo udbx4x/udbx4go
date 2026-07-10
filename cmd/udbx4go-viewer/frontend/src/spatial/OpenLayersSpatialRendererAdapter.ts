@@ -132,6 +132,16 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     }
   }
 
+  fitFeature(datasetName: string, featureID: number): void {
+    const source = this.sources.get(datasetName)
+    const feature = source?.getFeatures().find((candidate) => Number(candidate.get('featureID')) === featureID)
+    const extent = feature?.getGeometry()?.getExtent()
+    if (!this.map || !extent || extent.some((value) => !Number.isFinite(value))) {
+      return
+    }
+    this.map.getView().fit(extent, { padding: [48, 48, 48, 48], maxZoom: 10, duration: 0 })
+  }
+
   setSelection(selection: SelectedMapFeature | null): void {
     this.selectedFeature = selection
     this.sources.forEach((source) => source.changed())

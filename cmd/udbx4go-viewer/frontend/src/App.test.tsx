@@ -20,11 +20,16 @@ type CapturedSettingsDialogProps = {
   onSave: (settings: ViewerSettings) => void | Promise<void>
   onReset: () => void | Promise<void>
 }
+type CapturedMapWorkspaceProps = {
+  autoFitOnLayerChange: boolean
+  zoomToSelectedFeature: boolean
+}
 
 let capturedSettingsDialogProps: CapturedSettingsDialogProps | null = null
+let capturedMapWorkspaceProps: CapturedMapWorkspaceProps | null = null
 
 vi.mock('./hooks/useUDBX', () => ({
-  useUDBX: () => mockUseUDBX(),
+  useUDBX: (options: unknown) => mockUseUDBX(options),
 }))
 
 vi.mock('./hooks/useViewerSettings', () => ({
@@ -32,9 +37,18 @@ vi.mock('./hooks/useViewerSettings', () => ({
 }))
 
 vi.mock('./components/AppShell', () => ({
-  AppShell: ({ toolbar, tableDrawer }: { toolbar: ReactNode; tableDrawer: ReactNode }) => (
+  AppShell: ({
+    toolbar,
+    mapWorkspace,
+    tableDrawer,
+  }: {
+    toolbar: ReactNode
+    mapWorkspace: ReactNode
+    tableDrawer: ReactNode
+  }) => (
     <div>
       {toolbar}
+      {mapWorkspace}
       {tableDrawer}
     </div>
   ),
@@ -80,7 +94,10 @@ vi.mock('./components/DatasetExplorer', () => ({
 }))
 
 vi.mock('./components/MapWorkspace', () => ({
-  MapWorkspace: () => null,
+  MapWorkspace: (props: CapturedMapWorkspaceProps) => {
+    capturedMapWorkspaceProps = props
+    return null
+  },
 }))
 
 vi.mock('./components/InspectorPanel', () => ({
@@ -136,6 +153,7 @@ describe('App settings integration', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     capturedSettingsDialogProps = null
+    capturedMapWorkspaceProps = null
     mockUseUDBX.mockReturnValue(baseUdbxState)
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
@@ -175,6 +193,37 @@ describe('App settings integration', () => {
     rerender(<App />)
 
     await waitFor(() => expect(screen.getByRole('button', { name: '展开属性表' })).toBeInTheDocument())
+  })
+
+  it('向 UDBX hook 和地图工作区传入 viewer settings', () => {
+    const settings: ViewerSettings = {
+      ...defaultViewerSettings,
+      spatialPreview: {
+        featureLimit: 2500,
+        vertexBudget: 250000,
+        autoFitOnLayerChange: false,
+      },
+      mapInteraction: {
+        zoomToSelectedFeature: false,
+      },
+    }
+
+    mockUseViewerSettings.mockReturnValue({
+      settings,
+      loading: false,
+      error: null,
+      saveSettings: vi.fn(),
+      resetSettings: vi.fn(),
+    })
+
+    render(<App />)
+
+    expect(mockUseUDBX).toHaveBeenCalledWith({
+      spatialPreviewFeatureLimit: 2500,
+      spatialPreviewVertexBudget: 250000,
+    })
+    expect(capturedMapWorkspaceProps?.autoFitOnLayerChange).toBe(false)
+    expect(capturedMapWorkspaceProps?.zoomToSelectedFeature).toBe(false)
   })
 
   it('点击工具栏设置入口会打开设置弹窗', async () => {

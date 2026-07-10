@@ -58,10 +58,12 @@ function createDefaultLayerStyle(kind: string): LayerStyle {
   }
 }
 
-const spatialPreviewLimit = 1000
-const spatialPreviewVertexBudget = 1000000
+interface UseUDBXOptions {
+  spatialPreviewFeatureLimit: number
+  spatialPreviewVertexBudget: number
+}
 
-export function useUDBX() {
+export function useUDBX(options: UseUDBXOptions) {
   const [currentFile, setCurrentFile] = useState<string | null>(null)
   const [datasets, setDatasets] = useState<DatasetInfo[]>([])
   const [selectedDataset, setSelectedDataset] = useState<string | null>(null)
@@ -172,8 +174,8 @@ export function useUDBX() {
 
       const previewRequest = new main.SpatialPreviewRequestDTO({
         viewport: undefined,
-        limit: spatialPreviewLimit,
-        maxVertices: spatialPreviewVertexBudget,
+        limit: options.spatialPreviewFeatureLimit,
+        maxVertices: options.spatialPreviewVertexBudget,
         simplify: false,
       })
       const preview: SpatialPreview = await LoadSpatialPreview(datasetName, previewRequest)
@@ -202,7 +204,7 @@ export function useUDBX() {
         ),
       )
     }
-  }, [])
+  }, [options.spatialPreviewFeatureLimit, options.spatialPreviewVertexBudget])
 
   const loadDataset = useCallback(async (datasetName: string, page: number = 1) => {
     try {

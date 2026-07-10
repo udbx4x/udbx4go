@@ -9,12 +9,16 @@ import { EmptyState } from './EmptyState'
 interface MapWorkspaceProps {
   layers: MapLayerState[]
   selectedFeature: SelectedMapFeature | null
+  autoFitOnLayerChange: boolean
+  zoomToSelectedFeature: boolean
   onFeatureSelect: (datasetName: string, featureID: number) => void
 }
 
 export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   layers,
   selectedFeature,
+  autoFitOnLayerChange,
+  zoomToSelectedFeature,
   onFeatureSelect,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -68,12 +72,22 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     })
 
     renderedLayerNamesRef.current = nextLayerNames
-    adapter.fitAllVisibleLayers()
-  }, [layers])
+    if (autoFitOnLayerChange) {
+      adapter.fitAllVisibleLayers()
+    }
+  }, [autoFitOnLayerChange, layers])
 
   useEffect(() => {
-    adapterRef.current?.setSelection(selectedFeature)
-  }, [selectedFeature])
+    const adapter = adapterRef.current
+    if (!adapter) {
+      return
+    }
+
+    adapter.setSelection(selectedFeature)
+    if (selectedFeature && zoomToSelectedFeature) {
+      adapter.fitFeature(selectedFeature.datasetName, selectedFeature.featureID)
+    }
+  }, [selectedFeature, zoomToSelectedFeature])
 
   return (
     <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>

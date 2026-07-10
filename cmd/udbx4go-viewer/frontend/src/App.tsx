@@ -18,6 +18,17 @@ import { viewerTheme } from './theme/viewerTheme'
 
 function App() {
   const {
+    settings,
+    loading: settingsLoading,
+    error: settingsError,
+    saveSettings,
+    resetSettings,
+  } = useViewerSettings()
+  const udbx = useUDBX({
+    spatialPreviewFeatureLimit: settings.spatialPreview.featureLimit,
+    spatialPreviewVertexBudget: settings.spatialPreview.vertexBudget,
+  })
+  const {
     currentFile,
     datasets,
     selectedDataset,
@@ -34,14 +45,7 @@ function App() {
     setMapLayerVisible,
     removeMapLayer,
     selectFeature,
-  } = useUDBX()
-  const {
-    settings,
-    loading: settingsLoading,
-    error: settingsError,
-    saveSettings,
-    resetSettings,
-  } = useViewerSettings()
+  } = udbx
 
   const [errorOpen, setErrorOpen] = React.useState(false)
   const [tableOpen, setTableOpen] = React.useState(true)
@@ -109,6 +113,8 @@ function App() {
           <MapWorkspace
             layers={mapLayers}
             selectedFeature={selectedMapFeature}
+            autoFitOnLayerChange={settings.spatialPreview.autoFitOnLayerChange}
+            zoomToSelectedFeature={settings.mapInteraction.zoomToSelectedFeature}
             onFeatureSelect={selectFeature}
           />
         }
