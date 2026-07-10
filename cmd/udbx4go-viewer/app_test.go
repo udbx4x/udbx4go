@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
 func sampleDataPath(t *testing.T) string {
@@ -296,6 +298,46 @@ func TestViewerSpatialPreviewClampsExplicitRequestLimits(t *testing.T) {
 	}
 	if len(preview.Features) != minSpatialPreviewFeatureLimit {
 		t.Fatalf("len(preview.Features) = %d, want clamped request limit %d", len(preview.Features), minSpatialPreviewFeatureLimit)
+	}
+}
+
+func TestViewerSpatialPreviewSampleReasonCombinesFeatureAndVertexLimits(t *testing.T) {
+	sampled, reason := spatialPreviewSampleReason(200, 100, 100, true)
+
+	if !sampled {
+		t.Fatal("sampled = false, want true")
+	}
+	if !strings.Contains(reason, "要素上限") {
+		t.Fatalf("reason = %q, want feature limit reason", reason)
+	}
+	if !strings.Contains(reason, "顶点上限") {
+		t.Fatalf("reason = %q, want vertex budget reason", reason)
+	}
+}
+
+func TestFormatPreviewFeaturesReportsVertexBudgetReached(t *testing.T) {
+	app := NewApp()
+	features := []*types.Feature{
+		{
+			ID: 1,
+			Geometry: &types.MultiLineStringGeometry{
+				Coordinates: [][][]float64{
+					{
+						{0, 0},
+						{1, 1},
+					},
+				},
+			},
+		},
+	}
+
+	previewFeatures, vertexBudgetReached := app.formatPreviewFeatures(features, nil, 1)
+
+	if len(previewFeatures) != 0 {
+		t.Fatalf("len(previewFeatures) = %d, want 0", len(previewFeatures))
+	}
+	if !vertexBudgetReached {
+		t.Fatal("vertexBudgetReached = false, want true")
 	}
 }
 

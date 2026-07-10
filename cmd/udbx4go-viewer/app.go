@@ -341,7 +341,7 @@ func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, 
 	if err != nil {
 		return nil, err
 	}
-	previewFeatures := a.formatPreviewFeatures(features, fields, defaultSpatialVertexBudget)
+	previewFeatures, _ := a.formatPreviewFeatures(features, fields, defaultSpatialVertexBudget)
 	for _, feature := range previewFeatures {
 		summary.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		summary.Extent = mergeBBox(summary.Extent, feature.BBox)
@@ -380,7 +380,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 	if err != nil {
 		return nil, err
 	}
-	previewFeatures := a.formatPreviewFeatures(features, fields, request.MaxVertices)
+	previewFeatures, vertexBudgetReached := a.formatPreviewFeatures(features, fields, request.MaxVertices)
 
 	response := &SpatialPreviewDTO{
 		DatasetName: info.Name,
@@ -392,17 +392,12 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		response.Extent = mergeBBox(response.Extent, feature.BBox)
 	}
-	sampleReasons := make([]string, 0, 2)
-	if info.ObjectCount > len(previewFeatures) && len(previewFeatures) >= request.Limit {
-		sampleReasons = append(sampleReasons, "预览达到要素上限")
-	}
-	if response.EstimatedVertexCount >= request.MaxVertices {
-		sampleReasons = append(sampleReasons, "预览达到顶点上限")
-	}
-	if len(sampleReasons) > 0 {
-		response.Sampled = true
-		response.SampleReason = strings.Join(sampleReasons, "，")
-	}
+	response.Sampled, response.SampleReason = spatialPreviewSampleReason(
+		info.ObjectCount,
+		len(features),
+		request.Limit,
+		vertexBudgetReached,
+	)
 	return response, nil
 }
 
@@ -496,7 +491,7 @@ func (a *App) listPreviewFeatures(ds interface{}, opts *types.QueryOptions) ([]*
 	return nil, fmt.Errorf("数据集不支持空间要素读取")
 }
 
-func (a *App) formatPreviewFeatures(features []*types.Feature, fields []*types.FieldInfo, maxVertices int) []PreviewFeatureDTO {
+func (a *App) formatPreviewFeatures(features []*types.Feature, fields []*types.FieldInfo, maxVertices int) ([]PreviewFeatureDTO, bool) {
 	var result []PreviewFeatureDTO
 	vertexCount := 0
 	for _, feature := range features {
@@ -506,7 +501,7 @@ func (a *App) formatPreviewFeatures(features []*types.Feature, fields []*types.F
 		}
 		vertexCount += countPreviewVertices(geometry)
 		if vertexCount > maxVertices {
-			break
+			return result, true
 		}
 		props := make(map[string]string)
 		for _, field := range fields {
@@ -521,7 +516,21 @@ func (a *App) formatPreviewFeatures(features []*types.Feature, fields []*types.F
 			Properties: props,
 		})
 	}
-	return result
+	return result, false
+}
+
+func spatialPreviewSampleReason(objectCount int, rawFeatureCount int, featureLimit int, vertexBudgetReached bool) (bool, string) {
+	sampleReasons := make([]string, 0, 2)
+	if objectCount > rawFeatureCount && rawFeatureCount >= featureLimit {
+		sampleReasons = append(sampleReasons, "预览达到要素上限")
+	}
+	if vertexBudgetReached {
+		sampleReasons = append(sampleReasons, "预览达到顶点上限")
+	}
+	if len(sampleReasons) == 0 {
+		return false, ""
+	}
+	return true, strings.Join(sampleReasons, "，")
 }
 
 // formatFeatures formats feature data for display
