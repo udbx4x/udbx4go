@@ -12,19 +12,19 @@ import (
 )
 
 func TestUdbx4SpecComplianceDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, filepath.Join("..", "udbx4spec", "compliance", "compliance.udbx"))
+	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "compliance.udbx")))
 }
 
 func TestUdbx4SpecUdbx4TsRoundtripDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4ts-roundtrip.udbx"))
+	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4ts-roundtrip.udbx")))
 }
 
 func TestUdbx4SpecUdbx4GoRoundtripDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4go-roundtrip.udbx"))
+	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4go-roundtrip.udbx")))
 }
 
 func TestUdbx4SpecUdbx4JRoundtripDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4j-roundtrip.udbx"))
+	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4j-roundtrip.udbx")))
 }
 
 func assertComplianceDatabaseReadable(t *testing.T, path string) {
@@ -247,7 +247,7 @@ func assertComplianceDatabaseReadable(t *testing.T, path string) {
 }
 
 func TestUdbx4SpecComplianceDatabaseSemanticRoundtrip(t *testing.T) {
-	source, err := Open(filepath.Join("..", "udbx4spec", "compliance", "compliance.udbx"))
+	source, err := Open(requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "compliance.udbx")))
 	require.NoError(t, err)
 	defer source.Close()
 

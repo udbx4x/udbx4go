@@ -1,43 +1,82 @@
 import React, { useEffect } from 'react'
 import {
   ThemeProvider,
-  createTheme,
   CssBaseline,
-  Box,
   Alert,
   Snackbar,
 } from '@mui/material'
 import { useUDBX } from './hooks/useUDBX'
-import { DatasetList } from './components/DatasetList'
-import { DataTable } from './components/DataTable'
-import { StatusBar } from './components/StatusBar'
+import { useViewerSettings } from './hooks/useViewerSettings'
+import { DatasetExplorer } from './components/DatasetExplorer'
+import { AttributeTableDrawer } from './components/AttributeTableDrawer'
+import { MapWorkspace } from './components/MapWorkspace'
+import { AppShell } from './components/AppShell'
+import { TopToolbar } from './components/TopToolbar'
+import { InspectorPanel } from './components/InspectorPanel'
+import { SettingsDialog } from './components/SettingsDialog'
+import { viewerTheme } from './theme/viewerTheme'
+import type { DatasetInfo } from './types'
+import type { AttributeTableMode } from './components/AttributeTableDrawer'
 
-const theme = createTheme({
-  palette: {
-    mode: 'light',
-  },
-})
+const spatialDatasetKinds = new Set(['point', 'pointZ', 'line', 'lineZ', 'region', 'regionZ'])
+
+const isUnknownDataset = (dataset: DatasetInfo) =>
+  dataset.kind === 'unknown' || dataset.iconType === 'unknown'
+
+const isSpatialDataset = (dataset: DatasetInfo) =>
+  !isUnknownDataset(dataset) && spatialDatasetKinds.has(dataset.kind)
 
 function App() {
+  const {
+    settings,
+    loading: settingsLoading,
+    error: settingsError,
+    saveSettings,
+    resetSettings,
+  } = useViewerSettings()
+  const udbx = useUDBX({
+    spatialPreviewFeatureLimit: settings.spatialPreview.featureLimit,
+    spatialPreviewVertexBudget: settings.spatialPreview.vertexBudget,
+  })
   const {
     currentFile,
     datasets,
     selectedDataset,
+    activeTableDataset,
     pageData,
+    mapLayers,
+    selectedMapFeature,
+    selectedFeatureAttributes,
     loading,
     error,
     openFileDialog,
     closeFile,
     loadDataset,
-  } = useUDBX()
+    loadTableDataset,
+    setMapLayerVisible,
+    removeMapLayer,
+    selectFeature,
+  } = udbx
 
   const [errorOpen, setErrorOpen] = React.useState(false)
+  const [tableMode, setTableMode] = React.useState<AttributeTableMode>('half')
+  const [settingsOpen, setSettingsOpen] = React.useState(false)
+  const [settingsSaving, setSettingsSaving] = React.useState(false)
+  const settingsDefaultAppliedRef = React.useRef(false)
+  const displayError = error || settingsError
 
   useEffect(() => {
-    if (error) {
+    if (displayError) {
       setErrorOpen(true)
     }
-  }, [error])
+  }, [displayError])
+
+  useEffect(() => {
+    if (!settingsLoading && !settingsDefaultAppliedRef.current) {
+      setTableMode(settings.table.defaultOpen ? 'half' : 'collapsed')
+      settingsDefaultAppliedRef.current = true
+    }
+  }, [settingsLoading, settings.table.defaultOpen])
 
   const handleOpenFile = async () => {
     await openFileDialog()
@@ -48,67 +87,122 @@ function App() {
   }
 
   const handleSelectDataset = (name: string) => {
-    loadDataset(name, 1)
+    const dataset = datasets.find((item) => item.name === name)
+
+    if (mapLayers.some((layer) => layer.datasetName === name)) {
+      void Promise.resolve(loadTableDataset(name, 1)).catch(() => {
+        // useUDBX exposes the error through its error state.
+      })
+      return
+    }
+
+    if (dataset && isSpatialDataset(dataset)) {
+      void loadDataset(name, 1)
+      return
+    }
+
+    void Promise.resolve(loadTableDataset(name, 1)).catch(() => {
+      // useUDBX exposes the error through its error state.
+    })
   }
 
   const handlePageChange = (page: number) => {
-    if (selectedDataset) {
-      loadDataset(selectedDataset, page)
+    if (activeTableDataset) {
+      loadTableDataset(activeTableDataset, page)
     }
   }
 
   return (
-    <ThemeProvider theme={theme}>
+    <ThemeProvider theme={viewerTheme}>
       <CssBaseline />
-      <Box sx={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-        {/* Menu Bar */}
-        <Box sx={{ p: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-          <Box component="nav" sx={{ display: 'flex', gap: 2 }}>
-            <button onClick={handleOpenFile} style={{ padding: '6px 16px' }}>
-              打开文件
-            </button>
-            <button onClick={handleCloseFile} style={{ padding: '6px 16px' }} disabled={!currentFile}>
-              关闭文件
-            </button>
-          </Box>
-        </Box>
+      <AppShell
+        toolbar={
+          <TopToolbar
+            currentFile={currentFile}
+            loading={loading}
+            onOpenFile={handleOpenFile}
+            onCloseFile={handleCloseFile}
+            onOpenSettings={() => setSettingsOpen(true)}
+          />
+        }
+        datasetExplorer={
+          <DatasetExplorer
+            datasets={datasets}
+            selectedDataset={selectedDataset}
+            activeTableDataset={activeTableDataset}
+            mapLayers={mapLayers}
+            onSelectDataset={handleSelectDataset}
+          />
+        }
+        mapWorkspace={
+          <MapWorkspace
+            layers={mapLayers}
+            selectedFeature={selectedMapFeature}
+            autoFitOnLayerChange={settings.spatialPreview.autoFitOnLayerChange}
+            zoomToSelectedFeature={settings.mapInteraction.zoomToSelectedFeature}
+            onFeatureSelect={selectFeature}
+          />
+        }
+        inspector={
+          <InspectorPanel
+            layers={mapLayers}
+            showPreviewStats={settings.advanced.showPreviewStats}
+            selectedFeatureAttributes={selectedFeatureAttributes}
+            onLayerVisibleChange={setMapLayerVisible}
+            onRemoveLayer={removeMapLayer}
+          />
+        }
+        tableDrawer={
+          <AttributeTableDrawer
+            mode={tableMode}
+            pageData={pageData}
+            datasetName={activeTableDataset}
+            selectedFeature={selectedMapFeature}
+            onModeChange={setTableMode}
+            onFeatureSelect={selectFeature}
+            onPageChange={handlePageChange}
+          />
+        }
+      />
 
-        {/* Main Content */}
-        <Box sx={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-          {/* Left Sidebar - Dataset List */}
-          <Box sx={{ width: 280, flexShrink: 0, borderRight: 1, borderColor: 'divider' }}>
-            <DatasetList
-              datasets={datasets}
-              selectedDataset={selectedDataset}
-              onSelectDataset={handleSelectDataset}
-            />
-          </Box>
+      <SettingsDialog
+        open={settingsOpen}
+        settings={settings}
+        disabled={settingsLoading || settingsSaving}
+        onClose={() => setSettingsOpen(false)}
+        onSave={async (nextSettings) => {
+          setSettingsSaving(true)
+          try {
+            await saveSettings(nextSettings)
+            setSettingsOpen(false)
+          } catch {
+            // useViewerSettings exposes the error through settingsError.
+          } finally {
+            setSettingsSaving(false)
+          }
+        }}
+        onReset={async () => {
+          setSettingsSaving(true)
+          try {
+            await resetSettings()
+          } catch {
+            // useViewerSettings exposes the error through settingsError.
+          } finally {
+            setSettingsSaving(false)
+          }
+        }}
+      />
 
-          {/* Right Content - Data Table */}
-          <Box sx={{ flex: 1, overflow: 'hidden' }}>
-            <DataTable
-              pageData={pageData}
-              datasetName={selectedDataset}
-              onPageChange={handlePageChange}
-            />
-          </Box>
-        </Box>
-
-        {/* Status Bar */}
-        <StatusBar currentFile={currentFile} loading={loading} />
-
-        {/* Error Snackbar */}
-        <Snackbar
-          open={errorOpen}
-          autoHideDuration={6000}
-          onClose={() => setErrorOpen(false)}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-        >
-          <Alert severity="error" onClose={() => setErrorOpen(false)}>
-            {error}
-          </Alert>
-        </Snackbar>
-      </Box>
+      <Snackbar
+        open={errorOpen}
+        autoHideDuration={6000}
+        onClose={() => setErrorOpen(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert severity="error" onClose={() => setErrorOpen(false)}>
+          {displayError}
+        </Alert>
+      </Snackbar>
     </ThemeProvider>
   )
 }

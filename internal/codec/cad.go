@@ -9,6 +9,7 @@ const (
 	cadGeoPoint  = 1
 	cadGeoLine   = 3
 	cadGeoRegion = 5
+	cadGeoText   = 7
 )
 
 // CadGeometryCodec encodes and decodes the minimal CAD GeoHeader baseline.
@@ -64,6 +65,20 @@ func (c *CadGeometryCodec) Decode(data []byte) (types.CadGeometry, error) {
 			return nil, err
 		}
 		return &types.CadRegionGeometry{NumSub: numSub, SubPointCounts: counts, Coordinates: coordinates, Style: style}, nil
+	case cadGeoText:
+		text, err := NewGeoTextCodec().Decode(data)
+		if err != nil {
+			return nil, err
+		}
+		return &types.CadTextGeometry{
+			Text:         text.Text,
+			Anchor:       text.Anchor,
+			Rotation:     text.Rotation,
+			BBox:         text.BBox,
+			TextStyle:    text.Style,
+			SubTexts:     text.SubTexts,
+			CadStyleData: style,
+		}, nil
 	default:
 		return nil, errors.UnsupportedError("unsupported CAD geoType")
 	}

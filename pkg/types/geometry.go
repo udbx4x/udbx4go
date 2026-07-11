@@ -298,6 +298,32 @@ func (g *CadRegionGeometry) GetBBox() []float64   { return cadBBox(g.Coordinates
 func (g *CadRegionGeometry) CadGeoType() int      { return 5 }
 func (g *CadRegionGeometry) CadStyle() CadStyle   { return g.Style }
 
+// CadTextGeometry represents a CAD text geometry stored in a CAD GeoHeader dataset.
+type CadTextGeometry struct {
+	Text         string
+	Anchor       []float64
+	Rotation     float64
+	BBox         []float64
+	TextStyle    *TextStyle
+	SubTexts     []*TextSubText
+	CadStyleData CadStyle
+}
+
+func (g *CadTextGeometry) GeometryType() string { return "CadText" }
+func (g *CadTextGeometry) GetSRID() int         { return 0 }
+func (g *CadTextGeometry) HasZ() bool           { return false }
+func (g *CadTextGeometry) GetBBox() []float64 {
+	if len(g.BBox) >= 4 {
+		return g.BBox
+	}
+	if len(g.Anchor) >= 2 {
+		return []float64{g.Anchor[0], g.Anchor[1], g.Anchor[0], g.Anchor[1]}
+	}
+	return nil
+}
+func (g *CadTextGeometry) CadGeoType() int    { return 7 }
+func (g *CadTextGeometry) CadStyle() CadStyle { return g.CadStyleData }
+
 func cadBBox(coordinates [][2]float64) []float64 {
 	if len(coordinates) == 0 {
 		return nil
