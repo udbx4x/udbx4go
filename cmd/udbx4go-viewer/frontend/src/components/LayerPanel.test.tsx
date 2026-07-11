@@ -34,6 +34,20 @@ const renderLayerPanel = (props: Partial<LayerPanelProps> = {}) => {
 }
 
 describe('LayerPanel', () => {
+  const secondMapLayerFixture: MapLayerState = {
+    ...sampledMapLayerFixture,
+    datasetName: 'BaseMap_L',
+    kind: 'line',
+    visible: false,
+    preview: {
+      datasetName: 'BaseMap_L',
+      kind: 'line',
+      features: [],
+      estimatedVertexCount: 0,
+      sampled: false,
+    },
+  }
+
   it('显示地图图层摘要并支持切换可见性和移除', () => {
     const onVisibleChange = vi.fn()
     const onRemoveLayer = vi.fn()
@@ -84,6 +98,41 @@ describe('LayerPanel', () => {
     expect(screen.getByText('顶点 1')).toBeInTheDocument()
   })
 
+  it('多图层时通过当前打开的菜单移除对应图层', () => {
+    const onRemoveLayer = vi.fn()
+
+    renderLayerPanel({ layers: [mapLayerFixtures[0], secondMapLayerFixture], onRemoveLayer })
+
+    fireEvent.click(screen.getByRole('button', { name: 'BaseMap_L 更多操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移除图层' }))
+
+    expect(onRemoveLayer).toHaveBeenCalledTimes(1)
+    expect(onRemoveLayer).toHaveBeenCalledWith('BaseMap_L')
+    expect(onRemoveLayer).not.toHaveBeenCalledWith('BaseMap_P')
+  })
+
+  it('图层列表移除当前菜单目标时关闭菜单且不会触发移除回调', () => {
+    const onRemoveLayer = vi.fn()
+    const { rerender } = renderLayerPanel({ layers: [mapLayerFixtures[0]], onRemoveLayer })
+
+    fireEvent.click(screen.getByRole('button', { name: 'BaseMap_P 更多操作' }))
+    expect(screen.getByRole('menuitem', { name: '移除图层' })).toBeInTheDocument()
+
+    rerender(
+      <ThemeProvider theme={viewerTheme}>
+        <LayerPanel
+          layers={[]}
+          showPreviewStats={false}
+          onVisibleChange={vi.fn()}
+          onRemoveLayer={onRemoveLayer}
+        />
+      </ThemeProvider>,
+    )
+
+    expect(screen.queryByRole('menuitem', { name: '移除图层' })).not.toBeInTheDocument()
+    expect(onRemoveLayer).not.toHaveBeenCalled()
+  })
+
   it('关闭预览统计时仍内联显示采样原因并可通过更多菜单移除图层', () => {
     const onRemoveLayer = vi.fn()
 
@@ -95,5 +144,13 @@ describe('LayerPanel', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: '移除图层' }))
 
     expect(onRemoveLayer).toHaveBeenCalledWith('Jingjin_NetworkZ_Node')
+  })
+
+  it('开启预览统计时采样原因只显示一次', () => {
+    renderLayerPanel({ layers: [sampledMapLayerFixture], showPreviewStats: true })
+
+    expect(screen.getAllByText('预览达到要素上限')).toHaveLength(1)
+    expect(screen.getByText('预览要素 0')).toBeInTheDocument()
+    expect(screen.getByText('顶点 50000')).toBeInTheDocument()
   })
 })

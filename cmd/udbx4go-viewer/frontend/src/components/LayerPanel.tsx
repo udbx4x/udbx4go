@@ -59,24 +59,34 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
   onRemoveLayer,
 }) => {
   const [menuAnchorEl, setMenuAnchorEl] = React.useState<HTMLElement | null>(null)
-  const [menuLayer, setMenuLayer] = React.useState<MapLayerState | null>(null)
+  const [menuDatasetName, setMenuDatasetName] = React.useState<string | null>(null)
+
+  const menuLayerExists = menuDatasetName
+    ? layers.some((layer) => layer.datasetName === menuDatasetName)
+    : false
 
   const closeMenu = () => {
     setMenuAnchorEl(null)
-    setMenuLayer(null)
+    setMenuDatasetName(null)
   }
 
   const openLayerMenu = (event: React.MouseEvent<HTMLElement>, layer: MapLayerState) => {
     setMenuAnchorEl(event.currentTarget)
-    setMenuLayer(layer)
+    setMenuDatasetName(layer.datasetName)
   }
 
   const removeMenuLayer = () => {
-    if (menuLayer) {
-      onRemoveLayer(menuLayer.datasetName)
+    if (menuDatasetName && menuLayerExists) {
+      onRemoveLayer(menuDatasetName)
     }
     closeMenu()
   }
+
+  React.useEffect(() => {
+    if (menuDatasetName && !menuLayerExists) {
+      closeMenu()
+    }
+  }, [menuDatasetName, menuLayerExists])
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
@@ -105,9 +115,9 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                     edge="end"
                     size="small"
                     aria-label={`${layer.datasetName} 更多操作`}
-                    aria-controls={menuLayer?.datasetName === layer.datasetName ? 'layer-actions-menu' : undefined}
+                    aria-controls={menuDatasetName === layer.datasetName ? 'layer-actions-menu' : undefined}
                     aria-haspopup="menu"
-                    aria-expanded={menuLayer?.datasetName === layer.datasetName ? 'true' : undefined}
+                    aria-expanded={menuDatasetName === layer.datasetName ? 'true' : undefined}
                     onClick={(event) => openLayerMenu(event, layer)}
                   >
                     <MoreVertIcon fontSize="small" />
@@ -183,7 +193,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
         open={Boolean(menuAnchorEl)}
         onClose={closeMenu}
         MenuListProps={{
-          'aria-label': menuLayer ? `${menuLayer.datasetName} 图层操作` : '图层操作',
+          'aria-label': menuDatasetName ? `${menuDatasetName} 图层操作` : '图层操作',
           dense: true,
         }}
       >
