@@ -12,10 +12,8 @@ declare global {
 type TopToolbarProps = {
   currentFile: string | null
   loading: boolean
-  tableOpen: boolean
   onOpenFile: () => void
   onCloseFile: () => void
-  onToggleTable: () => void
   onOpenSettings: () => void
 }
 
@@ -25,10 +23,8 @@ const renderToolbar = (props: Partial<TopToolbarProps> = {}) => {
   const defaultProps: TopToolbarProps = {
     currentFile: null,
     loading: false,
-    tableOpen: true,
     onOpenFile: vi.fn(),
     onCloseFile: vi.fn(),
-    onToggleTable: vi.fn(),
     onOpenSettings: vi.fn(),
   }
 
@@ -48,34 +44,34 @@ describe('TopToolbar', () => {
     TopToolbar = (await import('./TopToolbar')).TopToolbar
   })
 
-  it('未打开文件时显示状态并禁用关闭文件按钮', () => {
+  it('未打开文件时显示状态并禁用更多文件操作', () => {
     renderToolbar()
 
     expect(screen.getByText('未打开文件')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '关闭文件' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '打开文件' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '更多文件操作' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '收起属性表' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '展开属性表' })).not.toBeInTheDocument()
   })
 
-  it('有当前文件时显示文件名并触发工具栏操作', async () => {
+  it('有当前文件时显示文件名并通过菜单关闭文件', async () => {
     const onOpenFile = vi.fn()
     const onCloseFile = vi.fn()
-    const onToggleTable = vi.fn()
 
     renderToolbar({
       currentFile: '/tmp/SampleData.udbx',
       onOpenFile,
       onCloseFile,
-      onToggleTable,
     })
 
     expect(screen.getByText('SampleData.udbx')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '打开文件' }))
-    fireEvent.click(screen.getByRole('button', { name: '关闭文件' }))
-    fireEvent.click(screen.getByRole('button', { name: '收起属性表' }))
+    fireEvent.click(screen.getByRole('button', { name: '更多文件操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '关闭文件' }))
 
     expect(onOpenFile).toHaveBeenCalledTimes(1)
     expect(onCloseFile).toHaveBeenCalledTimes(1)
-    expect(onToggleTable).toHaveBeenCalledTimes(1)
   })
 
   it('点击设置按钮会调用设置回调', () => {

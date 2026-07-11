@@ -93,10 +93,8 @@ function App() {
           <TopToolbar
             currentFile={currentFile}
             loading={loading}
-            tableOpen={tableOpen}
             onOpenFile={handleOpenFile}
             onCloseFile={handleCloseFile}
-            onToggleTable={() => setTableOpen((open) => !open)}
             onOpenSettings={() => setSettingsOpen(true)}
           />
         }

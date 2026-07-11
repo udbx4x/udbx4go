@@ -62,19 +62,8 @@ vi.mock('./components/AppShell', () => ({
 }))
 
 vi.mock('./components/TopToolbar', () => ({
-  TopToolbar: ({
-    tableOpen,
-    onToggleTable,
-    onOpenSettings,
-  }: {
-    tableOpen: boolean
-    onToggleTable: () => void
-    onOpenSettings: () => void
-  }) => (
+  TopToolbar: ({ onOpenSettings }: { onOpenSettings: () => void }) => (
     <div>
-      <button type="button" onClick={onToggleTable}>
-        {tableOpen ? '收起属性表' : '展开属性表'}
-      </button>
       <button type="button" onClick={onOpenSettings}>
         设置
       </button>
@@ -178,7 +167,7 @@ describe('App settings integration', () => {
   it('只在设置首次加载完成后应用默认属性表展开状态', async () => {
     const { rerender } = render(<App />)
 
-    expect(screen.getByRole('button', { name: '收起属性表' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '属性表已展开' })).toBeInTheDocument()
 
     mockUseViewerSettings.mockReturnValue({
       settings: loadedSettings,
@@ -189,10 +178,10 @@ describe('App settings integration', () => {
     })
     rerender(<App />)
 
-    await waitFor(() => expect(screen.getByRole('button', { name: '展开属性表' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表已收起' })).toBeInTheDocument())
 
-    fireEvent.click(screen.getByRole('button', { name: '展开属性表' }))
-    fireEvent.click(screen.getByRole('button', { name: '收起属性表' }))
+    fireEvent.click(screen.getByRole('button', { name: '属性表已收起' }))
+    fireEvent.click(screen.getByRole('button', { name: '属性表已展开' }))
 
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
@@ -203,7 +192,7 @@ describe('App settings integration', () => {
     })
     rerender(<App />)
 
-    await waitFor(() => expect(screen.getByRole('button', { name: '展开属性表' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表已收起' })).toBeInTheDocument())
   })
 
   it('向 UDBX hook 和地图工作区传入 viewer settings', () => {

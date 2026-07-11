@@ -4,14 +4,14 @@ import {
   Button,
   CircularProgress,
   IconButton,
+  Menu,
+  MenuItem,
   Stack,
   Tooltip,
   Typography,
 } from '@mui/material'
 import {
-  Close as CloseIcon,
-  KeyboardArrowDown as CollapseTableIcon,
-  KeyboardArrowUp as ExpandTableIcon,
+  MoreHoriz as MoreHorizIcon,
   Settings as SettingsIcon,
 } from '@mui/icons-material'
 import { viewerLayout } from '../theme/viewerTheme'
@@ -19,10 +19,8 @@ import { viewerLayout } from '../theme/viewerTheme'
 interface TopToolbarProps {
   currentFile: string | null
   loading: boolean
-  tableOpen: boolean
   onOpenFile: () => void
   onCloseFile: () => void
-  onToggleTable: () => void
   onOpenSettings: () => void
 }
 
@@ -36,13 +34,26 @@ const getFileName = (path: string | null) => {
 export const TopToolbar: React.FC<TopToolbarProps> = ({
   currentFile,
   loading,
-  tableOpen,
   onOpenFile,
   onCloseFile,
-  onToggleTable,
   onOpenSettings,
 }) => {
-  const tableToggleLabel = tableOpen ? '收起属性表' : '展开属性表'
+  const [fileMenuAnchor, setFileMenuAnchor] = React.useState<HTMLElement | null>(null)
+  const fileName = getFileName(currentFile)
+  const fileMenuOpen = Boolean(fileMenuAnchor)
+
+  const handleOpenFileMenu = (event: React.MouseEvent<HTMLElement>) => {
+    setFileMenuAnchor(event.currentTarget)
+  }
+
+  const handleCloseFileMenu = () => {
+    setFileMenuAnchor(null)
+  }
+
+  const handleCloseFile = () => {
+    handleCloseFileMenu()
+    onCloseFile()
+  }
 
   return (
     <Box
@@ -67,8 +78,9 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         variant="body2"
         color={currentFile ? 'text.primary' : 'text.secondary'}
         sx={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        title={fileName}
       >
-        {getFileName(currentFile)}
+        {fileName}
       </Typography>
 
       {loading && (
@@ -84,21 +96,27 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         <Button size="small" variant="contained" onClick={onOpenFile}>
           打开文件
         </Button>
-        <Button
-          size="small"
-          variant="outlined"
-          color="inherit"
-          startIcon={<CloseIcon fontSize="small" />}
-          disabled={!currentFile}
-          onClick={onCloseFile}
-        >
-          关闭文件
-        </Button>
-        <Tooltip title={tableToggleLabel}>
-          <IconButton size="small" aria-label={tableToggleLabel} onClick={onToggleTable}>
-            {tableOpen ? <CollapseTableIcon fontSize="small" /> : <ExpandTableIcon fontSize="small" />}
-          </IconButton>
+        <Tooltip title="更多文件操作">
+          <span>
+            <IconButton
+              size="small"
+              aria-label="更多文件操作"
+              disabled={!currentFile}
+              onClick={handleOpenFileMenu}
+            >
+              <MoreHorizIcon fontSize="small" />
+            </IconButton>
+          </span>
         </Tooltip>
+        <Menu
+          anchorEl={fileMenuAnchor}
+          open={fileMenuOpen}
+          onClose={handleCloseFileMenu}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+        >
+          <MenuItem onClick={handleCloseFile}>关闭文件</MenuItem>
+        </Menu>
         <Tooltip title="设置">
           <IconButton size="small" aria-label="设置" onClick={onOpenSettings}>
             <SettingsIcon fontSize="small" />
