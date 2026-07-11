@@ -28,10 +28,12 @@ export const viewerLayerColors = {
 
 export const viewerLayout = {
   toolbarHeight: 44,
-  datasetPanelWidth: 280,
-  inspectorWidth: 320,
+  datasetPanelWidth: 300,
+  inspectorWidth: 340,
   tableCollapsedHeight: 40,
-  tableExpandedHeight: 280,
+  tableHalfHeight: 260,
+  tableExpandedHeight: 260,
+  tableFullMaxHeightRatio: 0.5,
 }
 
 export const viewerTheme = createTheme({

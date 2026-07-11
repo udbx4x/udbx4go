@@ -11,6 +11,18 @@ export const datasetFixtures: DatasetInfo[] = [
   { name: 'BaseMap_L', kind: 'line', objectCount: 8, iconType: 'line' },
   { name: 'BaseMap_R', kind: 'region', objectCount: 6, iconType: 'region' },
   { name: 'TabularDT', kind: 'tabular', objectCount: 3, iconType: 'tabular' },
+  {
+    name: 'Jingjin_NetworkZ_Node',
+    kind: 'pointZ',
+    objectCount: 698,
+    iconType: 'point',
+  },
+  {
+    name: 'modeldt_Texture',
+    kind: 'unknown',
+    objectCount: 47,
+    iconType: 'unknown',
+  },
 ]
 
 export const selectedFeatureFixture: SelectedMapFeature = {
@@ -67,3 +79,17 @@ export const mapLayerFixtures: MapLayerState[] = [
     },
   },
 ]
+
+export const sampledMapLayerFixture: MapLayerState = {
+  ...mapLayerFixtures[0],
+  datasetName: 'Jingjin_NetworkZ_Node',
+  kind: 'pointZ',
+  preview: {
+    datasetName: 'Jingjin_NetworkZ_Node',
+    kind: 'pointZ',
+    features: [],
+    estimatedVertexCount: 50000,
+    sampled: true,
+    sampleReason: '预览达到要素上限',
+  },
+}
