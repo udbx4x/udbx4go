@@ -469,6 +469,25 @@ describe('App settings integration', () => {
     expect(loadDataset).not.toHaveBeenCalled()
   })
 
+  it('选择已添加到地图的空间数据集时只切换属性表', () => {
+    const loadDataset = vi.fn()
+    const loadTableDataset = vi.fn()
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      datasets: datasetFixtures,
+      mapLayers: mapLayerFixtures,
+      loadDataset,
+      loadTableDataset,
+    })
+
+    render(<App />)
+
+    capturedDatasetExplorerProps?.onSelectDataset('BaseMap_P')
+
+    expect(loadTableDataset).toHaveBeenCalledWith('BaseMap_P', 1)
+    expect(loadDataset).not.toHaveBeenCalled()
+  })
+
   it('选择空间数据集时加载地图预览和属性表', () => {
     const loadDataset = vi.fn()
     const loadTableDataset = vi.fn()
@@ -481,9 +500,9 @@ describe('App settings integration', () => {
 
     render(<App />)
 
-    capturedDatasetExplorerProps?.onSelectDataset('BaseMap_P')
+    capturedDatasetExplorerProps?.onSelectDataset('BaseMap_L')
 
-    expect(loadDataset).toHaveBeenCalledWith('BaseMap_P', 1)
+    expect(loadDataset).toHaveBeenCalledWith('BaseMap_L', 1)
     expect(loadTableDataset).not.toHaveBeenCalled()
   })
 

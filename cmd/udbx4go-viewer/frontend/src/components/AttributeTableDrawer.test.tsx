@@ -35,7 +35,7 @@ describe('AttributeTableDrawer', () => {
     )
 
     expect(screen.getByText('BaseMap_P')).toBeInTheDocument()
-    expect(screen.getByText('第 1 / 3 页 · 共 2 条记录')).toBeInTheDocument()
+    expect(screen.getByText('第 1 / 3 页 · 本页 2 条记录')).toBeInTheDocument()
     expect(screen.queryByRole('grid')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '半展开属性表' }))

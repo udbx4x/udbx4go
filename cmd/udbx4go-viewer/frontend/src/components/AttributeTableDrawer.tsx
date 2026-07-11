@@ -54,7 +54,7 @@ export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
 }) => {
   const isCollapsed = mode === 'collapsed'
   const pageSummary = pageData
-    ? `第 ${pageData.currentPage} / ${pageData.totalPages} 页 · 共 ${pageData.rows.length} 条记录`
+    ? `第 ${pageData.currentPage} / ${pageData.totalPages} 页 · 本页 ${pageData.rows.length} 条记录`
     : '未选择数据集'
 
   return (

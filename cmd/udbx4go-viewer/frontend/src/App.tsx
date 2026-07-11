@@ -89,6 +89,11 @@ function App() {
   const handleSelectDataset = (name: string) => {
     const dataset = datasets.find((item) => item.name === name)
 
+    if (mapLayers.some((layer) => layer.datasetName === name)) {
+      loadTableDataset(name, 1)
+      return
+    }
+
     if (dataset && isSpatialDataset(dataset)) {
       loadDataset(name, 1)
       return
