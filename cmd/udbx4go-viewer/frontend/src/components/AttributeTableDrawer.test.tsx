@@ -55,7 +55,8 @@ describe('AttributeTableDrawer', () => {
     )
 
     expect(screen.getByRole('grid')).toBeInTheDocument()
-    const pagination = screen.getByLabelText('pagination navigation')
+    expect(screen.getByRole('button', { name: '半展开属性表' })).toBeDisabled()
+    const pagination = screen.getByLabelText('属性表分页')
 
     fireEvent.click(within(pagination).getByRole('button', { name: /go to page 2/i }))
 

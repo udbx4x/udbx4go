@@ -29,13 +29,15 @@ interface AttributeTableDrawerProps {
   onPageChange: (page: number) => void
 }
 
+const tableFullHeight = `${viewerLayout.tableFullMaxHeightRatio * 100}vh`
+
 const getDrawerHeight = (mode: AttributeTableMode) => {
   if (mode === 'collapsed') {
     return viewerLayout.tableCollapsedHeight
   }
 
   if (mode === 'full') {
-    return '50vh'
+    return tableFullHeight
   }
 
   return viewerLayout.tableHalfHeight
@@ -59,7 +61,7 @@ export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
     <Box
       sx={{
         height: getDrawerHeight(mode),
-        maxHeight: mode === 'full' ? '50vh' : undefined,
+        maxHeight: mode === 'full' ? tableFullHeight : undefined,
         overflow: 'hidden',
         bgcolor: 'background.paper',
         borderTop: 1,
@@ -99,6 +101,7 @@ export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
 
         {pageData && !isCollapsed && (
           <Pagination
+            aria-label="属性表分页"
             count={pageData.totalPages}
             page={pageData.currentPage}
             onChange={(_, page) => onPageChange(page)}
@@ -124,13 +127,16 @@ export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
             </span>
           </Tooltip>
           <Tooltip title="半展开属性表">
-            <IconButton
-              size="small"
-              aria-label="半展开属性表"
-              onClick={() => onModeChange('half')}
-            >
-              <HalfTableIcon fontSize="small" />
-            </IconButton>
+            <span>
+              <IconButton
+                size="small"
+                aria-label="半展开属性表"
+                disabled={mode === 'half'}
+                onClick={() => onModeChange('half')}
+              >
+                <HalfTableIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
           <Tooltip title="全展开属性表">
             <span>
