@@ -71,7 +71,11 @@ describe('DatasetExplorer', () => {
   it('按数据集名称搜索', () => {
     renderExplorer()
 
-    fireEvent.change(screen.getByRole('textbox', { name: '搜索数据集' }), {
+    const searchInput = screen.getByRole('textbox', { name: '搜索数据集' })
+
+    expect(searchInput).toHaveAttribute('placeholder', '搜索数据集')
+
+    fireEvent.change(searchInput, {
       target: { value: 'Jingjin' },
     })
 
@@ -81,6 +85,10 @@ describe('DatasetExplorer', () => {
 
   it('按数据集类型筛选未知类型', () => {
     renderExplorer()
+
+    expect(
+      screen.getByRole('group', { name: '数据集类型过滤' }),
+    ).toBeInTheDocument()
 
     fireEvent.change(screen.getByRole('textbox', { name: '搜索数据集' }), {
       target: { value: 'Jingjin' },
@@ -104,5 +112,15 @@ describe('DatasetExplorer', () => {
       'Jingjin_NetworkZ_Node',
     )
     expect(screen.getAllByText('已加入')).toHaveLength(2)
+  })
+
+  it('空间数据集加号仅作视觉提示，表格数据集不显示加号提示', () => {
+    renderExplorer()
+
+    expect(screen.getByRole('button', { name: /BaseMap_L/ })).toBeInTheDocument()
+    expect(screen.queryByLabelText('加入地图')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /TabularDT.*加入地图/ }),
+    ).not.toBeInTheDocument()
   })
 })

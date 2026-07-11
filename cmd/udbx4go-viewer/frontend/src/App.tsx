@@ -15,6 +15,15 @@ import { TopToolbar } from './components/TopToolbar'
 import { InspectorPanel } from './components/InspectorPanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import { viewerTheme } from './theme/viewerTheme'
+import type { DatasetInfo } from './types'
+
+const spatialDatasetKinds = new Set(['point', 'pointZ', 'line', 'lineZ', 'region', 'regionZ'])
+
+const isUnknownDataset = (dataset: DatasetInfo) =>
+  dataset.kind === 'unknown' || dataset.iconType === 'unknown'
+
+const isSpatialDataset = (dataset: DatasetInfo) =>
+  !isUnknownDataset(dataset) && spatialDatasetKinds.has(dataset.kind)
 
 function App() {
   const {
@@ -42,6 +51,7 @@ function App() {
     openFileDialog,
     closeFile,
     loadDataset,
+    loadTableDataset,
     setMapLayerVisible,
     removeMapLayer,
     selectFeature,
@@ -76,12 +86,19 @@ function App() {
   }
 
   const handleSelectDataset = (name: string) => {
-    loadDataset(name, 1)
+    const dataset = datasets.find((item) => item.name === name)
+
+    if (dataset && isSpatialDataset(dataset)) {
+      loadDataset(name, 1)
+      return
+    }
+
+    loadTableDataset(name, 1)
   }
 
   const handlePageChange = (page: number) => {
     if (activeTableDataset) {
-      loadDataset(activeTableDataset, page)
+      loadTableDataset(activeTableDataset, page)
     }
   }
 

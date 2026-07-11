@@ -124,11 +124,12 @@ export const DatasetExplorer: React.FC<DatasetExplorerProps> = ({
         {datasets.length > 0 && (
           <Stack spacing={1} sx={{ mt: 1.5 }}>
             <TextField
-              label="搜索数据集"
+              placeholder="搜索数据集"
               value={searchText}
               onChange={(event) => setSearchText(event.target.value)}
               size="small"
               fullWidth
+              inputProps={{ 'aria-label': '搜索数据集' }}
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
@@ -143,6 +144,7 @@ export const DatasetExplorer: React.FC<DatasetExplorerProps> = ({
               onChange={handleTypeFilterChange}
               size="small"
               fullWidth
+              aria-label="数据集类型过滤"
             >
               <ToggleButton value="all" aria-label="全部">
                 全部
@@ -211,6 +213,7 @@ export const DatasetExplorer: React.FC<DatasetExplorerProps> = ({
                     secondary={
                       <Tooltip
                         title={isUnknown ? '无法识别的数据集类型，暂按未知类型展示' : ''}
+                        describeChild
                       >
                         <Typography
                           variant="caption"
@@ -237,10 +240,10 @@ export const DatasetExplorer: React.FC<DatasetExplorerProps> = ({
                     />
                   )}
                   {!isMapLayer && isSpatial && (
-                    <Tooltip title="加入地图">
+                    <Tooltip title="加入地图" describeChild>
                       <Box
                         component="span"
-                        aria-label="加入地图"
+                        aria-hidden="true"
                         sx={{
                           display: 'inline-flex',
                           color: 'text.secondary',

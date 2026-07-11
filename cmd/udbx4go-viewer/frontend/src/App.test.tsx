@@ -3,6 +3,8 @@ import type { ReactNode } from 'react'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultViewerSettings } from './settings/viewerSettings'
 import type { ViewerSettings } from './settings/viewerSettings'
+import { datasetFixtures } from './test/fixtures'
+import type { DatasetInfo, MapLayerState, PageData } from './types'
 
 declare global {
   interface Window {
@@ -27,10 +29,26 @@ type CapturedMapWorkspaceProps = {
 type CapturedInspectorPanelProps = {
   showPreviewStats: boolean
 }
+type CapturedDatasetExplorerProps = {
+  datasets: DatasetInfo[]
+  selectedDataset: string | null
+  activeTableDataset: string | null
+  mapLayers: MapLayerState[]
+  onSelectDataset: (name: string) => void
+}
+type CapturedAttributeTableDrawerProps = {
+  open: boolean
+  pageData: PageData | null
+  datasetName: string | null
+  onToggleOpen: () => void
+  onPageChange: (page: number) => void
+}
 
 let capturedSettingsDialogProps: CapturedSettingsDialogProps | null = null
 let capturedMapWorkspaceProps: CapturedMapWorkspaceProps | null = null
 let capturedInspectorPanelProps: CapturedInspectorPanelProps | null = null
+let capturedDatasetExplorerProps: CapturedDatasetExplorerProps | null = null
+let capturedAttributeTableDrawerProps: CapturedAttributeTableDrawerProps | null = null
 
 vi.mock('./hooks/useUDBX', () => ({
   useUDBX: (options: unknown) => mockUseUDBX(options),
@@ -43,17 +61,20 @@ vi.mock('./hooks/useViewerSettings', () => ({
 vi.mock('./components/AppShell', () => ({
   AppShell: ({
     toolbar,
+    datasetExplorer,
     mapWorkspace,
     inspector,
     tableDrawer,
   }: {
     toolbar: ReactNode
+    datasetExplorer: ReactNode
     mapWorkspace: ReactNode
     inspector: ReactNode
     tableDrawer: ReactNode
   }) => (
     <div>
       {toolbar}
+      {datasetExplorer}
       {mapWorkspace}
       {inspector}
       {tableDrawer}
@@ -72,21 +93,21 @@ vi.mock('./components/TopToolbar', () => ({
 }))
 
 vi.mock('./components/AttributeTableDrawer', () => ({
-  AttributeTableDrawer: ({
-    open,
-    onToggleOpen,
-  }: {
-    open: boolean
-    onToggleOpen: () => void
-  }) => (
-    <button type="button" onClick={onToggleOpen}>
-      {open ? '属性表已展开' : '属性表已收起'}
-    </button>
-  ),
+  AttributeTableDrawer: (props: CapturedAttributeTableDrawerProps) => {
+    capturedAttributeTableDrawerProps = props
+    return (
+      <button type="button" onClick={props.onToggleOpen}>
+        {props.open ? '属性表已展开' : '属性表已收起'}
+      </button>
+    )
+  },
 }))
 
 vi.mock('./components/DatasetExplorer', () => ({
-  DatasetExplorer: () => null,
+  DatasetExplorer: (props: CapturedDatasetExplorerProps) => {
+    capturedDatasetExplorerProps = props
+    return null
+  },
 }))
 
 vi.mock('./components/MapWorkspace', () => ({
@@ -131,6 +152,7 @@ const baseUdbxState = {
   openFileDialog: vi.fn(),
   closeFile: vi.fn(),
   loadDataset: vi.fn(),
+  loadTableDataset: vi.fn(),
   setMapLayerVisible: vi.fn(),
   removeMapLayer: vi.fn(),
   selectFeature: vi.fn(),
@@ -154,6 +176,8 @@ describe('App settings integration', () => {
     capturedSettingsDialogProps = null
     capturedMapWorkspaceProps = null
     capturedInspectorPanelProps = null
+    capturedDatasetExplorerProps = null
+    capturedAttributeTableDrawerProps = null
     mockUseUDBX.mockReturnValue(baseUdbxState)
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
@@ -319,5 +343,59 @@ describe('App settings integration', () => {
     expect(resetSettings).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('settings-dialog-open')).toHaveTextContent('true')
     expect(screen.getByTestId('settings-dialog-disabled')).toHaveTextContent('false')
+  })
+
+  it('选择表格数据集时只加载属性表', () => {
+    const loadDataset = vi.fn()
+    const loadTableDataset = vi.fn()
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      datasets: datasetFixtures,
+      loadDataset,
+      loadTableDataset,
+    })
+
+    render(<App />)
+
+    capturedDatasetExplorerProps?.onSelectDataset('TabularDT')
+
+    expect(loadTableDataset).toHaveBeenCalledWith('TabularDT', 1)
+    expect(loadDataset).not.toHaveBeenCalled()
+  })
+
+  it('选择空间数据集时加载地图预览和属性表', () => {
+    const loadDataset = vi.fn()
+    const loadTableDataset = vi.fn()
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      datasets: datasetFixtures,
+      loadDataset,
+      loadTableDataset,
+    })
+
+    render(<App />)
+
+    capturedDatasetExplorerProps?.onSelectDataset('BaseMap_P')
+
+    expect(loadDataset).toHaveBeenCalledWith('BaseMap_P', 1)
+    expect(loadTableDataset).not.toHaveBeenCalled()
+  })
+
+  it('属性表分页只重新加载属性表数据', () => {
+    const loadDataset = vi.fn()
+    const loadTableDataset = vi.fn()
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      activeTableDataset: 'TabularDT',
+      loadDataset,
+      loadTableDataset,
+    })
+
+    render(<App />)
+
+    capturedAttributeTableDrawerProps?.onPageChange(3)
+
+    expect(loadTableDataset).toHaveBeenCalledWith('TabularDT', 3)
+    expect(loadDataset).not.toHaveBeenCalled()
   })
 })
