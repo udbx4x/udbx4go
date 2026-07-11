@@ -4,6 +4,8 @@ import { FeaturePanel } from './FeaturePanel'
 import { LayerPanel } from './LayerPanel'
 import type { FeatureAttributes, MapLayerState } from '../types'
 
+type InspectorTab = 'layers' | 'attributes' | 'styles'
+
 interface InspectorPanelProps {
   layers: MapLayerState[]
   showPreviewStats: boolean
@@ -19,7 +21,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onLayerVisibleChange,
   onRemoveLayer,
 }) => {
-  const [selectedTab, setSelectedTab] = React.useState('layers')
+  const [selectedTab, setSelectedTab] = React.useState<InspectorTab>('layers')
 
   React.useEffect(() => {
     if (selectedFeatureAttributes) {
@@ -30,8 +32,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0, bgcolor: 'background.paper' }}>
       <Tabs
+        aria-label="检查器视图"
         value={selectedTab}
-        onChange={(_, value: string) => setSelectedTab(value)}
+        onChange={(_, value: InspectorTab) => setSelectedTab(value)}
         variant="fullWidth"
         sx={{ minHeight: 44, flexShrink: 0 }}
       >

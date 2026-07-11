@@ -44,14 +44,16 @@ describe('InspectorPanel', () => {
     expect(screen.getByText('地图图层')).toBeInTheDocument()
   })
 
-  it('可以切换到属性 tab 并显示选中要素属性', () => {
-    renderInspectorPanel({ selectedFeatureAttributes: featureAttributesFixture })
+  it('可以从图层 tab 手动切换到属性 tab 并显示空状态', () => {
+    renderInspectorPanel({ selectedFeatureAttributes: null })
+
+    expect(screen.getByRole('tab', { name: '图层', selected: true })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('tab', { name: '属性' }))
 
     expect(screen.getByRole('tab', { name: '属性', selected: true })).toBeInTheDocument()
     expect(screen.getByText('要素属性')).toBeInTheDocument()
-    expect(screen.getByText('BaseMap_P')).toBeInTheDocument()
+    expect(screen.getByText('点击地图要素或属性表行查看属性')).toBeInTheDocument()
   })
 
   it('可以切换到样式 tab 并显示首阶段空状态', () => {
@@ -75,6 +77,7 @@ describe('InspectorPanel', () => {
     )
 
     expect(screen.getByRole('tab', { name: '属性', selected: true })).toBeInTheDocument()
+    expect(screen.getByText('BaseMap_P')).toBeInTheDocument()
   })
 
   it('向图层 tab 透传 showPreviewStats', () => {
