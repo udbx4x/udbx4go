@@ -120,7 +120,7 @@ func TestUdbx4SpecGoldenBytesDecodeAndEncode(t *testing.T) {
 	}
 
 	codec := NewGaiaGeometryCodec()
-	baseDir := filepath.Join("..", "..", "..", "udbx4spec", "compliance", "golden-gaia-bytes")
+	baseDir := requireExternalFixtureDir(t, filepath.Join("..", "..", "..", "udbx4spec", "compliance", "golden-gaia-bytes"))
 
 	for _, fixture := range fixtures {
 		t.Run(fixture.name, func(t *testing.T) {
@@ -139,7 +139,7 @@ func TestUdbx4SpecGoldenBytesDecodeAndEncode(t *testing.T) {
 }
 
 func TestUdbx4SpecSourceDerivedGeoTextDecode(t *testing.T) {
-	baseDir := filepath.Join("..", "..", "..", "udbx4spec", "compliance", "source-derived")
+	baseDir := requireExternalFixtureDir(t, filepath.Join("..", "..", "..", "udbx4spec", "compliance", "source-derived"))
 	fixtureBytes, err := os.ReadFile(filepath.Join(baseDir, "sampledata/county-t/smid-1-smgeometry.bin"))
 	require.NoError(t, err)
 
@@ -163,7 +163,7 @@ func TestUdbx4SpecSourceDerivedGeoTextDecode(t *testing.T) {
 }
 
 func TestUdbx4SpecStableSourceDerivedMetadata(t *testing.T) {
-	baseDir := filepath.Join("..", "..", "..", "udbx4spec", "compliance", "source-derived")
+	baseDir := requireExternalFixtureDir(t, filepath.Join("..", "..", "..", "udbx4spec", "compliance", "source-derived"))
 	manifestBytes, err := os.ReadFile(filepath.Join(baseDir, "manifest.json"))
 	require.NoError(t, err)
 
@@ -184,10 +184,10 @@ func TestUdbx4SpecStableSourceDerivedMetadata(t *testing.T) {
 
 	expectedIDs := map[string]bool{
 		"sampledata-county-t-smid-1-smgeometry": false,
-		"sampledata-caddt-smid-1-smgeometry":   false,
-		"sampledata-caddt-smid-16-smgeometry":  false,
-		"sampledata-caddt-smid-63-smgeometry":  false,
-		"sampledata-3d-srid-zero-metadata":     false,
+		"sampledata-caddt-smid-1-smgeometry":    false,
+		"sampledata-caddt-smid-16-smgeometry":   false,
+		"sampledata-caddt-smid-63-smgeometry":   false,
+		"sampledata-3d-srid-zero-metadata":      false,
 	}
 	for _, fixture := range manifest.Fixtures {
 		if _, ok := expectedIDs[fixture.ID]; !ok {
@@ -232,7 +232,7 @@ func TestUdbx4SpecStableSourceDerivedMetadata(t *testing.T) {
 }
 
 func TestUdbx4SpecSourceDerivedCadDecode(t *testing.T) {
-	baseDir := filepath.Join("..", "..", "..", "udbx4spec", "compliance", "source-derived")
+	baseDir := requireExternalFixtureDir(t, filepath.Join("..", "..", "..", "udbx4spec", "compliance", "source-derived"))
 	codec := NewCadGeometryCodec()
 
 	pointBytes, err := os.ReadFile(filepath.Join(baseDir, "sampledata/caddt/smid-1-smgeometry.bin"))
@@ -277,4 +277,19 @@ func TestUdbx4SpecSourceDerivedCadDecode(t *testing.T) {
 	assert.InDelta(t, 116.65601002454922, region.Coordinates[119][0], 0.000000001)
 	assert.InDelta(t, 41.03663585095796, region.Coordinates[119][1], 0.000000001)
 	assert.Nil(t, region.Style)
+}
+
+func requireExternalFixtureDir(t *testing.T, path string) string {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("external fixture directory not available: %s", path)
+		}
+		require.NoError(t, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("external fixture path is not a directory: %s", path)
+	}
+	return path
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +16,12 @@ func sampleDataPath(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("resolve sample path: %v", err)
 	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("external fixture not available: %s", path)
+		}
+		t.Fatalf("stat sample path: %v", err)
+	}
 	return path
 }
 
@@ -23,6 +30,12 @@ func henanDataPath(t *testing.T) string {
 	path, err := filepath.Abs(filepath.Join("..", "..", "..", "data", "henan.udbx"))
 	if err != nil {
 		t.Fatalf("resolve henan path: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("external fixture not available: %s", path)
+		}
+		t.Fatalf("stat henan path: %v", err)
 	}
 	return path
 }

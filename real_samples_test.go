@@ -1,6 +1,7 @@
 package udbx4go
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -10,8 +11,29 @@ import (
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
+func requireExternalFixturePath(t *testing.T, path string) string {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("external fixture not available: %s", path)
+		}
+		require.NoError(t, err)
+	}
+	return path
+}
+
+func sampleDataFixturePath(t *testing.T) string {
+	t.Helper()
+	return requireExternalFixturePath(t, filepath.Join("..", "data", "SampleData.udbx"))
+}
+
+func henanFixturePath(t *testing.T) string {
+	t.Helper()
+	return requireExternalFixturePath(t, filepath.Join("..", "data", "henan.udbx"))
+}
+
 func TestRealSampleDataPointDataset(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "SampleData.udbx"))
+	ds, err := Open(sampleDataFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -37,7 +59,7 @@ func TestRealSampleDataPointDataset(t *testing.T) {
 }
 
 func TestRealSampleDataCadDataset(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "SampleData.udbx"))
+	ds, err := Open(sampleDataFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -67,7 +89,7 @@ func TestRealSampleDataCadDataset(t *testing.T) {
 }
 
 func TestRealSampleDataLineAndRegionDatasets(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "SampleData.udbx"))
+	ds, err := Open(sampleDataFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -107,7 +129,7 @@ func TestRealSampleDataLineAndRegionDatasets(t *testing.T) {
 }
 
 func TestRealSampleDataVector3DDatasets(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "SampleData.udbx"))
+	ds, err := Open(sampleDataFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -164,7 +186,7 @@ func TestRealSampleDataVector3DDatasets(t *testing.T) {
 }
 
 func TestRealSampleDataCountyTextDataset(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "SampleData.udbx"))
+	ds, err := Open(sampleDataFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -188,7 +210,7 @@ func TestRealSampleDataCountyTextDataset(t *testing.T) {
 }
 
 func TestRealSampleDataTabularDataset(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "SampleData.udbx"))
+	ds, err := Open(sampleDataFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -214,7 +236,7 @@ func TestRealSampleDataTabularDataset(t *testing.T) {
 }
 
 func TestRealHenanTextDataset(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "henan.udbx"))
+	ds, err := Open(henanFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -240,7 +262,7 @@ func TestRealHenanTextDataset(t *testing.T) {
 }
 
 func TestRealHenanRepresentativeVectorDatasets(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "henan.udbx"))
+	ds, err := Open(henanFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -273,7 +295,7 @@ func TestRealHenanRepresentativeVectorDatasets(t *testing.T) {
 }
 
 func TestRealHenanMixedSridRegionDataset(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "henan.udbx"))
+	ds, err := Open(henanFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -295,7 +317,7 @@ func TestRealHenanMixedSridRegionDataset(t *testing.T) {
 }
 
 func TestRealHenanDatasetNameCanDifferFromTableName(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "henan.udbx"))
+	ds, err := Open(henanFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 
@@ -334,7 +356,7 @@ func TestRealHenanDatasetNameCanDifferFromTableName(t *testing.T) {
 }
 
 func TestRealHenanLargePointDatasetPaginationViaTableNameMapping(t *testing.T) {
-	ds, err := Open(filepath.Join("..", "data", "henan.udbx"))
+	ds, err := Open(henanFixturePath(t))
 	require.NoError(t, err)
 	defer ds.Close()
 

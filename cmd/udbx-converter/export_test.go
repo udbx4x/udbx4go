@@ -10,6 +10,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func sampleDataPath(t *testing.T) string {
+	t.Helper()
+	path := "../../../data/SampleData.udbx"
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("external fixture not available: %s", path)
+		}
+		require.NoError(t, err)
+	}
+	return path
+}
+
 func TestInventoryRequiresOutput(t *testing.T) {
 	code := run([]string{"inventory", "../../../data/SampleData.udbx"})
 
@@ -30,9 +42,10 @@ func TestInventoryMissingInputDoesNotCreateFile(t *testing.T) {
 }
 
 func TestInventoryWritesJSON(t *testing.T) {
+	input := sampleDataPath(t)
 	output := filepath.Join(t.TempDir(), "nested", "inventory.json")
 
-	code := run([]string{"inventory", "--output", output, "../../../data/SampleData.udbx"})
+	code := run([]string{"inventory", "--output", output, input})
 
 	require.Equal(t, 0, code)
 	content, err := os.ReadFile(output)
@@ -40,7 +53,7 @@ func TestInventoryWritesJSON(t *testing.T) {
 
 	var inventory inventoryFile
 	require.NoError(t, json.Unmarshal(content, &inventory))
-	assert.Equal(t, "../../../data/SampleData.udbx", inventory.File)
+	assert.Equal(t, input, inventory.File)
 	require.NotEmpty(t, inventory.Datasets)
 	assert.NotEmpty(t, inventory.Datasets[0].Name)
 	assert.NotEmpty(t, inventory.Datasets[0].Kind)
@@ -49,10 +62,11 @@ func TestInventoryWritesJSON(t *testing.T) {
 }
 
 func TestInventoryRefusesExistingOutputWithoutOverwrite(t *testing.T) {
+	input := sampleDataPath(t)
 	output := filepath.Join(t.TempDir(), "inventory.json")
 	require.NoError(t, os.WriteFile(output, []byte(`{"existing":true}`), 0o644))
 
-	code := run([]string{"inventory", "--output", output, "../../../data/SampleData.udbx"})
+	code := run([]string{"inventory", "--output", output, input})
 
 	assert.Equal(t, 2, code)
 	content, err := os.ReadFile(output)
@@ -75,16 +89,17 @@ func TestWriteJSONAtomicallyRefusesRaceCreatedOutputWithoutOverwrite(t *testing.
 }
 
 func TestInventoryOverwriteExistingOutput(t *testing.T) {
+	input := sampleDataPath(t)
 	output := filepath.Join(t.TempDir(), "inventory.json")
 	require.NoError(t, os.WriteFile(output, []byte(`{"existing":true}`), 0o644))
 
-	code := run([]string{"inventory", "--output", output, "--overwrite", "../../../data/SampleData.udbx"})
+	code := run([]string{"inventory", "--output", output, "--overwrite", input})
 
 	require.Equal(t, 0, code)
 	content, err := os.ReadFile(output)
 	require.NoError(t, err)
 	var inventory inventoryFile
 	require.NoError(t, json.Unmarshal(content, &inventory))
-	assert.Equal(t, "../../../data/SampleData.udbx", inventory.File)
+	assert.Equal(t, input, inventory.File)
 	require.NotEmpty(t, inventory.Datasets)
 }

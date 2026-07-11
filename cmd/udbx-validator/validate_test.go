@@ -9,6 +9,18 @@ import (
 	"testing"
 )
 
+func sampleDataPath(t *testing.T) string {
+	t.Helper()
+	path := "../../../data/SampleData.udbx"
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			t.Skipf("external fixture not available: %s", path)
+		}
+		t.Fatalf("stat sample data: %v", err)
+	}
+	return path
+}
+
 func TestReportJSONAndMarkdownUseSameChecks(t *testing.T) {
 	report := Report{
 		File:    FileInfo{Path: "sample.udbx", Size: 128},
@@ -35,7 +47,7 @@ func TestReportJSONAndMarkdownUseSameChecks(t *testing.T) {
 }
 
 func TestValidateSampleDataProducesPassReport(t *testing.T) {
-	report, exitCode := ValidateFile("../../../data/SampleData.udbx")
+	report, exitCode := ValidateFile(sampleDataPath(t))
 	if exitCode != 0 {
 		t.Fatalf("expected exit code 0, got %d: %#v", exitCode, report)
 	}
@@ -86,7 +98,7 @@ func TestMainJSONOutput(t *testing.T) {
 		stderr = previousStderr
 	}()
 
-	code := run([]string{"--format", "json", "../../../data/SampleData.udbx"})
+	code := run([]string{"--format", "json", sampleDataPath(t)})
 	if code != 0 {
 		t.Fatalf("expected code 0, got %d, stderr: %s", code, errOut.String())
 	}
