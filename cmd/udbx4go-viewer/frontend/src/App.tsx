@@ -90,16 +90,20 @@ function App() {
     const dataset = datasets.find((item) => item.name === name)
 
     if (mapLayers.some((layer) => layer.datasetName === name)) {
-      loadTableDataset(name, 1)
+      void Promise.resolve(loadTableDataset(name, 1)).catch(() => {
+        // useUDBX exposes the error through its error state.
+      })
       return
     }
 
     if (dataset && isSpatialDataset(dataset)) {
-      loadDataset(name, 1)
+      void loadDataset(name, 1)
       return
     }
 
-    loadTableDataset(name, 1)
+    void Promise.resolve(loadTableDataset(name, 1)).catch(() => {
+      // useUDBX exposes the error through its error state.
+    })
   }
 
   const handlePageChange = (page: number) => {

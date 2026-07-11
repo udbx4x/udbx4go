@@ -469,6 +469,24 @@ describe('App settings integration', () => {
     expect(loadDataset).not.toHaveBeenCalled()
   })
 
+  it('选择未知类型数据集时只尝试加载属性表', () => {
+    const loadDataset = vi.fn()
+    const loadTableDataset = vi.fn().mockRejectedValue(new Error('暂不支持该数据集类型'))
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      datasets: datasetFixtures,
+      loadDataset,
+      loadTableDataset,
+    })
+
+    render(<App />)
+
+    capturedDatasetExplorerProps?.onSelectDataset('modeldt_Texture')
+
+    expect(loadTableDataset).toHaveBeenCalledWith('modeldt_Texture', 1)
+    expect(loadDataset).not.toHaveBeenCalled()
+  })
+
   it('选择已添加到地图的空间数据集时只切换属性表', () => {
     const loadDataset = vi.fn()
     const loadTableDataset = vi.fn()

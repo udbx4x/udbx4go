@@ -12,6 +12,9 @@ import { Fill, Stroke, Style, Circle as CircleStyle } from 'ol/style'
 import type { BoundingBox, MapLayerState, PreviewFeature, SelectedMapFeature } from '../types'
 import type { SpatialRendererAdapter } from './SpatialRendererAdapter'
 
+type GeometryKind = 'point' | 'line' | 'polygon'
+type ExtentTuple = [number, number, number, number]
+
 export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter {
   private map: OlMap | null = null
   private layers = new globalThis.Map<string, VectorLayer>()
@@ -135,11 +138,21 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   fitFeature(datasetName: string, featureID: number): void {
     const source = this.sources.get(datasetName)
     const feature = source?.getFeatures().find((candidate) => Number(candidate.get('featureID')) === featureID)
-    const extent = feature?.getGeometry()?.getExtent()
-    if (!this.map || !extent || extent.some((value) => !Number.isFinite(value))) {
+    const featureExtent = feature?.getGeometry()?.getExtent()
+    const sourceExtent = source?.getExtent()
+    const geometryKind = feature?.get('geometryKind') as GeometryKind | undefined
+    if (!this.map || !featureExtent || !sourceExtent || !geometryKind) {
       return
     }
-    this.map.getView().fit(extent, { padding: [48, 48, 48, 48], maxZoom: 10, duration: 0 })
+    const extent = calculateSelectedFeatureFitExtent(
+      [featureExtent[0], featureExtent[1], featureExtent[2], featureExtent[3]],
+      [sourceExtent[0], sourceExtent[1], sourceExtent[2], sourceExtent[3]],
+      geometryKind,
+    )
+    if (!extent) {
+      return
+    }
+    this.map.getView().fit(extent, { padding: [64, 64, 64, 64], duration: 0 })
   }
 
   setSelection(selection: SelectedMapFeature | null): void {
@@ -228,7 +241,7 @@ function toOpenLayersGeometry(feature: PreviewFeature): Point | MultiLineString 
   }
 }
 
-function geometryKindFromPreviewType(type: string): 'point' | 'line' | 'polygon' {
+function geometryKindFromPreviewType(type: string): GeometryKind {
   switch (type) {
     case 'MultiLineString':
     case 'LineString':
@@ -239,4 +252,51 @@ function geometryKindFromPreviewType(type: string): 'point' | 'line' | 'polygon'
     default:
       return 'point'
   }
+}
+
+export function calculateSelectedFeatureFitExtent(
+  featureExtent: ExtentTuple,
+  layerExtent: ExtentTuple,
+  geometryKind: GeometryKind,
+): ExtentTuple | null {
+  if (!isValidExtent(featureExtent)) {
+    return null
+  }
+
+  const effectiveLayerExtent = isValidExtent(layerExtent) ? layerExtent : featureExtent
+  const featureWidth = Math.max(0, featureExtent[2] - featureExtent[0])
+  const featureHeight = Math.max(0, featureExtent[3] - featureExtent[1])
+  const layerWidth = Math.max(0, effectiveLayerExtent[2] - effectiveLayerExtent[0])
+  const layerHeight = Math.max(0, effectiveLayerExtent[3] - effectiveLayerExtent[1])
+
+  const centerX = (featureExtent[0] + featureExtent[2]) / 2
+  const centerY = (featureExtent[1] + featureExtent[3]) / 2
+  const settings = selectedFeatureFitSettings(geometryKind)
+  const fallbackSpan = Math.max(layerWidth, layerHeight, featureWidth, featureHeight, 1)
+  const minWidth = Math.max(layerWidth * settings.minLayerRatio, fallbackSpan * 0.01)
+  const minHeight = Math.max(layerHeight * settings.minLayerRatio, fallbackSpan * 0.01)
+  const targetWidth = Math.max(featureWidth * (1 + settings.marginRatio * 2), minWidth)
+  const targetHeight = Math.max(featureHeight * (1 + settings.marginRatio * 2), minHeight)
+
+  return [
+    centerX - targetWidth / 2,
+    centerY - targetHeight / 2,
+    centerX + targetWidth / 2,
+    centerY + targetHeight / 2,
+  ]
+}
+
+function selectedFeatureFitSettings(geometryKind: GeometryKind) {
+  switch (geometryKind) {
+    case 'line':
+      return { marginRatio: 0.15, minLayerRatio: 0.15 }
+    case 'polygon':
+      return { marginRatio: 0.2, minLayerRatio: 0.12 }
+    default:
+      return { marginRatio: 0, minLayerRatio: 0.08 }
+  }
+}
+
+function isValidExtent(extent: ExtentTuple): boolean {
+  return extent.every((value) => Number.isFinite(value)) && extent[0] <= extent[2] && extent[1] <= extent[3]
 }

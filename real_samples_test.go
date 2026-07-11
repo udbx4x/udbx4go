@@ -49,11 +49,21 @@ func TestRealSampleDataCadDataset(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 92, count)
 
-	features, err := cadDataset.List(&types.QueryOptions{Limit: 5})
+	features, err := cadDataset.List(&types.QueryOptions{Limit: 100})
 	require.NoError(t, err)
-	require.Len(t, features, 5)
+	require.Len(t, features, 92)
 	require.NotNil(t, features[0].Geometry)
 	assert.Contains(t, []string{"CadPoint", "CadLine", "CadRegion"}, features[0].Geometry.GeometryType())
+
+	geometryTypes := map[string]bool{}
+	for _, feature := range features {
+		require.NotNil(t, feature.Geometry)
+		geometryTypes[feature.Geometry.GeometryType()] = true
+	}
+	assert.True(t, geometryTypes["CadPoint"])
+	assert.True(t, geometryTypes["CadLine"])
+	assert.True(t, geometryTypes["CadRegion"])
+	assert.True(t, geometryTypes["CadText"])
 }
 
 func TestRealSampleDataLineAndRegionDatasets(t *testing.T) {

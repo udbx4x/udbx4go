@@ -125,10 +125,19 @@ export function useUDBX(options: UseUDBXOptions) {
   }, [])
 
   const loadTableDataset = useCallback(async (datasetName: string, page: number = 1) => {
-    const data: PageData = await LoadDatasetPage(datasetName, page)
-    setSelectedDataset(datasetName)
-    setActiveTableDataset(datasetName)
-    setPageData(data)
+    try {
+      setLoading(true)
+      setError(null)
+      const data: PageData = await LoadDatasetPage(datasetName, page)
+      setSelectedDataset(datasetName)
+      setActiveTableDataset(datasetName)
+      setPageData(data)
+      setLoading(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载属性表失败')
+      setLoading(false)
+      throw err
+    }
   }, [])
 
   const addDatasetToMap = useCallback(async (datasetName: string) => {

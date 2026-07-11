@@ -19,6 +19,12 @@ vi.mock('../../wailsjs/go/main/App', () => mocks)
 describe('useUDBX spatial preview settings', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.LoadDatasetPage.mockResolvedValue({
+      columns: ['SmID'],
+      rows: [['1']],
+      currentPage: 1,
+      totalPages: 1,
+    })
     mocks.GetDatasetSpatialSummary.mockResolvedValue({
       datasetName: 'BaseMap_P',
       kind: 'point',
@@ -56,5 +62,25 @@ describe('useUDBX spatial preview settings', () => {
         simplify: false,
       }),
     )
+  })
+
+  it('属性表加载失败时设置错误状态并保留当前表格状态', async () => {
+    mocks.LoadDatasetPage.mockRejectedValue(new Error("dataset kind 'unknown' is not supported"))
+
+    const { result } = renderHook(() =>
+      useUDBX({
+        spatialPreviewFeatureLimit: 1000,
+        spatialPreviewVertexBudget: 100000,
+      }),
+    )
+
+    await act(async () => {
+      await expect(result.current.loadTableDataset('modeldt')).rejects.toThrow('not supported')
+    })
+
+    expect(result.current.error).toBe("dataset kind 'unknown' is not supported")
+    expect(result.current.activeTableDataset).toBeNull()
+    expect(result.current.pageData).toBeNull()
+    expect(result.current.loading).toBe(false)
   })
 })

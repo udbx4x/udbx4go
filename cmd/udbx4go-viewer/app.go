@@ -297,16 +297,18 @@ func (a *App) LoadDatasetPage(datasetName string, page int) (*PageData, error) {
 		List(opts *types.QueryOptions) ([]*types.Feature, error)
 	}); ok {
 		features, err := vectorDs.List(opts)
-		if err == nil {
-			rows = a.formatFeatures(features, fields, info.Kind)
+		if err != nil {
+			return nil, err
 		}
+		rows = a.formatFeatures(features, fields, info.Kind)
 	} else if tabularDs, ok := ds.(interface {
 		List(opts *types.QueryOptions) ([]*types.TabularRecord, error)
 	}); ok {
 		records, err := tabularDs.List(opts)
-		if err == nil {
-			rows = a.formatTabularRecords(records, fields)
+		if err != nil {
+			return nil, err
 		}
+		rows = a.formatTabularRecords(records, fields)
 	}
 
 	return &PageData{
@@ -592,6 +594,8 @@ func toPreviewGeometry(g types.Geometry) PreviewGeometryDTO {
 		return PreviewGeometryDTO{Type: "MultiLineString", Coordinates: cadLineToInterfaces(geom.Coordinates, geom.SubPointCounts), HasZ: false}
 	case *types.CadRegionGeometry:
 		return PreviewGeometryDTO{Type: "MultiPolygon", Coordinates: cadRegionToInterfaces(geom.Coordinates, geom.SubPointCounts), HasZ: false}
+	case *types.CadTextGeometry:
+		return PreviewGeometryDTO{Type: "Text", Coordinates: floatSliceToInterfaces(geom.Anchor), HasZ: false}
 	default:
 		return PreviewGeometryDTO{Type: g.GeometryType(), Coordinates: []interface{}{}, HasZ: g.HasZ()}
 	}

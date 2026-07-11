@@ -70,6 +70,106 @@ func TestViewerOpensSampleDataAndPagesDataset(t *testing.T) {
 	}
 }
 
+func TestViewerLoadsSampleCADDTAsAttributeTable(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	page, err := app.LoadDatasetPage("CADDT", 1)
+	if err != nil {
+		t.Fatalf("LoadDatasetPage(CADDT) error = %v", err)
+	}
+	if page == nil {
+		t.Fatal("LoadDatasetPage(CADDT) returned nil page")
+	}
+	if len(page.Rows) == 0 {
+		ds, getErr := app.dataSource.GetDataset("CADDT")
+		if getErr != nil {
+			t.Fatalf("LoadDatasetPage(CADDT) returned no rows; GetDataset(CADDT) error = %v", getErr)
+		}
+		vectorDs, ok := ds.(interface {
+			List(opts *types.QueryOptions) ([]*types.Feature, error)
+		})
+		if !ok {
+			t.Fatalf("LoadDatasetPage(CADDT) returned no rows; dataset does not implement feature List")
+		}
+		features, listErr := vectorDs.List(&types.QueryOptions{Limit: pageSize})
+		t.Fatalf("LoadDatasetPage(CADDT) returned no rows; direct List returned %d features, error = %v", len(features), listErr)
+	}
+	if len(page.Columns) < 2 || page.Columns[0] != "SmID" || page.Columns[1] != "Geometry" {
+		t.Fatalf("LoadDatasetPage(CADDT) columns = %v", page.Columns)
+	}
+	for rowIndex, row := range page.Rows {
+		if len(row) != len(page.Columns) {
+			t.Fatalf("CADDT row %d has %d cells, want %d columns: %q", rowIndex, len(row), len(page.Columns), row)
+		}
+		if row[0] == "" {
+			t.Fatalf("CADDT row %d has empty SmID: %q", rowIndex, row)
+		}
+	}
+}
+
+func TestViewerSampleDataDatasetHandlingMatrix(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	datasets, err := app.ListDatasets()
+	if err != nil {
+		t.Fatalf("ListDatasets() error = %v", err)
+	}
+	if len(datasets) == 0 {
+		t.Fatal("ListDatasets() returned no datasets")
+	}
+
+	expectedUnsupported := map[string]bool{
+		"Jingjin_Network":  true,
+		"Jingjin_NetworkZ": true,
+		"modeldt":          true,
+		"modeldt_Texture":  true,
+	}
+	seen := map[string]bool{}
+	for _, dataset := range datasets {
+		seen[dataset.Name] = true
+		page, pageErr := app.LoadDatasetPage(dataset.Name, 1)
+		if expectedUnsupported[dataset.Name] {
+			if pageErr == nil {
+				t.Fatalf("LoadDatasetPage(%s) error = nil, want unsupported dataset error", dataset.Name)
+			}
+			if !strings.Contains(pageErr.Error(), "not supported") {
+				t.Fatalf("LoadDatasetPage(%s) error = %v, want not supported", dataset.Name, pageErr)
+			}
+			continue
+		}
+
+		if pageErr != nil {
+			t.Fatalf("LoadDatasetPage(%s) unexpected error = %v", dataset.Name, pageErr)
+		}
+		if page == nil {
+			t.Fatalf("LoadDatasetPage(%s) returned nil page", dataset.Name)
+		}
+		if len(page.Columns) == 0 {
+			t.Fatalf("LoadDatasetPage(%s) returned no columns", dataset.Name)
+		}
+		if dataset.ObjectCount > 0 && len(page.Rows) == 0 {
+			t.Fatalf("LoadDatasetPage(%s) returned no rows for %d objects", dataset.Name, dataset.ObjectCount)
+		}
+		for rowIndex, row := range page.Rows {
+			if len(row) != len(page.Columns) {
+				t.Fatalf("LoadDatasetPage(%s) row %d has %d cells, want %d columns", dataset.Name, rowIndex, len(row), len(page.Columns))
+			}
+		}
+	}
+
+	for name := range expectedUnsupported {
+		if !seen[name] {
+			t.Fatalf("SampleData.udbx missing expected unsupported dataset %s", name)
+		}
+	}
+}
+
 func TestViewerHandlesOpenErrorsAndPageBounds(t *testing.T) {
 	app := NewApp()
 	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
@@ -200,6 +300,34 @@ func TestViewerSpatialPreviewSupportsPointLineAndRegionDatasets(t *testing.T) {
 		}
 		if preview.Features[0].Geometry.Type != tc.wantGeomType {
 			t.Fatalf("%s geometry type = %q, want %q", tc.name, preview.Features[0].Geometry.Type, tc.wantGeomType)
+		}
+	}
+}
+
+func TestViewerSpatialPreviewKeepsLineAndRegionFeatureExtents(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	cases := []string{"BaseMap_L", "BaseMap_R"}
+	for _, datasetName := range cases {
+		preview, err := app.LoadSpatialPreview(datasetName, SpatialPreviewRequestDTO{
+			Limit:       1,
+			MaxVertices: maxSpatialPreviewVertexBudget,
+		})
+		if err != nil {
+			t.Fatalf("LoadSpatialPreview(%s) error = %v", datasetName, err)
+		}
+		if len(preview.Features) == 0 {
+			t.Fatalf("LoadSpatialPreview(%s) returned no features", datasetName)
+		}
+		bbox := preview.Features[0].BBox
+		if bbox == nil {
+			t.Fatalf("LoadSpatialPreview(%s) feature bbox = nil", datasetName)
+		}
+		if bbox.MinX == bbox.MaxX && bbox.MinY == bbox.MaxY {
+			t.Fatalf("LoadSpatialPreview(%s) feature bbox collapsed to point: %+v", datasetName, bbox)
 		}
 	}
 }
