@@ -3,8 +3,14 @@ import type { ReactNode } from 'react'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultViewerSettings } from './settings/viewerSettings'
 import type { ViewerSettings } from './settings/viewerSettings'
-import { datasetFixtures } from './test/fixtures'
-import type { DatasetInfo, MapLayerState, PageData } from './types'
+import {
+  datasetFixtures,
+  featureAttributesFixture,
+  mapLayerFixtures,
+  pageDataFixture,
+  selectedFeatureFixture,
+} from './test/fixtures'
+import type { DatasetInfo, FeatureAttributes, MapLayerState, PageData, SelectedMapFeature } from './types'
 import type { AttributeTableMode } from './components/AttributeTableDrawer'
 
 declare global {
@@ -28,7 +34,11 @@ type CapturedMapWorkspaceProps = {
   zoomToSelectedFeature: boolean
 }
 type CapturedInspectorPanelProps = {
+  layers: MapLayerState[]
   showPreviewStats: boolean
+  selectedFeatureAttributes: FeatureAttributes | null
+  onLayerVisibleChange: (datasetName: string, visible: boolean) => void
+  onRemoveLayer: (datasetName: string) => void
 }
 type CapturedDatasetExplorerProps = {
   datasets: DatasetInfo[]
@@ -41,7 +51,9 @@ type CapturedAttributeTableDrawerProps = {
   mode: AttributeTableMode
   pageData: PageData | null
   datasetName: string | null
+  selectedFeature: SelectedMapFeature | null
   onModeChange: (mode: AttributeTableMode) => void
+  onFeatureSelect: (datasetName: string, featureID: number) => void
   onPageChange: (page: number) => void
 }
 
@@ -293,6 +305,59 @@ describe('App settings integration', () => {
     expect(capturedMapWorkspaceProps?.autoFitOnLayerChange).toBe(false)
     expect(capturedMapWorkspaceProps?.zoomToSelectedFeature).toBe(false)
     expect(capturedInspectorPanelProps?.showPreviewStats).toBe(true)
+  })
+
+  it('默认装配半展开属性表并向检查器和属性表传入当前状态', () => {
+    const loadTableDataset = vi.fn()
+    const setMapLayerVisible = vi.fn()
+    const removeMapLayer = vi.fn()
+    const selectFeature = vi.fn()
+    const settings: ViewerSettings = {
+      ...defaultViewerSettings,
+      advanced: {
+        showPreviewStats: true,
+      },
+    }
+
+    mockUseViewerSettings.mockReturnValue({
+      settings,
+      loading: true,
+      error: null,
+      saveSettings: vi.fn(),
+      resetSettings: vi.fn(),
+    })
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      mapLayers: mapLayerFixtures,
+      pageData: pageDataFixture,
+      activeTableDataset: 'BaseMap_P',
+      selectedMapFeature: selectedFeatureFixture,
+      selectedFeatureAttributes: featureAttributesFixture,
+      loadTableDataset,
+      setMapLayerVisible,
+      removeMapLayer,
+      selectFeature,
+    })
+
+    render(<App />)
+
+    expect(capturedAttributeTableDrawerProps?.mode).toBe('half')
+    expect(capturedInspectorPanelProps?.layers).toBe(mapLayerFixtures)
+    expect(capturedInspectorPanelProps?.showPreviewStats).toBe(true)
+    expect(capturedInspectorPanelProps?.selectedFeatureAttributes).toBe(featureAttributesFixture)
+    expect(capturedAttributeTableDrawerProps?.pageData).toBe(pageDataFixture)
+    expect(capturedAttributeTableDrawerProps?.datasetName).toBe('BaseMap_P')
+    expect(capturedAttributeTableDrawerProps?.selectedFeature).toBe(selectedFeatureFixture)
+
+    capturedInspectorPanelProps?.onLayerVisibleChange('BaseMap_P', false)
+    capturedInspectorPanelProps?.onRemoveLayer('BaseMap_P')
+    capturedAttributeTableDrawerProps?.onFeatureSelect('BaseMap_P', 2)
+    capturedAttributeTableDrawerProps?.onPageChange(2)
+
+    expect(setMapLayerVisible).toHaveBeenCalledWith('BaseMap_P', false)
+    expect(removeMapLayer).toHaveBeenCalledWith('BaseMap_P')
+    expect(selectFeature).toHaveBeenCalledWith('BaseMap_P', 2)
+    expect(loadTableDataset).toHaveBeenCalledWith('BaseMap_P', 2)
   })
 
   it('点击工具栏设置入口会打开设置弹窗', async () => {
