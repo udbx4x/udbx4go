@@ -7,8 +7,6 @@ import {
 import {
   Box,
   Typography,
-  Pagination,
-  Stack,
 } from '@mui/material'
 import type { PageData } from '../types'
 
@@ -17,7 +15,6 @@ interface DataTableProps {
   datasetName: string | null
   selectedFeature: { datasetName: string; featureID: number } | null
   onFeatureSelect: (datasetName: string, featureID: number) => void
-  onPageChange: (page: number) => void
 }
 
 export const DataTable: React.FC<DataTableProps> = ({
@@ -25,7 +22,6 @@ export const DataTable: React.FC<DataTableProps> = ({
   datasetName,
   selectedFeature,
   onFeatureSelect,
-  onPageChange,
 }) => {
   if (!pageData || !datasetName) {
     return (
@@ -61,58 +57,49 @@ export const DataTable: React.FC<DataTableProps> = ({
     return rowData
   })
 
-  const handlePaginationChange = (_: React.ChangeEvent<unknown>, page: number) => {
-    onPageChange(page)
-  }
-
   const rowSelectionModel: GridRowSelectionModel =
     selectedFeature?.datasetName === datasetName
       ? { type: 'include', ids: new Set([selectedFeature.featureID.toString()]) }
       : { type: 'include', ids: new Set() }
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <Box sx={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-        <DataGrid
-          rows={rows}
-          columns={columns}
-          hideFooterPagination
-          hideFooter
-          onRowClick={(params) => {
-            if (!datasetName) {
-              return
-            }
-            const featureID = Number(params.id)
-            if (Number.isFinite(featureID)) {
-              onFeatureSelect(datasetName, featureID)
-            }
-          }}
-          rowSelectionModel={rowSelectionModel}
-          density="compact"
-          sx={{
-            border: 'none',
-            '& .MuiDataGrid-cell': {
-              fontSize: '0.875rem',
-            },
-            '& .MuiDataGrid-columnHeader': {
-              fontWeight: 'bold',
-            },
-          }}
-        />
-      </Box>
-
-      <Box sx={{ p: 0.75, borderTop: 1, borderColor: 'divider' }}>
-        <Stack direction="row" justifyContent="center">
-          <Pagination
-            count={pageData.totalPages}
-            page={pageData.currentPage}
-            onChange={handlePaginationChange}
-            color="primary"
-            showFirstButton
-            showLastButton
-          />
-        </Stack>
-      </Box>
+    <Box sx={{ height: '100%', minHeight: 0, overflow: 'hidden' }}>
+      <DataGrid
+        rows={rows}
+        columns={columns}
+        hideFooterPagination
+        hideFooter
+        disableColumnMenu
+        rowHeight={30}
+        columnHeaderHeight={34}
+        onRowClick={(params) => {
+          const featureID = Number(params.id)
+          if (Number.isFinite(featureID)) {
+            onFeatureSelect(datasetName, featureID)
+          }
+        }}
+        rowSelectionModel={rowSelectionModel}
+        density="compact"
+        sx={{
+          border: 'none',
+          fontSize: '0.8125rem',
+          '& .MuiDataGrid-cell': {
+            py: 0,
+            px: 1,
+            lineHeight: '30px',
+          },
+          '& .MuiDataGrid-columnHeader': {
+            fontWeight: 700,
+            px: 1,
+          },
+          '& .MuiDataGrid-row.Mui-selected': {
+            bgcolor: 'primary.light',
+          },
+          '& .MuiDataGrid-row.Mui-selected:hover': {
+            bgcolor: 'primary.light',
+          },
+        }}
+      />
     </Box>
   )
 }

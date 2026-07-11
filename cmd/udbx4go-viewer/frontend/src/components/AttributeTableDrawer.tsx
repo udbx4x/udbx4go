@@ -2,39 +2,55 @@ import React from 'react'
 import {
   Box,
   IconButton,
+  Pagination,
   Stack,
   Tooltip,
   Typography,
 } from '@mui/material'
 import {
   KeyboardArrowDown as CollapseTableIcon,
-  KeyboardArrowUp as ExpandTableIcon,
+  TableRows as HalfTableIcon,
+  UnfoldMore as FullTableIcon,
   TableRows as TableRowsIcon,
 } from '@mui/icons-material'
 import { viewerLayout } from '../theme/viewerTheme'
 import type { PageData } from '../types'
 import { DataTable } from './DataTable'
 
+export type AttributeTableMode = 'collapsed' | 'half' | 'full'
+
 interface AttributeTableDrawerProps {
-  open: boolean
+  mode: AttributeTableMode
   pageData: PageData | null
   datasetName: string | null
   selectedFeature: { datasetName: string; featureID: number } | null
-  onToggleOpen: () => void
+  onModeChange: (mode: AttributeTableMode) => void
   onFeatureSelect: (datasetName: string, featureID: number) => void
   onPageChange: (page: number) => void
 }
 
+const getDrawerHeight = (mode: AttributeTableMode) => {
+  if (mode === 'collapsed') {
+    return viewerLayout.tableCollapsedHeight
+  }
+
+  if (mode === 'full') {
+    return '50vh'
+  }
+
+  return viewerLayout.tableHalfHeight
+}
+
 export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
-  open,
+  mode,
   pageData,
   datasetName,
   selectedFeature,
-  onToggleOpen,
+  onModeChange,
   onFeatureSelect,
   onPageChange,
 }) => {
-  const toggleLabel = open ? '收起属性表' : '展开属性表'
+  const isCollapsed = mode === 'collapsed'
   const pageSummary = pageData
     ? `第 ${pageData.currentPage} / ${pageData.totalPages} 页 · 共 ${pageData.rows.length} 条记录`
     : '未选择数据集'
@@ -42,7 +58,8 @@ export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
   return (
     <Box
       sx={{
-        height: open ? viewerLayout.tableExpandedHeight : viewerLayout.tableCollapsedHeight,
+        height: getDrawerHeight(mode),
+        maxHeight: mode === 'full' ? '50vh' : undefined,
         overflow: 'hidden',
         bgcolor: 'background.paper',
         borderTop: 1,
@@ -60,7 +77,7 @@ export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
           display: 'flex',
           alignItems: 'center',
           gap: 1,
-          borderBottom: open ? 1 : 0,
+          borderBottom: isCollapsed ? 0 : 1,
           borderColor: 'divider',
         }}
       >
@@ -79,23 +96,64 @@ export const AttributeTableDrawer: React.FC<AttributeTableDrawerProps> = ({
         >
           {pageSummary}
         </Typography>
+
+        {pageData && !isCollapsed && (
+          <Pagination
+            count={pageData.totalPages}
+            page={pageData.currentPage}
+            onChange={(_, page) => onPageChange(page)}
+            color="primary"
+            size="small"
+            siblingCount={0}
+            showFirstButton
+            showLastButton
+          />
+        )}
+
         <Stack direction="row" spacing={0.5} alignItems="center">
-          <Tooltip title={toggleLabel}>
-            <IconButton size="small" aria-label={toggleLabel} onClick={onToggleOpen}>
-              {open ? <CollapseTableIcon fontSize="small" /> : <ExpandTableIcon fontSize="small" />}
+          <Tooltip title="折叠属性表">
+            <span>
+              <IconButton
+                size="small"
+                aria-label="折叠属性表"
+                disabled={mode === 'collapsed'}
+                onClick={() => onModeChange('collapsed')}
+              >
+                <CollapseTableIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="半展开属性表">
+            <IconButton
+              size="small"
+              aria-label="半展开属性表"
+              onClick={() => onModeChange('half')}
+            >
+              <HalfTableIcon fontSize="small" />
             </IconButton>
+          </Tooltip>
+          <Tooltip title="全展开属性表">
+            <span>
+              <IconButton
+                size="small"
+                aria-label="全展开属性表"
+                disabled={mode === 'full'}
+                onClick={() => onModeChange('full')}
+              >
+                <FullTableIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
         </Stack>
       </Box>
 
-      {open && (
+      {!isCollapsed && (
         <Box sx={{ flex: 1, minHeight: 0 }}>
           <DataTable
             pageData={pageData}
             datasetName={datasetName}
             selectedFeature={selectedFeature}
             onFeatureSelect={onFeatureSelect}
-            onPageChange={onPageChange}
           />
         </Box>
       )}

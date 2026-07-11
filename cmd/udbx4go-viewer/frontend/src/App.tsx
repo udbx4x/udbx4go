@@ -16,6 +16,7 @@ import { InspectorPanel } from './components/InspectorPanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import { viewerTheme } from './theme/viewerTheme'
 import type { DatasetInfo } from './types'
+import type { AttributeTableMode } from './components/AttributeTableDrawer'
 
 const spatialDatasetKinds = new Set(['point', 'pointZ', 'line', 'lineZ', 'region', 'regionZ'])
 
@@ -58,7 +59,7 @@ function App() {
   } = udbx
 
   const [errorOpen, setErrorOpen] = React.useState(false)
-  const [tableOpen, setTableOpen] = React.useState(true)
+  const [tableMode, setTableMode] = React.useState<AttributeTableMode>('half')
   const [settingsOpen, setSettingsOpen] = React.useState(false)
   const [settingsSaving, setSettingsSaving] = React.useState(false)
   const settingsDefaultAppliedRef = React.useRef(false)
@@ -72,7 +73,7 @@ function App() {
 
   useEffect(() => {
     if (!settingsLoading && !settingsDefaultAppliedRef.current) {
-      setTableOpen(settings.table.defaultOpen)
+      setTableMode(settings.table.defaultOpen ? 'half' : 'collapsed')
       settingsDefaultAppliedRef.current = true
     }
   }, [settingsLoading, settings.table.defaultOpen])
@@ -144,11 +145,11 @@ function App() {
         }
         tableDrawer={
           <AttributeTableDrawer
-            open={tableOpen}
+            mode={tableMode}
             pageData={pageData}
             datasetName={activeTableDataset}
             selectedFeature={selectedMapFeature}
-            onToggleOpen={() => setTableOpen((open) => !open)}
+            onModeChange={setTableMode}
             onFeatureSelect={selectFeature}
             onPageChange={handlePageChange}
           />

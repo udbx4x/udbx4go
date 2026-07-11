@@ -5,6 +5,7 @@ import { defaultViewerSettings } from './settings/viewerSettings'
 import type { ViewerSettings } from './settings/viewerSettings'
 import { datasetFixtures } from './test/fixtures'
 import type { DatasetInfo, MapLayerState, PageData } from './types'
+import type { AttributeTableMode } from './components/AttributeTableDrawer'
 
 declare global {
   interface Window {
@@ -37,10 +38,10 @@ type CapturedDatasetExplorerProps = {
   onSelectDataset: (name: string) => void
 }
 type CapturedAttributeTableDrawerProps = {
-  open: boolean
+  mode: AttributeTableMode
   pageData: PageData | null
   datasetName: string | null
-  onToggleOpen: () => void
+  onModeChange: (mode: AttributeTableMode) => void
   onPageChange: (page: number) => void
 }
 
@@ -96,8 +97,8 @@ vi.mock('./components/AttributeTableDrawer', () => ({
   AttributeTableDrawer: (props: CapturedAttributeTableDrawerProps) => {
     capturedAttributeTableDrawerProps = props
     return (
-      <button type="button" onClick={props.onToggleOpen}>
-        {props.open ? '属性表已展开' : '属性表已收起'}
+      <button type="button" onClick={() => props.onModeChange('collapsed')}>
+        {`属性表模式 ${props.mode}`}
       </button>
     )
   },
@@ -191,7 +192,7 @@ describe('App settings integration', () => {
   it('只在设置首次加载完成后应用默认属性表展开状态', async () => {
     const { rerender } = render(<App />)
 
-    expect(screen.getByRole('button', { name: '属性表已展开' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '属性表模式 half' })).toBeInTheDocument()
 
     mockUseViewerSettings.mockReturnValue({
       settings: loadedSettings,
@@ -202,10 +203,16 @@ describe('App settings integration', () => {
     })
     rerender(<App />)
 
-    await waitFor(() => expect(screen.getByRole('button', { name: '属性表已收起' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表模式 collapsed' })).toBeInTheDocument())
 
-    fireEvent.click(screen.getByRole('button', { name: '属性表已收起' }))
-    fireEvent.click(screen.getByRole('button', { name: '属性表已展开' }))
+    act(() => {
+      capturedAttributeTableDrawerProps?.onModeChange('full')
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表模式 full' })).toBeInTheDocument())
+    act(() => {
+      capturedAttributeTableDrawerProps?.onModeChange('collapsed')
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表模式 collapsed' })).toBeInTheDocument())
 
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
@@ -216,7 +223,41 @@ describe('App settings integration', () => {
     })
     rerender(<App />)
 
-    await waitFor(() => expect(screen.getByRole('button', { name: '属性表已收起' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表模式 collapsed' })).toBeInTheDocument())
+  })
+
+  it('设置默认打开属性表时映射为 half 模式', async () => {
+    mockUseViewerSettings.mockReturnValue({
+      settings: {
+        ...defaultViewerSettings,
+        table: { defaultOpen: true },
+      },
+      loading: false,
+      error: null,
+      saveSettings: vi.fn(),
+      resetSettings: vi.fn(),
+    })
+
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表模式 half' })).toBeInTheDocument())
+  })
+
+  it('设置默认关闭属性表时映射为 collapsed 模式', async () => {
+    mockUseViewerSettings.mockReturnValue({
+      settings: {
+        ...defaultViewerSettings,
+        table: { defaultOpen: false },
+      },
+      loading: false,
+      error: null,
+      saveSettings: vi.fn(),
+      resetSettings: vi.fn(),
+    })
+
+    render(<App />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '属性表模式 collapsed' })).toBeInTheDocument())
   })
 
   it('向 UDBX hook 和地图工作区传入 viewer settings', () => {
