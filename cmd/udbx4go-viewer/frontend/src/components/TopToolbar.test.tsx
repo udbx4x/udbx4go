@@ -54,7 +54,7 @@ describe('TopToolbar', () => {
     expect(screen.queryByRole('button', { name: '展开属性表' })).not.toBeInTheDocument()
   })
 
-  it('有当前文件时显示文件名并通过菜单关闭文件', async () => {
+  it('有当前文件时显示文件名并通过菜单关闭文件', () => {
     const onOpenFile = vi.fn()
     const onCloseFile = vi.fn()
 
@@ -67,11 +67,44 @@ describe('TopToolbar', () => {
     expect(screen.getByText('SampleData.udbx')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '打开文件' }))
-    fireEvent.click(screen.getByRole('button', { name: '更多文件操作' }))
+    const menuButton = screen.getByRole('button', { name: '更多文件操作' })
+
+    expect(menuButton).toHaveAttribute('aria-haspopup', 'menu')
+    expect(menuButton).not.toHaveAttribute('aria-expanded')
+
+    fireEvent.click(menuButton)
+
+    expect(menuButton).toHaveAttribute('aria-expanded', 'true')
+    expect(menuButton).toHaveAttribute('aria-controls', 'top-toolbar-file-menu')
     fireEvent.click(screen.getByRole('menuitem', { name: '关闭文件' }))
 
+    expect(menuButton).not.toHaveAttribute('aria-expanded')
+    expect(menuButton).not.toHaveAttribute('aria-controls')
     expect(onOpenFile).toHaveBeenCalledTimes(1)
     expect(onCloseFile).toHaveBeenCalledTimes(1)
+  })
+
+  it('当前文件清空时关闭更多文件操作菜单并移除关闭文件项', () => {
+    const { rerender, props } = renderToolbar({
+      currentFile: '/tmp/SampleData.udbx',
+    })
+    const menuButton = screen.getByRole('button', { name: '更多文件操作' })
+
+    fireEvent.click(menuButton)
+
+    expect(menuButton).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByRole('menuitem', { name: '关闭文件' })).toBeInTheDocument()
+
+    rerender(
+      <ThemeProvider theme={viewerTheme}>
+        <TopToolbar {...props} currentFile={null} />
+      </ThemeProvider>,
+    )
+
+    expect(screen.getByText('未打开文件')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '更多文件操作' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '更多文件操作' })).not.toHaveAttribute('aria-expanded')
+    expect(screen.queryByRole('menuitem', { name: '关闭文件' })).not.toBeInTheDocument()
   })
 
   it('点击设置按钮会调用设置回调', () => {

@@ -31,6 +31,9 @@ const getFileName = (path: string | null) => {
   return path.split(/[\\/]/).pop() || path
 }
 
+const fileMenuTriggerId = 'top-toolbar-file-menu-trigger'
+const fileMenuId = 'top-toolbar-file-menu'
+
 export const TopToolbar: React.FC<TopToolbarProps> = ({
   currentFile,
   loading,
@@ -40,7 +43,13 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
 }) => {
   const [fileMenuAnchor, setFileMenuAnchor] = React.useState<HTMLElement | null>(null)
   const fileName = getFileName(currentFile)
-  const fileMenuOpen = Boolean(fileMenuAnchor)
+  const fileMenuOpen = Boolean(fileMenuAnchor) && Boolean(currentFile)
+
+  React.useEffect(() => {
+    if (!currentFile) {
+      setFileMenuAnchor(null)
+    }
+  }, [currentFile])
 
   const handleOpenFileMenu = (event: React.MouseEvent<HTMLElement>) => {
     setFileMenuAnchor(event.currentTarget)
@@ -99,8 +108,12 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         <Tooltip title="更多文件操作">
           <span>
             <IconButton
+              id={fileMenuTriggerId}
               size="small"
               aria-label="更多文件操作"
+              aria-haspopup="menu"
+              aria-expanded={fileMenuOpen ? 'true' : undefined}
+              aria-controls={fileMenuOpen ? fileMenuId : undefined}
               disabled={!currentFile}
               onClick={handleOpenFileMenu}
             >
@@ -109,11 +122,13 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           </span>
         </Tooltip>
         <Menu
+          id={fileMenuId}
           anchorEl={fileMenuAnchor}
           open={fileMenuOpen}
           onClose={handleCloseFileMenu}
           anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
           transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+          MenuListProps={{ 'aria-labelledby': fileMenuTriggerId }}
         >
           <MenuItem onClick={handleCloseFile}>关闭文件</MenuItem>
         </Menu>
