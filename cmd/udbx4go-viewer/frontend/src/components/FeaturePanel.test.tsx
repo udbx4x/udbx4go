@@ -29,5 +29,7 @@ describe('FeaturePanel', () => {
     expect(screen.getByText('SmID 1')).toBeInTheDocument()
     expect(screen.getByText('Name')).toBeInTheDocument()
     expect(screen.getByText('示例点')).toBeInTheDocument()
+    expect(screen.getByText('Name')).toHaveAttribute('title', 'Name')
+    expect(screen.getByText('示例点')).toHaveAttribute('title', '示例点')
   })
 })

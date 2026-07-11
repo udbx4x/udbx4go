@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react'
-import { Box, IconButton, Paper, Tooltip } from '@mui/material'
+import { Box, IconButton, Paper, Tooltip, Typography } from '@mui/material'
 import { CenterFocusStrong as FitIcon } from '@mui/icons-material'
 import { viewerColors } from '../theme/viewerTheme'
 import { OpenLayersSpatialRendererAdapter } from '../spatial/OpenLayersSpatialRendererAdapter'
@@ -29,6 +29,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   const selectedFeatureRef = useRef<SelectedMapFeature | null>(selectedFeature)
   const zoomToSelectedFeatureRef = useRef(zoomToSelectedFeature)
   const featureSelectHandlerRef = useRef(onFeatureSelect)
+  const sampledLayerCount = layers.filter((layer) => layer.preview?.sampled).length
 
   useEffect(() => {
     featureSelectHandlerRef.current = onFeatureSelect
@@ -126,7 +127,28 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
         <Box ref={containerRef} sx={{ position: 'absolute', inset: 0 }} />
         {layers.length === 0 && (
           <Box sx={{ position: 'absolute', inset: 0 }}>
-            <EmptyState title="选择空间数据集后加入地图预览" />
+            <EmptyState title="从左侧选择空间数据集加入地图" />
+          </Box>
+        )}
+        {sampledLayerCount > 0 && (
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 12,
+              bottom: 12,
+              px: 1.25,
+              py: 0.75,
+              bgcolor: 'background.paper',
+              border: 1,
+              borderColor: 'warning.light',
+              boxShadow: 1,
+              borderRadius: 1,
+              pointerEvents: 'none',
+            }}
+          >
+            <Typography variant="caption" color="warning.dark">
+              部分图层为采样预览
+            </Typography>
           </Box>
         )}
         <Box sx={{ position: 'absolute', top: 12, right: 12 }}>

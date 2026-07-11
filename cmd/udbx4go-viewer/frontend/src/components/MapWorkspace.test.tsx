@@ -1,6 +1,6 @@
-import { render } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { mapLayerFixtures, selectedFeatureFixture } from '../test/fixtures'
+import { mapLayerFixtures, sampledMapLayerFixture, selectedFeatureFixture } from '../test/fixtures'
 import type { MapLayerState } from '../types'
 import { MapWorkspace } from './MapWorkspace'
 
@@ -35,6 +35,34 @@ function latestAdapter() {
 describe('MapWorkspace settings behavior', () => {
   beforeEach(() => {
     adapterInstances.length = 0
+  })
+
+  it('无图层时提示从左侧选择空间数据集加入地图', () => {
+    render(
+      <MapWorkspace
+        layers={[]}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('从左侧选择空间数据集加入地图')).toBeInTheDocument()
+  })
+
+  it('存在采样图层时显示采样预览提示', () => {
+    render(
+      <MapWorkspace
+        layers={[sampledMapLayerFixture]}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByText('部分图层为采样预览')).toBeInTheDocument()
   })
 
   it('autoFitOnLayerChange=false 时图层变化后不自动适配全部可见图层', () => {
