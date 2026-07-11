@@ -2,7 +2,7 @@ import { ThemeProvider } from '@mui/material/styles'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { LayerPanel } from './LayerPanel'
-import { mapLayerFixtures } from '../test/fixtures'
+import { mapLayerFixtures, sampledMapLayerFixture } from '../test/fixtures'
 import { viewerTheme } from '../theme/viewerTheme'
 import type { MapLayerState } from '../types'
 
@@ -45,13 +45,17 @@ describe('LayerPanel', () => {
     expect(screen.getByText('point · 0 个预览要素')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('checkbox', { name: '切换 BaseMap_P 图层可见性' }))
-    fireEvent.click(screen.getByRole('button', { name: '从地图移除 BaseMap_P' }))
+    fireEvent.click(screen.getByRole('button', { name: 'BaseMap_P 更多操作' }))
+
+    expect(screen.getByRole('menuitem', { name: '样式设置' })).toHaveAttribute('aria-disabled', 'true')
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '移除图层' }))
 
     expect(onVisibleChange).toHaveBeenCalledWith('BaseMap_P', false)
     expect(onRemoveLayer).toHaveBeenCalledWith('BaseMap_P')
   })
 
-  it('开启预览统计时显示要素数、顶点数和采样提示', () => {
+  it('开启预览统计时显示要素数和顶点数', () => {
     const [layer] = mapLayerFixtures
     const sampledLayer: MapLayerState = {
       ...layer,
@@ -78,6 +82,18 @@ describe('LayerPanel', () => {
 
     expect(screen.getByText('预览要素 1')).toBeInTheDocument()
     expect(screen.getByText('顶点 1')).toBeInTheDocument()
-    expect(screen.getByText('达到预览上限')).toBeInTheDocument()
+  })
+
+  it('关闭预览统计时仍内联显示采样原因并可通过更多菜单移除图层', () => {
+    const onRemoveLayer = vi.fn()
+
+    renderLayerPanel({ layers: [sampledMapLayerFixture], onRemoveLayer })
+
+    expect(screen.getByText('预览达到要素上限')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jingjin_NetworkZ_Node 更多操作' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移除图层' }))
+
+    expect(onRemoveLayer).toHaveBeenCalledWith('Jingjin_NetworkZ_Node')
   })
 })

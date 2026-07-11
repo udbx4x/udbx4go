@@ -4,13 +4,21 @@ import {
   Checkbox,
   IconButton,
   List,
+  ListItemIcon,
   ListItem,
   ListItemText,
+  Menu,
+  MenuItem,
   Stack,
   Tooltip,
   Typography,
 } from '@mui/material'
-import { Close as CloseIcon, Tune as TuneIcon } from '@mui/icons-material'
+import {
+  DeleteOutline as DeleteOutlineIcon,
+  MoreVert as MoreVertIcon,
+  Tune as TuneIcon,
+  WarningAmber as WarningAmberIcon,
+} from '@mui/icons-material'
 import type { MapLayerState } from '../types'
 
 interface LayerPanelProps {
@@ -50,6 +58,26 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
   onVisibleChange,
   onRemoveLayer,
 }) => {
+  const [menuAnchorEl, setMenuAnchorEl] = React.useState<HTMLElement | null>(null)
+  const [menuLayer, setMenuLayer] = React.useState<MapLayerState | null>(null)
+
+  const closeMenu = () => {
+    setMenuAnchorEl(null)
+    setMenuLayer(null)
+  }
+
+  const openLayerMenu = (event: React.MouseEvent<HTMLElement>, layer: MapLayerState) => {
+    setMenuAnchorEl(event.currentTarget)
+    setMenuLayer(layer)
+  }
+
+  const removeMenuLayer = () => {
+    if (menuLayer) {
+      onRemoveLayer(menuLayer.datasetName)
+    }
+    closeMenu()
+  }
+
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -70,27 +98,21 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
           {layers.map((layer) => (
             <ListItem
               key={layer.datasetName}
-              sx={{ pr: 9.5, py: 1 }}
+              sx={{ pr: 6, py: 1 }}
               secondaryAction={
-                <Stack direction="row" spacing={0.5}>
-                  <Tooltip title="样式设置">
-                    <span>
-                      <IconButton size="small" disabled aria-label={`${layer.datasetName} 图层样式设置`}>
-                        <TuneIcon fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
-                  <Tooltip title="从地图移除">
-                    <IconButton
-                      edge="end"
-                      size="small"
-                      aria-label={`从地图移除 ${layer.datasetName}`}
-                      onClick={() => onRemoveLayer(layer.datasetName)}
-                    >
-                      <CloseIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                </Stack>
+                <Tooltip title="更多操作">
+                  <IconButton
+                    edge="end"
+                    size="small"
+                    aria-label={`${layer.datasetName} 更多操作`}
+                    aria-controls={menuLayer?.datasetName === layer.datasetName ? 'layer-actions-menu' : undefined}
+                    aria-haspopup="menu"
+                    aria-expanded={menuLayer?.datasetName === layer.datasetName ? 'true' : undefined}
+                    onClick={(event) => openLayerMenu(event, layer)}
+                  >
+                    <MoreVertIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
               }
             >
               <Checkbox
@@ -127,6 +149,14 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                     >
                       {getLayerStatus(layer)}
                     </Typography>
+                    {layer.preview?.sampled && (
+                      <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, alignItems: 'center' }}>
+                        <WarningAmberIcon fontSize="inherit" color="warning" />
+                        <Typography variant="caption" color="warning.main">
+                          {layer.preview.sampleReason || '已采样预览'}
+                        </Typography>
+                      </Stack>
+                    )}
                     {showPreviewStats && layer.preview && (
                       <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
                         <Typography variant="caption" color="text.secondary">
@@ -135,11 +165,6 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                         <Typography variant="caption" color="text.secondary">
                           顶点 {layer.preview.estimatedVertexCount}
                         </Typography>
-                        {layer.preview.sampled && (
-                          <Typography variant="caption" color="warning.main">
-                            {layer.preview.sampleReason || '已采样'}
-                          </Typography>
-                        )}
                       </Stack>
                     )}
                   </Box>
@@ -152,6 +177,29 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
           ))}
         </List>
       )}
+      <Menu
+        id="layer-actions-menu"
+        anchorEl={menuAnchorEl}
+        open={Boolean(menuAnchorEl)}
+        onClose={closeMenu}
+        MenuListProps={{
+          'aria-label': menuLayer ? `${menuLayer.datasetName} 图层操作` : '图层操作',
+          dense: true,
+        }}
+      >
+        <MenuItem disabled>
+          <ListItemIcon>
+            <TuneIcon fontSize="small" />
+          </ListItemIcon>
+          样式设置
+        </MenuItem>
+        <MenuItem onClick={removeMenuLayer}>
+          <ListItemIcon>
+            <DeleteOutlineIcon fontSize="small" />
+          </ListItemIcon>
+          移除图层
+        </MenuItem>
+      </Menu>
     </Box>
   )
 }
