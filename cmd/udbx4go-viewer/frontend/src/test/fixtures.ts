@@ -1,10 +1,18 @@
 import type {
   DatasetInfo,
   FeatureAttributes,
+  LayerStyle,
   MapLayerState,
   PageData,
   SelectedMapFeature,
 } from '../types'
+
+const cloneLayerStyle = (style: LayerStyle): LayerStyle => ({
+  point: { ...style.point },
+  line: { ...style.line },
+  polygon: { ...style.polygon },
+  selected: { ...style.selected },
+})
 
 export const datasetFixtures: DatasetInfo[] = [
   { name: 'BaseMap_P', kind: 'point', objectCount: 10, iconType: 'point' },
@@ -84,6 +92,7 @@ export const sampledMapLayerFixture: MapLayerState = {
   ...mapLayerFixtures[0],
   datasetName: 'Jingjin_NetworkZ_Node',
   kind: 'pointZ',
+  style: cloneLayerStyle(mapLayerFixtures[0].style),
   preview: {
     datasetName: 'Jingjin_NetworkZ_Node',
     kind: 'pointZ',
