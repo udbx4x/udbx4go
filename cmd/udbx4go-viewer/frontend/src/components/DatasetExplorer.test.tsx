@@ -46,7 +46,7 @@ describe('DatasetExplorer', () => {
     renderExplorer()
 
     expect(screen.getByText('数据集')).toBeInTheDocument()
-    expect(screen.getByText('4 个数据集')).toBeInTheDocument()
+    expect(screen.getByText('6 个数据集')).toBeInTheDocument()
     expect(screen.getByText('已加入地图')).toBeInTheDocument()
   })
 
