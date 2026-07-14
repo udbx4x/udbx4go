@@ -21,6 +21,7 @@ declare global {
 
 const mockUseUDBX = vi.fn()
 const mockUseViewerSettings = vi.fn()
+const mockGetBenchmarkConfig = vi.fn()
 type CapturedSettingsDialogProps = {
   open: boolean
   settings: ViewerSettings
@@ -69,6 +70,16 @@ vi.mock('./hooks/useUDBX', () => ({
 
 vi.mock('./hooks/useViewerSettings', () => ({
   useViewerSettings: () => mockUseViewerSettings(),
+}))
+
+vi.mock('../wailsjs/go/main/App', () => ({
+  GetBenchmarkConfig: () => mockGetBenchmarkConfig(),
+}))
+
+vi.mock('./benchmark/BenchmarkRunner', () => ({
+  BenchmarkRunner: ({ config }: { config: { scenario: { name: string } } }) => (
+    <div>{`基准模式 ${config.scenario.name}`}</div>
+  ),
 }))
 
 vi.mock('./components/AppShell', () => ({
@@ -150,6 +161,7 @@ vi.mock('./components/SettingsDialog', () => ({
 }))
 
 let App: typeof import('./App').default
+let ApplicationRoot: typeof import('./App').default
 
 const baseUdbxState = {
   currentFile: null,
@@ -181,7 +193,9 @@ const loadedSettings: ViewerSettings = {
 describe('App settings integration', () => {
   beforeAll(async () => {
     window.__vite_plugin_react_preamble_installed__ = true
-    App = (await import('./App')).default
+    const appModule = await import('./App')
+    App = appModule.ViewerApp
+    ApplicationRoot = appModule.default
   })
 
   beforeEach(() => {
@@ -192,6 +206,7 @@ describe('App settings integration', () => {
     capturedDatasetExplorerProps = null
     capturedAttributeTableDrawerProps = null
     mockUseUDBX.mockReturnValue(baseUdbxState)
+    mockGetBenchmarkConfig.mockResolvedValue(null)
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
       loading: true,
@@ -199,6 +214,40 @@ describe('App settings integration', () => {
       saveSettings: vi.fn(),
       resetSettings: vi.fn(),
     })
+  })
+
+  it('默认入口在无基准配置时进入普通 Viewer', async () => {
+    render(<ApplicationRoot />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument())
+    expect(mockGetBenchmarkConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('默认入口在有基准配置时只进入基准模式', async () => {
+    mockGetBenchmarkConfig.mockResolvedValue({
+      runId: 'sampledata-01',
+      outputPath: '/tmp/sampledata-01.json',
+      scenario: {
+        name: 'sampledata-multilayer',
+        filePath: '/data/SampleData.udbx',
+        layers: ['BaseMap_P'],
+        selection: { datasetName: 'BaseMap_P', page: 1, rowIndex: 0 },
+      },
+    })
+
+    render(<ApplicationRoot />)
+
+    await waitFor(() => expect(screen.getByText('基准模式 sampledata-multilayer')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '设置' })).not.toBeInTheDocument()
+  })
+
+  it('基准配置读取失败时显示错误且不进入普通 Viewer', async () => {
+    mockGetBenchmarkConfig.mockRejectedValue(new Error('配置损坏'))
+
+    render(<ApplicationRoot />)
+
+    await waitFor(() => expect(screen.getByText('无法读取基准配置：配置损坏')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '设置' })).not.toBeInTheDocument()
   })
 
   it('只在设置首次加载完成后应用默认属性表展开状态', async () => {

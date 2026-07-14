@@ -14,9 +14,12 @@ import { AppShell } from './components/AppShell'
 import { TopToolbar } from './components/TopToolbar'
 import { InspectorPanel } from './components/InspectorPanel'
 import { SettingsDialog } from './components/SettingsDialog'
+import { BenchmarkRunner } from './benchmark/BenchmarkRunner'
+import { GetBenchmarkConfig } from '../wailsjs/go/main/App'
 import { viewerTheme } from './theme/viewerTheme'
 import type { DatasetInfo } from './types'
 import type { AttributeTableMode } from './components/AttributeTableDrawer'
+import type { BenchmarkConfig } from './benchmark/types'
 
 const spatialDatasetKinds = new Set(['point', 'pointZ', 'line', 'lineZ', 'region', 'regionZ'])
 
@@ -26,7 +29,7 @@ const isUnknownDataset = (dataset: DatasetInfo) =>
 const isSpatialDataset = (dataset: DatasetInfo) =>
   !isUnknownDataset(dataset) && spatialDatasetKinds.has(dataset.kind)
 
-function App() {
+export function ViewerApp() {
   const {
     settings,
     loading: settingsLoading,
@@ -205,6 +208,53 @@ function App() {
       </Snackbar>
     </ThemeProvider>
   )
+}
+
+type BenchmarkGateState =
+  | { status: 'loading' }
+  | { status: 'viewer' }
+  | { status: 'benchmark'; config: BenchmarkConfig }
+  | { status: 'error'; message: string }
+
+function App() {
+  const [gate, setGate] = React.useState<BenchmarkGateState>({ status: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+
+    void GetBenchmarkConfig()
+      .then((config) => {
+        if (cancelled) {
+          return
+        }
+        if (config) {
+          setGate({ status: 'benchmark', config })
+        } else {
+          setGate({ status: 'viewer' })
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error)
+          setGate({ status: 'error', message })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (gate.status === 'loading') {
+    return <div>正在启动 Viewer</div>
+  }
+  if (gate.status === 'error') {
+    return <div>{`无法读取基准配置：${gate.message}`}</div>
+  }
+  if (gate.status === 'benchmark') {
+    return <BenchmarkRunner config={gate.config} />
+  }
+  return <ViewerApp />
 }
 
 export default App
