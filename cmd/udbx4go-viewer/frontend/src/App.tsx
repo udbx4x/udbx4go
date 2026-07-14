@@ -16,18 +16,11 @@ import { InspectorPanel } from './components/InspectorPanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import { BenchmarkRunner } from './benchmark/BenchmarkRunner'
 import { GetBenchmarkConfig } from '../wailsjs/go/main/App'
+import { isSpatialDataset } from './datasets/datasetClassification'
 import { viewerTheme } from './theme/viewerTheme'
 import type { DatasetInfo } from './types'
 import type { AttributeTableMode } from './components/AttributeTableDrawer'
 import type { BenchmarkConfig } from './benchmark/types'
-
-const spatialDatasetKinds = new Set(['point', 'pointZ', 'line', 'lineZ', 'region', 'regionZ'])
-
-const isUnknownDataset = (dataset: DatasetInfo) =>
-  dataset.kind === 'unknown' || dataset.iconType === 'unknown'
-
-const isSpatialDataset = (dataset: DatasetInfo) =>
-  !isUnknownDataset(dataset) && spatialDatasetKinds.has(dataset.kind)
 
 export function ViewerApp() {
   const {

@@ -573,6 +573,27 @@ describe('App settings integration', () => {
     expect(loadTableDataset).not.toHaveBeenCalled()
   })
 
+  it('选择 CAD 数据集时加载地图预览和属性表', () => {
+    const loadDataset = vi.fn()
+    const loadTableDataset = vi.fn()
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      datasets: [
+        ...datasetFixtures,
+        { name: 'CADDT', kind: 'cad', objectCount: 92, iconType: 'cad' },
+      ],
+      loadDataset,
+      loadTableDataset,
+    })
+
+    render(<App />)
+
+    capturedDatasetExplorerProps?.onSelectDataset('CADDT')
+
+    expect(loadDataset).toHaveBeenCalledWith('CADDT', 1)
+    expect(loadTableDataset).not.toHaveBeenCalled()
+  })
+
   it('属性表分页只重新加载属性表数据', () => {
     const loadDataset = vi.fn()
     const loadTableDataset = vi.fn()

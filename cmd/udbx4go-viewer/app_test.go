@@ -183,6 +183,28 @@ func TestViewerSampleDataDatasetHandlingMatrix(t *testing.T) {
 	}
 }
 
+func TestViewerDatasetIconsRecognizeTextAndCAD(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	datasets, err := app.ListDatasets()
+	if err != nil {
+		t.Fatalf("ListDatasets() error = %v", err)
+	}
+	icons := make(map[string]string, len(datasets))
+	for _, dataset := range datasets {
+		icons[dataset.Name] = dataset.IconType
+	}
+	if icons["County_T"] != "text" {
+		t.Fatalf("County_T iconType = %q, want text", icons["County_T"])
+	}
+	if icons["CADDT"] != "cad" {
+		t.Fatalf("CADDT iconType = %q, want cad", icons["CADDT"])
+	}
+}
+
 func TestViewerHandlesOpenErrorsAndPageBounds(t *testing.T) {
 	app := NewApp()
 	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
