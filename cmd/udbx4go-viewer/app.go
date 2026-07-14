@@ -23,6 +23,8 @@ type App struct {
 	dataSource           *udbx4go.DataSource
 	currentPath          string
 	settingsPathOverride string
+	benchmarkConfigPath  string
+	benchmarkConfig      *BenchmarkConfigDTO
 }
 
 // DatasetInfoDTO represents dataset information for the frontend
