@@ -75,7 +75,7 @@ executable="$app_path/Contents/MacOS/udbx4go-viewer-wails"
 if [[ "$skip_build" != true ]]; then
   (
     cd "$viewer_dir"
-    wails build -platform darwin/universal
+    wails build -platform darwin/universal -skipbindings
   )
 fi
 
