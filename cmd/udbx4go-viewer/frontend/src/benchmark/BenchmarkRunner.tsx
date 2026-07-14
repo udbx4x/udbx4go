@@ -44,6 +44,26 @@ const zeroMetrics = {
   selectAndFitMs: 0,
 }
 
+function waitForExitFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    let settled = false
+    let timeoutID: number | undefined
+    const finish = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      if (timeoutID !== undefined) {
+        window.clearTimeout(timeoutID)
+      }
+      resolve()
+    }
+
+    timeoutID = window.setTimeout(finish, 250)
+    window.requestAnimationFrame(finish)
+  })
+}
+
 export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
   config,
   adapterFactory = () => new OpenLayersSpatialRendererAdapter(),
@@ -101,7 +121,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
       try {
         await saveResult(result)
       } finally {
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+        await waitForExitFrame()
         await quitBenchmark()
       }
     }

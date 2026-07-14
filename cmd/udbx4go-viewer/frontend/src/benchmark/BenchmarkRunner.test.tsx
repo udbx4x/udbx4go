@@ -93,4 +93,29 @@ describe('BenchmarkRunner', () => {
     })))
     await waitFor(() => expect(quitBenchmark).toHaveBeenCalledTimes(1))
   })
+
+  it('动画帧被节流时仍在保存结果后退出', async () => {
+    const requestAnimationFrameSpy = vi
+      .spyOn(window, 'requestAnimationFrame')
+      .mockImplementation(() => 1)
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+    const quitBenchmark = vi.fn().mockResolvedValue(undefined)
+
+    try {
+      render(
+        <BenchmarkRunner
+          config={config}
+          adapterFactory={createAdapter}
+          runScenario={vi.fn().mockResolvedValue(passedResult)}
+          saveResult={saveResult}
+          quitBenchmark={quitBenchmark}
+        />,
+      )
+
+      await waitFor(() => expect(saveResult).toHaveBeenCalledWith(passedResult))
+      await waitFor(() => expect(quitBenchmark).toHaveBeenCalledTimes(1), { timeout: 600 })
+    } finally {
+      requestAnimationFrameSpy.mockRestore()
+    }
+  })
 })
