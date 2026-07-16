@@ -76,6 +76,18 @@ describe('ViewportQueryCoordinator', () => {
     expect(harness.applyPreview).not.toHaveBeenCalledWith('points', previewFor(first.job))
   })
 
+  it('debounce 窗口内同层旧 version 不启动，只执行最新视口', async () => {
+    const harness = createHarness()
+
+    harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
+    await vi.advanceTimersByTimeAsync(200)
+    harness.coordinator.scheduleViewport(viewportB, [layer('points')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(harness.loadPreview).toHaveBeenCalledOnce()
+    expect(harness.requests[0].job.bounds).toEqual({ minX: 85, minY: 35, maxX: 215, maxY: 165 })
+  })
+
   it('全局并发为 1，前一层完成后立即执行其他层最新 pending', async () => {
     const harness = createHarness()
 
@@ -96,6 +108,87 @@ describe('ViewportQueryCoordinator', () => {
     expect(harness.loadPreview).toHaveBeenCalledTimes(2)
     expect(harness.loadPreview.mock.calls[1][0].datasetName).toBe('roads')
     expect(harness.activeRequests()).toBe(1)
+  })
+
+  it.each([
+    ['generation 改变', (harness: Harness) => {
+      harness.fileGeneration = 2
+    }],
+    ['图层隐藏', (harness: Harness) => {
+      harness.layers.set('points', { visible: false })
+    }],
+    ['图层移除', (harness: Harness) => {
+      harness.layers.delete('points')
+    }],
+  ])('debounce 窗口内%s时不启动旧 pending', async (_name, invalidate) => {
+    const harness = createHarness()
+
+    harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
+    invalidate(harness)
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(harness.loadPreview).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['version 变旧', (harness: Harness) => {
+      harness.coordinator.scheduleViewport(viewportC, [layer('roads')], 1)
+    }],
+    ['generation 改变', (harness: Harness) => {
+      harness.fileGeneration = 2
+    }],
+    ['图层隐藏', (harness: Harness) => {
+      harness.layers.set('roads', { visible: false })
+    }],
+    ['图层移除', (harness: Harness) => {
+      harness.layers.delete('roads')
+    }],
+  ])('等待执行槽时%s会丢弃旧 pending', async (_name, invalidate) => {
+    const harness = createHarness()
+    harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    const blocker = harness.requests[0]
+    harness.coordinator.scheduleViewport(viewportB, [layer('roads')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+
+    invalidate(harness)
+    blocker.resolve(previewFor(blocker.job))
+    await flushPromises()
+
+    expect(harness.loadPreview).toHaveBeenCalledOnce()
+  })
+
+  it('两图层持续更新时轮转执行且每层只运行最新 pending', async () => {
+    const harness = createHarness()
+    harness.coordinator.scheduleViewport(viewportA, [layer('points'), layer('roads')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(harness.requests[0].job.datasetName).toBe('points')
+
+    harness.coordinator.scheduleViewport(viewportB, [layer('points'), layer('roads')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    harness.coordinator.scheduleViewport(viewportC, [layer('points'), layer('roads')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    harness.requests[0].resolve(previewFor(harness.requests[0].job))
+    await flushPromises()
+
+    expect(harness.requests[1].job.datasetName).toBe('roads')
+    expect(harness.requests[1].job.bounds).toEqual({ minX: 170, minY: 120, maxX: 430, maxY: 380 })
+    harness.coordinator.scheduleViewport(viewportB, [layer('points'), layer('roads')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    harness.coordinator.scheduleViewport(viewportC, [layer('points'), layer('roads')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    harness.requests[1].resolve(previewFor(harness.requests[1].job))
+    await flushPromises()
+
+    expect(harness.requests[2].job.datasetName).toBe('points')
+    expect(harness.requests[2].job.bounds).toEqual({ minX: 170, minY: 120, maxX: 430, maxY: 380 })
+    harness.requests[2].resolve(previewFor(harness.requests[2].job))
+    await flushPromises()
+
+    expect(harness.requests[3].job.datasetName).toBe('roads')
+    expect(harness.requests[3].job.bounds).toEqual({ minX: 170, minY: 120, maxX: 430, maxY: 380 })
+    expect(harness.requests.filter(({ job }) => job.datasetName === 'points')).toHaveLength(2)
+    expect(harness.requests.filter(({ job }) => job.datasetName === 'roads')).toHaveLength(2)
   })
 
   it.each([

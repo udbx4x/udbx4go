@@ -43,6 +43,8 @@ export class ViewportQueryCoordinator {
   private readonly layerStates = new Map<string, LayerRequestState>()
   private debounceTimer: ReturnType<typeof setTimeout> | null = null
   private debouncedViewport: DebouncedViewport | null = null
+  private readonly readyQueue: string[] = []
+  private readonly queuedLayers = new Set<string>()
   private activeJobs = 0
 
   constructor(
@@ -86,6 +88,7 @@ export class ViewportQueryCoordinator {
     }
     state.nextVersion += 1
     state.pending = null
+    this.removeFromReadyQueue(datasetName)
   }
 
   invalidateAll(): void {
@@ -94,6 +97,8 @@ export class ViewportQueryCoordinator {
       this.debounceTimer = null
     }
     this.debouncedViewport = null
+    this.readyQueue.length = 0
+    this.queuedLayers.clear()
     this.layerStates.forEach((state) => {
       state.nextVersion += 1
       state.pending = null
@@ -120,6 +125,7 @@ export class ViewportQueryCoordinator {
         fileGeneration: scheduled.fileGeneration,
         version: layer.version,
       }
+      this.enqueueLayer(layer.datasetName)
     })
     this.pump()
   }
@@ -129,13 +135,19 @@ export class ViewportQueryCoordinator {
       return
     }
 
-    for (const [datasetName, state] of this.layerStates) {
-      if (state.inFlight || !state.pending) {
+    while (this.readyQueue.length > 0) {
+      const datasetName = this.readyQueue.shift()!
+      this.queuedLayers.delete(datasetName)
+      const state = this.layerStates.get(datasetName)
+      if (!state || state.inFlight || !state.pending) {
         continue
       }
 
       const job = state.pending
       state.pending = null
+      if (!this.canStart(state, job)) {
+        continue
+      }
       state.inFlight = job
       this.activeJobs += 1
       this.dependencies.applyLoading(datasetName)
@@ -160,8 +172,15 @@ export class ViewportQueryCoordinator {
         state.inFlight = null
       }
       this.activeJobs -= 1
+      if (state.pending) {
+        this.enqueueLayer(job.datasetName)
+      }
       this.pump()
     }
+  }
+
+  private canStart(state: LayerRequestState, job: ViewportQueryJob): boolean {
+    return this.canApply(state, job)
   }
 
   private canApply(
@@ -201,6 +220,22 @@ export class ViewportQueryCoordinator {
     }
     this.layerStates.set(datasetName, state)
     return state
+  }
+
+  private enqueueLayer(datasetName: string): void {
+    if (this.queuedLayers.has(datasetName)) {
+      return
+    }
+    this.queuedLayers.add(datasetName)
+    this.readyQueue.push(datasetName)
+  }
+
+  private removeFromReadyQueue(datasetName: string): void {
+    this.queuedLayers.delete(datasetName)
+    const index = this.readyQueue.indexOf(datasetName)
+    if (index >= 0) {
+      this.readyQueue.splice(index, 1)
+    }
   }
 }
 

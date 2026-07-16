@@ -44,11 +44,15 @@ function getLayerStatus(layer: MapLayerState): string {
   if (layer.error || layer.queryStatus === 'error') {
     return layer.error || '当前范围加载失败'
   }
-  if (layer.queryStatus === 'degraded') {
+  if (
+    layer.queryStatus === 'degraded' &&
+    layer.preview?.strategy === 'bounded_sample' &&
+    layer.preview.degradedReason === 'envelope_cache_budget_exceeded'
+  ) {
     return '无空间索引，显示有界预览'
   }
   if (layer.preview?.hasMore) {
-    return `当前范围 ${layer.preview.features.length}+ 个对象，请继续放大`
+    return `当前范围 ${layer.preview.viewportFeatureCount ?? layer.preview.features.length}+ 个对象，请继续放大`
   }
   if (layer.queryStatus === 'loading') {
     return '加载当前范围'

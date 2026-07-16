@@ -69,6 +69,7 @@ describe('useUDBX viewport spatial previews', () => {
       kind,
       queriedBounds: undefined,
       strategy: 'bounded_sample',
+      degradedReason: 'unsupported_dataset_kind',
     }))
     const { result } = renderViewerHook()
 
@@ -86,9 +87,54 @@ describe('useUDBX viewport spatial previews', () => {
       }),
     )
     expect(result.current.mapLayers[0]).toMatchObject({
-      queryStatus: 'degraded',
+      queryStatus: 'ready',
       preview: { strategy: 'bounded_sample' },
     })
+  })
+
+  it('空间矢量仅在包络缓存预算超限降级为 bounded sample', async () => {
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+    })
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      queriedBounds: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
+      strategy: 'bounded_sample',
+      degradedReason: 'envelope_cache_budget_exceeded',
+    }))
+
+    act(() => result.current.queryViewport(viewport))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(result.current.mapLayers[0].queryStatus).toBe('degraded')
+  })
+
+  it.each([
+    ['视口外', { minX: 200, minY: 200, maxX: 200, maxY: 200 }, 2],
+    ['视口内', { minX: 20, minY: 20, maxX: 20, maxY: 20 }, 3],
+  ] as const)('记录%s required feature 后的普通视口对象数', async (_name, requiredBBox, expectedCount) => {
+    mocks.GetFeatureAttributes.mockResolvedValue(featureAttributes(7))
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+      await result.current.selectFeature('BaseMap_P', 7)
+    })
+    mocks.LoadSpatialPreview.mockImplementationOnce((_datasetName, request) => Promise.resolve(preview({
+      queriedBounds: request.viewport,
+      hasMore: true,
+      features: [
+        previewFeature(1, { minX: 10, minY: 10, maxX: 10, maxY: 10 }),
+        previewFeature(2, { minX: 30, minY: 30, maxX: 30, maxY: 30 }),
+        previewFeature(7, requiredBBox),
+      ],
+    })))
+
+    act(() => result.current.queryViewport({ minX: 0, minY: 0, maxX: 100, maxY: 100 }))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(result.current.mapLayers[0].preview?.viewportFeatureCount).toBe(expectedCount)
   })
 
   it('查询时保留旧 preview，成功后原子替换并记录范围', async () => {
@@ -334,6 +380,14 @@ function featureAttributes(id: number) {
     geometryType: 'Point',
     bbox: { minX: id, minY: id, maxX: id, maxY: id },
     properties: {},
+  }
+}
+
+function previewFeature(id: number, bbox: BoundingBox) {
+  return {
+    id,
+    bbox,
+    geometry: { type: 'Point', coordinates: [bbox.minX, bbox.minY], hasZ: false },
   }
 }
 

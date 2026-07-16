@@ -63,6 +63,7 @@ export interface SpatialPreview {
   degradedReason?: string
   queryDurationMs: number
   fileGeneration: number
+  viewportFeatureCount?: number
 }
 
 export interface FeatureAttributes {

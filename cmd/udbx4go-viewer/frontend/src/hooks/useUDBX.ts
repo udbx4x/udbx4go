@@ -78,14 +78,15 @@ export function useUDBX(options: UseUDBXOptions) {
         ))
       },
       applyPreview: (datasetName, preview) => {
+        const nextPreview = withViewportFeatureCount(preview)
         setMapLayers((layers) => layers.map((layer) =>
           layer.datasetName === datasetName
             ? {
                 ...layer,
-                preview,
-                queryStatus: preview.degradedReason || preview.strategy === 'bounded_sample' ? 'degraded' : 'ready',
+                preview: nextPreview,
+                queryStatus: isDegradedViewportPreview(nextPreview) ? 'degraded' : 'ready',
                 queryError: null,
-                lastQueriedBounds: preview.queriedBounds,
+                lastQueriedBounds: nextPreview.queriedBounds,
               }
             : layer,
         ))
@@ -211,7 +212,7 @@ export function useUDBX(options: UseUDBXOptions) {
         ? {
             ...layer,
             preview,
-            queryStatus: preview.degradedReason || preview.strategy === 'bounded_sample' ? 'degraded' : 'ready',
+            queryStatus: 'ready',
             queryError: null,
           }
         : layer,
@@ -384,4 +385,27 @@ function selectionMatches(
   featureID: number,
 ): boolean {
   return selection?.datasetName === datasetName && selection.featureID === featureID
+}
+
+function isDegradedViewportPreview(preview: SpatialPreview): boolean {
+  return preview.strategy === 'bounded_sample' && preview.degradedReason === 'envelope_cache_budget_exceeded'
+}
+
+function withViewportFeatureCount(preview: SpatialPreview): SpatialPreview {
+  if (!preview.queriedBounds) {
+    return preview
+  }
+  return {
+    ...preview,
+    viewportFeatureCount: preview.features.filter((feature) =>
+      feature.bbox ? boundsIntersect(feature.bbox, preview.queriedBounds!) : true,
+    ).length,
+  }
+}
+
+function boundsIntersect(feature: BoundingBox, query: BoundingBox): boolean {
+  return feature.maxX >= query.minX &&
+    feature.minX <= query.maxX &&
+    feature.maxY >= query.minY &&
+    feature.minY <= query.maxY
 }
