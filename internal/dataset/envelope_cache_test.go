@@ -19,18 +19,23 @@ func TestEnvelopeCacheConcurrentBuildPublishesOnce(t *testing.T) {
 	start := make(chan struct{})
 	release := make(chan struct{})
 	var builds atomic.Int32
-	build := func(ctx context.Context) ([]envelopeEntry, error) {
+	build := func(ctx context.Context, buffer *envelopeCacheBuildBuffer) error {
 		builds.Add(1)
 		close(start)
 		select {
 		case <-release:
-			return []envelopeEntry{
+			for _, entry := range []envelopeEntry{
 				{ID: 3, MinX: 20, MinY: 20, MaxX: 30, MaxY: 30},
 				{ID: 1, MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
 				{ID: 2, MinX: 10, MinY: 5, MaxX: 12, MaxY: 8},
-			}, nil
+			} {
+				if err := buffer.Append(entry); err != nil {
+					return err
+				}
+			}
+			return nil
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
 
@@ -69,9 +74,9 @@ func TestEnvelopeCacheRejectsEstimatedBudgetWithoutScanning(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes, envelopeEntryBytes*10)
 	called := false
 
-	cache, err := manager.GetOrBuild(context.Background(), "too-large", 2, func(context.Context) ([]envelopeEntry, error) {
+	cache, err := manager.GetOrBuild(context.Background(), "too-large", 2, func(context.Context, *envelopeCacheBuildBuffer) error {
 		called = true
-		return nil, nil
+		return nil
 	})
 
 	assert.Nil(t, cache)
@@ -87,9 +92,9 @@ func TestEnvelopeCacheTotalBudgetDoesNotEvictPublishedCache(t *testing.T) {
 	require.NoError(t, err)
 
 	called := false
-	second, err := manager.GetOrBuild(context.Background(), "second", 1, func(context.Context) ([]envelopeEntry, error) {
+	second, err := manager.GetOrBuild(context.Background(), "second", 1, func(_ context.Context, buffer *envelopeCacheBuildBuffer) error {
 		called = true
-		return []envelopeEntry{{ID: 3}}, nil
+		return buffer.Append(envelopeEntry{ID: 3})
 	})
 
 	assert.Nil(t, second)
@@ -97,6 +102,23 @@ func TestEnvelopeCacheTotalBudgetDoesNotEvictPublishedCache(t *testing.T) {
 	assert.False(t, called)
 	assert.Equal(t, envelopeEntryBytes*2, manager.TotalBytes())
 	again, err := manager.GetOrBuild(context.Background(), "first", 2, fixedEnvelopeBuild(99))
+	require.NoError(t, err)
+	assert.Same(t, first, again)
+}
+
+func TestEnvelopeCacheGrowthRespectsTotalBudgetWithoutEviction(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*4)
+	first, err := manager.GetOrBuild(context.Background(), "first", 1, fixedEnvelopeBuild(1))
+	require.NoError(t, err)
+
+	second, err := manager.GetOrBuild(context.Background(), "second", 1, fixedEnvelopeBuild(2, 3, 4, 5))
+
+	assert.Nil(t, second)
+	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
+	assert.Equal(t, envelopeEntryBytes, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Equal(t, 1, manager.EntryCount())
+	again, err := manager.GetOrBuild(context.Background(), "first", 1, fixedEnvelopeBuild(99))
 	require.NoError(t, err)
 	assert.Same(t, first, again)
 }
@@ -109,25 +131,28 @@ func TestEnvelopeCacheFailureNeverPublishesOrLeaksReservation(t *testing.T) {
 	}{
 		{
 			name: "canceled",
-			build: func(ctx context.Context) ([]envelopeEntry, error) {
+			build: func(ctx context.Context, _ *envelopeCacheBuildBuffer) error {
 				<-ctx.Done()
-				return nil, ctx.Err()
+				return ctx.Err()
 			},
 			check: func(t *testing.T, err error) { assert.ErrorIs(t, err, context.Canceled) },
 		},
 		{
 			name: "corrupt header",
-			build: func(context.Context) ([]envelopeEntry, error) {
-				return nil, stderrors.New("corrupt header")
+			build: func(context.Context, *envelopeCacheBuildBuffer) error {
+				return stderrors.New("corrupt header")
 			},
 			check: func(t *testing.T, err error) { assert.EqualError(t, err, "corrupt header") },
 		},
 		{
-			name: "actual capacity exceeds dataset budget",
-			build: func(context.Context) ([]envelopeEntry, error) {
-				entries := make([]envelopeEntry, 1, 3)
-				entries[0].ID = 1
-				return entries, nil
+			name: "growth exceeds dataset budget",
+			build: func(_ context.Context, buffer *envelopeCacheBuildBuffer) error {
+				for id := int64(1); id <= 3; id++ {
+					if err := buffer.Append(envelopeEntry{ID: id}); err != nil {
+						return err
+					}
+				}
+				return nil
 			},
 			check: func(t *testing.T, err error) { assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded) },
 		},
@@ -162,9 +187,9 @@ func TestEnvelopeCacheBuildTimeoutReleasesReservation(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(ctx context.Context) ([]envelopeEntry, error) {
+	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(ctx context.Context, _ *envelopeCacheBuildBuffer) error {
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return ctx.Err()
 	})
 
 	assert.Nil(t, cache)
@@ -183,10 +208,10 @@ func TestEnvelopeCacheCancellationDuringBuildReleasesReservation(t *testing.T) {
 	}
 	result := make(chan buildResult, 1)
 	go func() {
-		cache, err := manager.GetOrBuild(ctx, "points", 1, func(buildCtx context.Context) ([]envelopeEntry, error) {
+		cache, err := manager.GetOrBuild(ctx, "points", 1, func(buildCtx context.Context, _ *envelopeCacheBuildBuffer) error {
 			close(started)
 			<-buildCtx.Done()
-			return []envelopeEntry{{ID: 1}}, buildCtx.Err()
+			return buildCtx.Err()
 		})
 		result <- buildResult{cache: cache, err: err}
 	}()
@@ -203,6 +228,58 @@ func TestEnvelopeCacheCancellationDuringBuildReleasesReservation(t *testing.T) {
 	assert.Zero(t, manager.EntryCount())
 }
 
+func TestEnvelopeCacheCancellationAfterBuildWakesWaiterWithoutPublishing(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*8)
+	beforePublish := make(chan struct{})
+	waiterJoined := make(chan struct{})
+	var beforePublishOnce sync.Once
+	var waiterOnce sync.Once
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		beforePublish: func(ctx context.Context) {
+			beforePublishOnce.Do(func() { close(beforePublish) })
+			<-ctx.Done()
+		},
+		waiterJoined: func() {
+			waiterOnce.Do(func() { close(waiterJoined) })
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	type buildResult struct {
+		cache *envelopeCache
+		err   error
+	}
+	results := make(chan buildResult, 2)
+	var builds atomic.Int32
+	build := func(_ context.Context, buffer *envelopeCacheBuildBuffer) error {
+		builds.Add(1)
+		return buffer.Append(envelopeEntry{ID: 1})
+	}
+	go func() {
+		cache, err := manager.GetOrBuild(ctx, "points", 1, build)
+		results <- buildResult{cache: cache, err: err}
+	}()
+	<-beforePublish
+	go func() {
+		cache, err := manager.GetOrBuild(context.Background(), "points", 1, build)
+		results <- buildResult{cache: cache, err: err}
+	}()
+	<-waiterJoined
+
+	cancel()
+
+	first := <-results
+	second := <-results
+	assert.Nil(t, first.cache)
+	assert.Nil(t, second.cache)
+	assert.ErrorIs(t, first.err, context.Canceled)
+	assert.ErrorIs(t, second.err, context.Canceled)
+	assert.Equal(t, int32(1), builds.Load())
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Zero(t, manager.EntryCount())
+}
+
 func TestEnvelopeCacheCloseClearsPublishedAndBuildingState(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*8)
 	_, err := manager.GetOrBuild(context.Background(), "published", 1, fixedEnvelopeBuild(1))
@@ -211,10 +288,10 @@ func TestEnvelopeCacheCloseClearsPublishedAndBuildingState(t *testing.T) {
 	started := make(chan struct{})
 	finished := make(chan error, 1)
 	go func() {
-		_, buildErr := manager.GetOrBuild(context.Background(), "building", 1, func(ctx context.Context) ([]envelopeEntry, error) {
+		_, buildErr := manager.GetOrBuild(context.Background(), "building", 1, func(ctx context.Context, _ *envelopeCacheBuildBuffer) error {
 			close(started)
 			<-ctx.Done()
-			return nil, ctx.Err()
+			return ctx.Err()
 		})
 		finished <- buildErr
 	}()
@@ -236,9 +313,9 @@ func TestEnvelopeCacheRejectsObjectCountOverflow(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, math.MaxInt64, math.MaxInt64)
 	called := false
 
-	cache, err := manager.GetOrBuild(context.Background(), "overflow", math.MaxInt, func(context.Context) ([]envelopeEntry, error) {
+	cache, err := manager.GetOrBuild(context.Background(), "overflow", math.MaxInt, func(context.Context, *envelopeCacheBuildBuffer) error {
 		called = true
-		return nil, nil
+		return nil
 	})
 
 	assert.Nil(t, cache)
@@ -259,12 +336,13 @@ func newTestEnvelopeCacheManager(t *testing.T, datasetBytes, totalBytes int64) *
 }
 
 func fixedEnvelopeBuild(ids ...int64) envelopeCacheBuildFunc {
-	return func(context.Context) ([]envelopeEntry, error) {
-		entries := make([]envelopeEntry, len(ids))
-		for i, id := range ids {
-			entries[i] = envelopeEntry{ID: id, MinX: float64(id), MinY: float64(id), MaxX: float64(id), MaxY: float64(id)}
+	return func(_ context.Context, buffer *envelopeCacheBuildBuffer) error {
+		for _, id := range ids {
+			if err := buffer.Append(envelopeEntry{ID: id, MinX: float64(id), MinY: float64(id), MaxX: float64(id), MaxY: float64(id)}); err != nil {
+				return err
+			}
 		}
-		return entries, nil
+		return nil
 	}
 }
 
@@ -281,13 +359,13 @@ func TestEnvelopeCacheConcurrentWaiterCanCancelWithoutCancelingBuilder(t *testin
 	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	build := func(ctx context.Context) ([]envelopeEntry, error) {
+	build := func(ctx context.Context, buffer *envelopeCacheBuildBuffer) error {
 		close(started)
 		select {
 		case <-release:
-			return []envelopeEntry{{ID: 1}}, nil
+			return buffer.Append(envelopeEntry{ID: 1})
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		}
 	}
 	built := make(chan *envelopeCache, 1)
@@ -313,10 +391,10 @@ func TestEnvelopeCacheConcurrentWaitersReceiveSameBuildError(t *testing.T) {
 	release := make(chan struct{})
 	wantErr := stderrors.New("stable build error")
 	var once sync.Once
-	build := func(context.Context) ([]envelopeEntry, error) {
+	build := func(context.Context, *envelopeCacheBuildBuffer) error {
 		once.Do(func() { close(started) })
 		<-release
-		return nil, wantErr
+		return wantErr
 	}
 
 	errs := make(chan error, 2)

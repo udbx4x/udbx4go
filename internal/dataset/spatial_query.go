@@ -112,8 +112,11 @@ func (q *SpatialQuerier) queryFallbackCandidateIDs(
 	}
 
 	cacheKey := q.info.TableName + "\x00" + detected.IDColumn + "\x00" + detected.GeometryColumn
-	cache, err := manager.GetOrBuild(ctx, cacheKey, q.info.ObjectCount, func(buildCtx context.Context) ([]envelopeEntry, error) {
-		return q.buildEnvelopeEntries(buildCtx, detected)
+	cache, err := manager.GetOrBuild(ctx, cacheKey, q.info.ObjectCount, func(
+		buildCtx context.Context,
+		buffer *envelopeCacheBuildBuffer,
+	) error {
+		return q.buildEnvelopeEntries(buildCtx, detected, buffer)
 	})
 	if err != nil {
 		if stderrors.Is(err, errEnvelopeCacheBudgetExceeded) {
@@ -169,18 +172,19 @@ func (q *SpatialQuerier) detectEnvelopeColumns(ctx context.Context) (string, str
 func (q *SpatialQuerier) buildEnvelopeEntries(
 	ctx context.Context,
 	detected *detectedSpatialCapability,
-) (entries []envelopeEntry, returnErr error) {
+	buffer *envelopeCacheBuildBuffer,
+) (returnErr error) {
 	quotedTable, err := sqliteutil.QuoteIdentifier(q.info.TableName)
 	if err != nil {
-		return nil, udbxerrors.IOError("failed to quote dataset table name", err)
+		return udbxerrors.IOError("failed to quote dataset table name", err)
 	}
 	quotedID, err := sqliteutil.QuoteIdentifier(detected.IDColumn)
 	if err != nil {
-		return nil, udbxerrors.IOError("failed to quote feature ID column", err)
+		return udbxerrors.IOError("failed to quote feature ID column", err)
 	}
 	quotedGeometry, err := sqliteutil.QuoteIdentifier(detected.GeometryColumn)
 	if err != nil {
-		return nil, udbxerrors.IOError("failed to quote geometry column", err)
+		return udbxerrors.IOError("failed to quote geometry column", err)
 	}
 
 	query := fmt.Sprintf("SELECT %s, substr(%s, 1, %d)", quotedID, quotedGeometry, codec.GaiaHeaderLength) +
@@ -188,9 +192,9 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 	rows, err := q.db.QueryContext(ctx, query)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return ctxErr
 		}
-		return nil, udbxerrors.IOError("failed to query GAIA envelope headers", err)
+		return udbxerrors.IOError("failed to query GAIA envelope headers", err)
 	}
 	defer func() {
 		if closeErr := rows.Close(); returnErr == nil && closeErr != nil {
@@ -198,42 +202,43 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 		}
 	}()
 
-	entries = make([]envelopeEntry, 0, q.info.ObjectCount)
 	for rows.Next() {
-		if len(entries)%256 == 0 {
+		if len(buffer.entries)%256 == 0 {
 			if err := ctx.Err(); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		var idValue interface{}
 		var headerValue interface{}
 		if err := rows.Scan(&idValue, &headerValue); err != nil {
-			return nil, udbxerrors.IOError("failed to scan GAIA envelope row", err)
+			return udbxerrors.IOError("failed to scan GAIA envelope row", err)
 		}
 		id, err := spatialEnvelopeID(idValue)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		header, ok := headerValue.([]byte)
 		if !ok {
-			return nil, newSpatialGeometryError("GAIA envelope header is not a BLOB")
+			return newSpatialGeometryError("GAIA envelope header is not a BLOB")
 		}
 		envelope, err := codec.ReadGaiaEnvelope(header)
 		if err != nil {
-			return nil, &spatialGeometryError{cause: udbxerrors.FormatError("failed to read GAIA envelope", err)}
+			return &spatialGeometryError{cause: udbxerrors.FormatError("failed to read GAIA envelope", err)}
 		}
-		entries = append(entries, envelopeEntry{
+		if err := buffer.Append(envelopeEntry{
 			ID: id, MinX: envelope.MinX, MinY: envelope.MinY,
 			MaxX: envelope.MaxX, MaxY: envelope.MaxY,
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	if err := rows.Err(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
+			return ctxErr
 		}
-		return nil, udbxerrors.IOError("error iterating GAIA envelope rows", err)
+		return udbxerrors.IOError("error iterating GAIA envelope rows", err)
 	}
-	return entries, nil
+	return nil
 }
 
 func spatialEnvelopeID(value interface{}) (int64, error) {

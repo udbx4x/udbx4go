@@ -266,6 +266,34 @@ func TestSpatialQueryBoundedSampleOnlyOnEnvelopeBudgetRejection(t *testing.T) {
 	assert.Zero(t, manager.EntryCount())
 }
 
+func TestEnvelopeCacheSQLiteBuildStopsBeforeUnderreportedObjectCountExceedsBudget(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
+	defer db.Close()
+	for id := 1; id <= 5; id++ {
+		insertSpatialPoint(t, db, querier, id, float64(id), float64(id), fmt.Sprintf("point-%d", id), nil)
+	}
+	insertSpatialPoint(t, db, querier, 6, 6, 6, "corrupt-after-budget", []byte{0x00, 0x01})
+	removeSpatialRTree(t, db, querier)
+	setSpatialObjectCount(querier, 1)
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*4)
+	idColumn, geometryColumn, err := querier.detectEnvelopeColumns(context.Background())
+	require.NoError(t, err)
+	detected := &detectedSpatialCapability{IDColumn: idColumn, GeometryColumn: geometryColumn}
+
+	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(
+		ctx context.Context,
+		buffer *envelopeCacheBuildBuffer,
+	) error {
+		return querier.buildEnvelopeEntries(ctx, detected, buffer)
+	})
+
+	assert.Nil(t, cache)
+	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Zero(t, manager.EntryCount())
+}
+
 func TestSpatialQueryEnvelopeCorruptHeaderReturnsCorruptGeometry(t *testing.T) {
 	db, info, record := createSpatialCapabilityFixture(t, types.DatasetKindPoint, "points", "SmGeometry")
 	defer db.Close()
@@ -304,10 +332,13 @@ func TestSpatialQueryEnvelopeBuildTimeoutDoesNotSample(t *testing.T) {
 	manager, err := NewEnvelopeCacheManager(types.SpatialQueryPolicy{
 		MaxDatasetCacheBytes: envelopeEntryBytes * 2,
 		MaxTotalCacheBytes:   envelopeEntryBytes * 4,
-		BuildTimeout:         time.Nanosecond,
+		BuildTimeout:         10 * time.Millisecond,
 	})
 	require.NoError(t, err)
 	defer manager.Close()
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		beforePublish: func(ctx context.Context) { <-ctx.Done() },
+	}
 
 	_, err = querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
 		Bounds: types.BoundingBox{},
