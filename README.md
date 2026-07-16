@@ -14,6 +14,7 @@ A Go implementation of the UDBX (Universal Spatial Database Extension) reader/wr
 - ✅ Core UDBX read/write support, including Text / GeoText and CAD minimal GeoHeader baselines.
 - ✅ Dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD
 - ✅ `TextDataset` supports minimal GeoText read/write CRUD and `CadDataset` supports minimal GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion`.
+- ✅ Context-aware viewport MBR queries for Point, Line, Region, and their Z variants, with RTree, envelope-cache, and bounded-sample strategies.
 - ✅ 14 field types with proper type mapping
 - ✅ GeoJSON-like geometry model
 - ✅ Streaming and batch operations
@@ -75,6 +76,25 @@ func main() {
     }
 }
 ```
+
+### Viewport Spatial Query
+
+`DataSource.QuerySpatial` returns a stable, bounded set of features for a map viewport:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+
+result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
+    Bounds: udbx4go.BoundingBox{MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0},
+    Limit: 1000,
+    RequiredIDs: []int{12345},
+})
+```
+
+MBR intersection uses closed intervals. `HasMore` applies only to ordinary viewport matches; required IDs are deduplicated, do not consume `Limit`, and can keep an offscreen selection in the result. The returned strategy is `rtree`, `envelope_cache`, or `bounded_sample`. Envelope caches live only for the open `DataSource` and are released by `Close`.
+
+The current defaults of 32 MiB per dataset and 64 MiB per `DataSource` are measured cache resource policies, not UDBX format limits. Viewport queries currently cover Point, Line, Region, PointZ, LineZ, and RegionZ. Text and CAD retain bounded preview/list behavior. See [API.md](./API.md#viewport-spatial-queries) for the runnable program, all six reason codes, and `ListContext` cancellation semantics.
 
 ## GUI Viewer
 

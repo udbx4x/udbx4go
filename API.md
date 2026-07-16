@@ -9,6 +9,7 @@ Note: dataset concrete types currently come from the internal implementation pac
 ## Table of Contents
 
 - [DataSource](#datasource)
+- [Viewport Spatial Queries](#viewport-spatial-queries)
 - [Dataset Types](#dataset-types)
   - [Stable Dataset Semantics](#stable-dataset-semantics)
 - [Geometry Types](#geometry-types)
@@ -81,6 +82,29 @@ for _, info := range datasets {
     fmt.Printf("%s: %s\n", info.Name, info.Kind)
 }
 ```
+
+#### GetSpatialQueryCapability
+
+```go
+func (ds *DataSource) GetSpatialQueryCapability(
+    ctx context.Context,
+    datasetName string,
+) (*SpatialQueryCapability, error)
+```
+
+Reports whether a dataset supports viewport queries, whether a verified RTree is available, and whether the in-memory fallback can be attempted.
+
+#### QuerySpatial
+
+```go
+func (ds *DataSource) QuerySpatial(
+    ctx context.Context,
+    datasetName string,
+    options SpatialQueryOptions,
+) (*SpatialQueryResult, error)
+```
+
+Queries Point, Line, Region, PointZ, LineZ, or RegionZ features by viewport MBR. See [Viewport Spatial Queries](#viewport-spatial-queries) for a complete example and result semantics.
 
 #### GetDataset
 
@@ -227,6 +251,83 @@ func (ds *DataSource) CreateRegionZDataset(
 
 Creates a new 3D region dataset.
 
+## Viewport Spatial Queries
+
+The following program opens a UDBX file, runs a cancellable viewport query, and prints the execution facts returned by the SDK:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/udbx4x/udbx4go"
+)
+
+func main() {
+    ds, err := udbx4go.Open("henan.udbx")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer ds.Close()
+
+    ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+    defer cancel()
+
+    result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
+        Bounds: udbx4go.BoundingBox{
+            MinX: 113.5,
+            MinY: 34.5,
+            MaxX: 114.0,
+            MaxY: 35.0,
+        },
+        Limit:       1000,
+        RequiredIDs: []int{12345},
+    })
+    if err != nil {
+        if reason, ok := udbx4go.SpatialQueryReasonOf(err); ok {
+            log.Fatalf("spatial query failed (%s): %v", reason, err)
+        }
+        log.Fatal(err)
+    }
+
+    fmt.Printf("features=%d hasMore=%t strategy=%s degradedReason=%s\n",
+        len(result.Features), result.HasMore, result.Strategy, result.DegradedReason)
+}
+```
+
+### Query Semantics
+
+- `Bounds` coordinates must be finite and ordered. MBR intersection uses closed intervals, so features touching a query edge are included.
+- The SDK reads at most `Limit + 1` ordinary viewport candidates. The extra candidate is used only to set `HasMore` and is not returned.
+- `RequiredIDs` are deduplicated and appended when they exist, even when outside the viewport. They do not consume `Limit` and do not affect `HasMore`; therefore `len(Features)` can exceed `Limit`.
+- `Features` is the deduplicated union of viewport MBR matches and existing required features. A returned required feature is not guaranteed to intersect `QueriedBounds`.
+- This is MBR filtering, not an exact topology predicate such as `Intersects`, `Contains`, or `Within`.
+
+`Strategy` records the path actually used:
+
+| Value | Meaning |
+|-------|---------|
+| `rtree` | A verified UDBX RTree produced viewport candidates. |
+| `envelope_cache` | An in-memory GAIA envelope cache produced candidates for a dataset without a usable RTree. |
+| `bounded_sample` | Cache admission exceeded the current policy, so a bounded sample was returned. |
+
+`DegradedReason` is empty for a non-degraded result. Errors and degraded results use these six stable reason codes:
+
+| Value | Meaning |
+|-------|---------|
+| `invalid_viewport` | Bounds, limit, or required IDs are invalid. |
+| `spatial_index_unavailable` | Required spatial metadata or a usable index path is unavailable. |
+| `envelope_cache_budget_exceeded` | Building the complete envelope cache exceeded the active resource policy. |
+| `query_timeout` | The context was canceled or its deadline expired. |
+| `corrupt_geometry` | A GAIA header or full geometry is malformed. |
+| `unsupported_dataset_kind` | The dataset kind is outside the viewport-query scope. |
+
+The envelope cache belongs to one open `DataSource`. It is never written to the UDBX file or shared across processes, and `Close` releases it. The current default policy allows 32 MiB for one dataset and 64 MiB across one `DataSource`, with a 500 ms build timeout. These values are measured SDK resource defaults and may evolve; they are not UDBX format limits. Text, CAD, and Tabular datasets do not support `QuerySpatial` in this release. Text and CAD remain available through their bounded `List`/`ListContext` preview paths.
+
 ## Dataset Types
 
 ### Stable Dataset Semantics
@@ -238,6 +339,14 @@ All dataset APIs follow `udbx4spec/docs/08-api-stable-surface.md`:
 - `Count()` reads the physical table row count, not cached `SmRegister.SmObjectCount`.
 - `Update(id, ...)` and `Delete(id)` return a not found error when the target object is missing.
 - Unknown update fields return a not found or constraint error; they must not be silently ignored.
+
+Point, Line, Region, Text, and CAD datasets also expose:
+
+```go
+func (d *PointDataset) ListContext(ctx context.Context, opts *QueryOptions) ([]*Feature, error)
+```
+
+The corresponding concrete dataset type has the same method shape. `List` is equivalent to calling `ListContext` with `context.Background()`. Use `ListContext` when a caller deadline or cancellation must stop SQLite iteration and geometry decoding. Cancellation maps to spatial reason `query_timeout`; malformed geometry maps to `corrupt_geometry`. Tabular listing currently exposes `List` only.
 
 ### TabularDataset
 

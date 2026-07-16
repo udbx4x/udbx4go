@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added `DataSource.QuerySpatial` and `GetSpatialQueryCapability` for Point, Line, Region, and corresponding Z datasets.
+- Added closed-interval MBR queries with stable `hasMore`, required-ID, strategy, and six-reason-code semantics from `udbx4spec`.
+- Added verified RTree querying, DataSource-lifetime envelope caches, and explicit bounded-sample degradation when the current cache policy cannot admit a complete cache.
+- Added context-aware `ListContext` methods for spatial, Text, and CAD datasets.
+- Added Viewer viewport coordination, offscreen selection retention, real-sample automatic tests, the envelope-cache PoC, and transactional macOS benchmark tooling.
+
+### Changed
+
+- The current envelope-cache defaults are 32 MiB per dataset and 64 MiB per open DataSource. They are measured SDK resource policies, not UDBX format limits.
+- Viewer query concurrency remains 1 until packaged runtime measurements for candidates 2 and 3 pass the acceptance gates.
+
+### Known limitations
+
+- Text and CAD viewport queries, coordinate projection, and exact topology predicates are not implemented; Text and CAD keep bounded preview/list behavior.
+- SDK, Viewer, frontend, specification, and non-GUI benchmark workflow gates are automated. Packaged macOS runtime rounds and manual interaction acceptance remain pending because the acceptance machine was locked.
+
 ## [0.1.0] - 2026-06-26
 
 ### Added

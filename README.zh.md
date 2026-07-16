@@ -14,6 +14,7 @@ UDBX（通用空间数据库扩展）读写库的 Go 语言实现。UDBX 是一�
 - ✅ 核心 UDBX 读写能力已实现，包含 Text / GeoText 与 CAD 最小 GeoHeader 基线。
 - ✅ 已实现数据集类型：点、线、面、三维点、三维线、三维面、属性表、文本、CAD。
 - ✅ `TextDataset` 支持最小 GeoText 读写 CRUD；`CadDataset` 支持最小 GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion`。
+- ✅ Point、Line、Region 及对应 Z 类型支持带 context 的视口 MBR 查询，并提供 RTree、包络缓存和有界采样三种策略。
 - ✅ 14 种字段类型，支持正确的类型映射
 - ✅ 类 GeoJSON 几何模型
 - ✅ 流式和批量操作
@@ -74,6 +75,25 @@ func main() {
     }
 }
 ```
+
+### 视口空间查询
+
+`DataSource.QuerySpatial` 为地图视口返回稳定、有上界的要素集合：
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+
+result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
+    Bounds: udbx4go.BoundingBox{MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0},
+    Limit: 1000,
+    RequiredIDs: []int{12345},
+})
+```
+
+MBR 相交采用闭区间。`HasMore` 只描述普通视口命中对象；必含 ID 会去重，不占用 `Limit`，并可让视口外的当前选中对象保留在结果中。返回策略为 `rtree`、`envelope_cache` 或 `bounded_sample`。包络缓存只在当前 `DataSource` 生命周期存在，调用 `Close` 时释放。
+
+当前单数据集 32 MiB、单个 `DataSource` 合计 64 MiB 是经过测量的缓存资源默认策略，不是 UDBX 格式限制。视口查询当前覆盖 Point、Line、Region、PointZ、LineZ 和 RegionZ；Text 与 CAD 保持有上界的预览/列表行为。可运行完整程序、六个原因码和 `ListContext` 取消语义见 [API.zh.md](./API.zh.md#视口空间查询)。
 
 ### 创建新的 UDBX 文件
 
