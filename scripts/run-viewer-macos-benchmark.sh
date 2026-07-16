@@ -4,15 +4,17 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+source "$script_dir/viewer-benchmark-rss.sh"
 sample_data="$repo_root/../data/SampleData.udbx"
 henan_data="$repo_root/../data/henan.udbx"
 output_dir="$repo_root/.benchmark-results/$(date +%Y%m%d-%H%M%S)"
 acceptance_report=""
-max_concurrent=1
+max_concurrent=""
+mock_fixtures=""
 skip_build=false
 
 usage() {
-  echo "Usage: $0 [--sample-data PATH] [--henan-data PATH] [--output-dir PATH] [--max-concurrent 1|2|3] [--acceptance-report ABSOLUTE_PATH] [--skip-build]"
+  echo "Usage: $0 [--sample-data PATH] [--henan-data PATH] [--output-dir PATH] [--max-concurrent 1|2|3] [--acceptance-report ABSOLUTE_PATH] [--skip-build] [--mock-fixtures DIR]"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -22,50 +24,97 @@ while [[ $# -gt 0 ]]; do
     --output-dir) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; output_dir="$2"; shift 2 ;;
     --max-concurrent) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; max_concurrent="$2"; shift 2 ;;
     --acceptance-report) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; acceptance_report="$2"; shift 2 ;;
+    --mock-fixtures) [[ $# -ge 2 ]] || { usage >&2; exit 2; }; mock_fixtures="$2"; shift 2 ;;
     --skip-build) skip_build=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
 done
 
-[[ "$max_concurrent" =~ ^[123]$ ]] || { echo "--max-concurrent must be 1, 2 or 3" >&2; exit 2; }
+[[ -z "$max_concurrent" || "$max_concurrent" =~ ^[123]$ ]] || { echo "--max-concurrent must be 1, 2 or 3" >&2; exit 2; }
 if [[ -n "$acceptance_report" && "$acceptance_report" != /* ]]; then
   echo "--acceptance-report must be an absolute path" >&2
   exit 2
 fi
+if [[ -z "$max_concurrent" && "$skip_build" == true ]]; then
+  echo "--skip-build is only valid with --max-concurrent single-suite mode" >&2
+  exit 2
+fi
 
-for command_name in wails jq node ps awk shasum stat sw_vers sysctl; do
+for command_name in jq node shasum awk; do
   command -v "$command_name" >/dev/null || { echo "Missing required command: $command_name" >&2; exit 2; }
 done
 
+output_dir="$(mkdir -p "$output_dir" && cd "$output_dir" && pwd)"
+viewer_dir="$repo_root/cmd/udbx4go-viewer"
+policy_file="$viewer_dir/frontend/src/spatial/viewportQueryPolicy.ts"
+mock_runner=""
+
+if [[ -n "$mock_fixtures" ]]; then
+  mock_fixtures="$(cd "$mock_fixtures" && pwd)"
+  mock_runner="$mock_fixtures/mock-runner.mjs"
+  sample_data="$mock_fixtures/SampleData.udbx"
+  henan_data="$mock_fixtures/henan.udbx"
+  [[ -f "$mock_runner" ]] || { echo "Mock runner not found: $mock_runner" >&2; exit 2; }
+  mock_workspace="$output_dir/mock-workspace"
+  policy_file="$mock_workspace/frontend/src/spatial/viewportQueryPolicy.ts"
+  mkdir -p "$(dirname "$policy_file")"
+  cp "$viewer_dir/frontend/src/spatial/viewportQueryPolicy.ts" "$policy_file"
+  app_path="$mock_workspace/build/bin/udbx4go-viewer-wails.app"
+else
+  for command_name in wails ps sw_vers sysctl; do
+    command -v "$command_name" >/dev/null || { echo "Missing required command: $command_name" >&2; exit 2; }
+  done
+  app_path="$viewer_dir/build/bin/udbx4go-viewer-wails.app"
+fi
+executable="$app_path/Contents/MacOS/udbx4go-viewer-wails"
+
 sample_data="$(cd "$(dirname "$sample_data")" && pwd)/$(basename "$sample_data")"
 henan_data="$(cd "$(dirname "$henan_data")" && pwd)/$(basename "$henan_data")"
-output_dir="$(mkdir -p "$output_dir" && cd "$output_dir" && pwd)"
 for sample_path in "$sample_data" "$henan_data"; do
   [[ -f "$sample_path" ]] || { echo "Sample file not found: $sample_path" >&2; exit 2; }
 done
 
-config_dir="$output_dir/configs"
-raw_dir="$output_dir/raw"
-mkdir -p "$config_dir" "$raw_dir"
-viewer_dir="$repo_root/cmd/udbx4go-viewer"
-app_path="$viewer_dir/build/bin/udbx4go-viewer-wails.app"
-executable="$app_path/Contents/MacOS/udbx4go-viewer-wails"
+file_size() {
+  stat -f %z "$1" 2>/dev/null || stat -c %s "$1"
+}
 
-if [[ "$skip_build" != true ]]; then
+build_viewer() {
+  if [[ -n "$mock_fixtures" ]]; then
+    local build_count_file="$output_dir/mock-build-count"
+    local build_count=0 concurrency
+    [[ ! -f "$build_count_file" ]] || build_count="$(<"$build_count_file")"
+    build_count=$((build_count + 1))
+    printf '%s\n' "$build_count" > "$build_count_file"
+    concurrency="$(awk '/VIEWPORT_QUERY_MAX_CONCURRENCY/ { print $NF }' "$policy_file")"
+    mkdir -p "$(dirname "$executable")"
+    printf '#!/usr/bin/env bash\n# mock app build %s policy %s\nexit 0\n' "$build_count" "$concurrency" > "$executable"
+    chmod +x "$executable"
+    return
+  fi
   (cd "$viewer_dir" && wails build -platform darwin/universal)
-fi
-[[ -x "$executable" ]] || { echo "Viewer executable not found after build: $executable" >&2; exit 2; }
+}
 
+if [[ -n "$mock_fixtures" ]]; then
+  macos_version="mock-macos-1"
+  cpu="mock-cpu"
+  memory_bytes=17179869184
+else
+  macos_version="$(sw_vers -productVersion)"
+  cpu="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || sysctl -n hw.model)"
+  memory_bytes="$(sysctl -n hw.memsize)"
+fi
 git_commit="$(git -C "$repo_root" rev-parse HEAD)"
-app_sha="$(shasum -a 256 "$executable" | awk '{print $1}')"
-macos_version="$(sw_vers -productVersion)"
-cpu="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || sysctl -n hw.model)"
-memory_bytes="$(sysctl -n hw.memsize)"
 sample_sha="$(shasum -a 256 "$sample_data" | awk '{print $1}')"
 henan_sha="$(shasum -a 256 "$henan_data" | awk '{print $1}')"
-sample_size="$(stat -f %z "$sample_data")"
-henan_size="$(stat -f %z "$henan_data")"
+sample_size="$(file_size "$sample_data")"
+henan_size="$(file_size "$henan_data")"
+app_sha=""
+
+refresh_app_identity() {
+  [[ -x "$executable" ]] || { echo "Viewer executable not found after build: $executable" >&2; exit 2; }
+  app_sha="$(shasum -a 256 "$executable" | awk '{print $1}')"
+}
 
 process_tree_rss() {
   local root_pid="$1"
@@ -98,13 +147,14 @@ write_failed_result() {
 }
 
 run_iteration() {
-  local scenario_name="$1" file_path="$2" layers_json="$3" selection_dataset="$4"
-  local selection_page="$5" viewport_steps_json="$6" temperature="$7" iteration="$8"
+  local suite_dir="$1" concurrency="$2" scenario_name="$3" file_path="$4" layers_json="$5"
+  local selection_dataset="$6" selection_page="$7" viewport_steps_json="$8" temperature="$9" iteration="${10}"
+  local config_dir="$suite_dir/configs" raw_dir="$suite_dir/raw"
   local run_id="${scenario_name}-${temperature}-${iteration}"
   local config_path="$config_dir/${run_id}.json" result_path="$raw_dir/${run_id}.json"
 
   jq -n --arg runId "$run_id" --arg outputPath "$result_path" --arg temperature "$temperature" \
-    --argjson maxConcurrentQueries "$max_concurrent" --arg name "$scenario_name" \
+    --argjson maxConcurrentQueries "$concurrency" --arg name "$scenario_name" \
     --arg filePath "$file_path" --argjson layers "$layers_json" \
     --arg datasetName "$selection_dataset" --argjson page "$selection_page" \
     --argjson viewportSteps "$viewport_steps_json" \
@@ -113,31 +163,36 @@ run_iteration() {
       layers:$layers,selection:{datasetName:$datasetName,page:$page,rowIndex:0},viewportSteps:$viewportSteps}}' \
     > "$config_path"
 
-  "$executable" --benchmark-config "$config_path" > "$output_dir/${run_id}.log" 2>&1 &
-  local app_pid=$! peak_rss=0 rss_start=0 rss_end=0
-  local started_seconds=$SECONDS
-  while kill -0 "$app_pid" 2>/dev/null; do
-    local current_rss
-    current_rss="$(process_tree_rss "$app_pid")"
-    if [[ "$current_rss" =~ ^[0-9]+$ ]] && (( current_rss > 0 )); then
-      if (( SECONDS - started_seconds < 2 || rss_start == 0 )); then
-        rss_start="$current_rss"
+  local peak_rss=0 rss_start=0 rss_end=0
+  if [[ -n "$mock_fixtures" ]]; then
+    node "$mock_runner" "$config_path"
+    case "$concurrency" in
+      1) peak_rss=200000 ;;
+      2) peak_rss=205000 ;;
+      3) peak_rss=230000 ;;
+    esac
+    rss_start=180000
+    rss_end=185000
+  else
+    "$executable" --benchmark-config "$config_path" > "$suite_dir/${run_id}.log" 2>&1 &
+    local app_pid=$! started_seconds=$SECONDS
+    while kill -0 "$app_pid" 2>/dev/null; do
+      local current_rss elapsed
+      current_rss="$(process_tree_rss "$app_pid")"
+      elapsed=$((SECONDS - started_seconds))
+      record_rss_sample "$current_rss" "$elapsed"
+      if (( elapsed >= 120 )); then
+        kill "$app_pid" 2>/dev/null || true
+        wait "$app_pid" 2>/dev/null || true
+        write_failed_result "$result_path" "$run_id" "$scenario_name" "benchmark timed out after 120 seconds"
+        break
       fi
-      rss_end="$current_rss"
-      (( current_rss > peak_rss )) && peak_rss="$current_rss"
-    fi
-    if (( SECONDS - started_seconds >= 120 )); then
-      kill "$app_pid" 2>/dev/null || true
-      wait "$app_pid" 2>/dev/null || true
-      write_failed_result "$result_path" "$run_id" "$scenario_name" "benchmark timed out after 120 seconds"
-      break
-    fi
-    sleep 0.1
-  done
-
-  local exit_code=0
-  wait "$app_pid" 2>/dev/null || exit_code=$?
-  [[ -f "$result_path" ]] || write_failed_result "$result_path" "$run_id" "$scenario_name" "viewer exited with code $exit_code before writing a result"
+      sleep 0.1
+    done
+    local exit_code=0
+    wait "$app_pid" 2>/dev/null || exit_code=$?
+    [[ -f "$result_path" ]] || write_failed_result "$result_path" "$run_id" "$scenario_name" "viewer exited with code $exit_code before writing a result"
+  fi
 
   local input_sha="$sample_sha" input_size="$sample_size"
   if [[ "$file_path" == "$henan_data" ]]; then input_sha="$henan_sha"; input_size="$henan_size"; fi
@@ -147,7 +202,7 @@ run_iteration() {
   jq --argjson iteration "$iteration" --arg temperature "$temperature" \
     --argjson peakRssKiB "$peak_rss" --argjson rssStartKiB "$rss_start" --argjson rssEndKiB "$rss_end" \
     --arg memoryCaptureError "$memory_error" --arg appPath "$app_path" \
-    --argjson maxConcurrentQueries "$max_concurrent" --arg gitCommit "$git_commit" --arg appSha256 "$app_sha" \
+    --argjson maxConcurrentQueries "$concurrency" --arg gitCommit "$git_commit" --arg appSha256 "$app_sha" \
     --arg macOSVersion "$macos_version" --arg cpu "$cpu" --argjson memoryBytes "$memory_bytes" \
     --arg samplePath "$file_path" --arg sampleSha256 "$input_sha" --argjson sampleSizeBytes "$input_size" \
     '.+{iteration:$iteration,temperature:$temperature,peakRssKiB:$peakRssKiB,
@@ -157,7 +212,6 @@ run_iteration() {
       samplePath:$samplePath,sampleSha256:$sampleSha256,sampleSizeBytes:$sampleSizeBytes}}' \
     "$result_path" > "$result_path.enriched"
   mv "$result_path.enriched" "$result_path"
-  echo "[$scenario_name][$temperature] $iteration: $(jq -r '.status' "$result_path"), peak RSS ${peak_rss} KiB"
 }
 
 weibo_steps='[
@@ -182,15 +236,55 @@ sample_steps='[
  {"bounds":{"minX":116.4,"minY":39.4,"maxX":117.0,"maxY":39.9},"expectedStrategy":"envelope_cache","removeLayers":["BaseMap_P"]}
 ]'
 
-for temperature in cold warm; do
-  for iteration in 1 2 3 4 5; do
-    run_iteration "henan-weibo-rtree-pan-zoom" "$henan_data" '["weibo"]' "weibo" 1 "$weibo_steps" "$temperature" "$iteration"
-    run_iteration "henan-county-envelope-selection" "$henan_data" '["县级行政区划"]' "县级行政区划" 2 "$county_steps" "$temperature" "$iteration"
-    run_iteration "sampledata-multilayer-viewport" "$sample_data" '["BaseMap_P","BaseMap_L","BaseMap_R","CADDT"]' "BaseMap_R" 1 "$sample_steps" "$temperature" "$iteration"
+run_suite() {
+  local concurrency="$1" suite_dir="$2"
+  shift 2
+  mkdir -p "$suite_dir/configs" "$suite_dir/raw"
+  for temperature in cold warm; do
+    for iteration in 1 2 3 4 5; do
+      run_iteration "$suite_dir" "$concurrency" "henan-weibo-rtree-pan-zoom" "$henan_data" '["weibo"]' "weibo" 1 "$weibo_steps" "$temperature" "$iteration"
+      run_iteration "$suite_dir" "$concurrency" "henan-county-envelope-selection" "$henan_data" '["县级行政区划"]' "县级行政区划" 2 "$county_steps" "$temperature" "$iteration"
+      run_iteration "$suite_dir" "$concurrency" "sampledata-multilayer-viewport" "$sample_data" '["BaseMap_P","BaseMap_L","BaseMap_R","CADDT"]' "BaseMap_R" 1 "$sample_steps" "$temperature" "$iteration"
+    done
   done
+  node "$script_dir/summarize-viewer-benchmark.mjs" \
+    --input-dir "$suite_dir/raw" --json-out "$suite_dir/summary.json" --markdown-out "$suite_dir/summary.md" "$@"
+}
+
+if [[ -n "$max_concurrent" ]]; then
+  if [[ "$skip_build" != true ]]; then build_viewer; fi
+  refresh_app_identity
+  summary_args=()
+  [[ -z "$acceptance_report" ]] || summary_args+=(--acceptance-report "$acceptance_report")
+  run_suite "$max_concurrent" "$output_dir" "${summary_args[@]}"
+  echo "Benchmark report: $output_dir/summary.md"
+  exit 0
+fi
+
+node "$script_dir/set-viewer-concurrency.mjs" --file "$policy_file" --value 1
+build_viewer
+refresh_app_identity
+mkdir -p "$output_dir/candidates"
+for concurrency in 1 2 3; do
+  run_suite "$concurrency" "$output_dir/candidates/concurrency-$concurrency"
 done
 
-summary_args=(--input-dir "$raw_dir" --json-out "$output_dir/summary.json" --markdown-out "$output_dir/summary.md")
-[[ -z "$acceptance_report" ]] || summary_args+=(--acceptance-report "$acceptance_report")
-node "$script_dir/summarize-viewer-benchmark.mjs" "${summary_args[@]}"
-echo "Benchmark report: $output_dir/summary.md"
+node "$script_dir/summarize-viewer-benchmark.mjs" \
+  --select-baseline "$output_dir/candidates/concurrency-1/summary.json" \
+  --select-candidate-2 "$output_dir/candidates/concurrency-2/summary.json" \
+  --select-candidate-3 "$output_dir/candidates/concurrency-3/summary.json" \
+  --json-out "$output_dir/selection.json" --markdown-out "$output_dir/selection.md"
+selected_concurrency="$(jq -r '.selected' "$output_dir/selection.json")"
+
+node "$script_dir/set-viewer-concurrency.mjs" --file "$policy_file" --value "$selected_concurrency"
+build_viewer
+refresh_app_identity
+final_args=(
+  --selection-json "$output_dir/selection.json"
+  --candidate-summary-1 "$output_dir/candidates/concurrency-1/summary.json"
+  --candidate-summary-2 "$output_dir/candidates/concurrency-2/summary.json"
+  --candidate-summary-3 "$output_dir/candidates/concurrency-3/summary.json"
+)
+[[ -z "$acceptance_report" ]] || final_args+=(--acceptance-report "$acceptance_report")
+run_suite "$selected_concurrency" "$output_dir/final" "${final_args[@]}"
+echo "Benchmark report: $output_dir/final/summary.md"

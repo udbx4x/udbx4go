@@ -1,4 +1,5 @@
 import type { BoundingBox, SpatialPreview } from '../types'
+import { VIEWPORT_QUERY_MAX_CONCURRENCY } from './viewportQueryPolicy'
 
 export interface ViewportQueryLayer {
   datasetName: string
@@ -47,7 +48,7 @@ export interface ViewportQueryMetrics {
 
 const DEFAULT_DEBOUNCE_MS = 250
 const DEFAULT_BUFFER_RATIO = 0.15
-export const VIEWPORT_QUERY_MAX_CONCURRENCY = 1
+export { VIEWPORT_QUERY_MAX_CONCURRENCY } from './viewportQueryPolicy'
 
 export class ViewportQueryCoordinator {
   private readonly layerStates = new Map<string, LayerRequestState>()
@@ -59,6 +60,7 @@ export class ViewportQueryCoordinator {
   private maxObservedConcurrentQueries = 0
   private pendingPeak = 0
   private staleResultsDiscarded = 0
+  private staleResultApplied = false
 
   constructor(
     private readonly dependencies: CoordinatorDependencies,
@@ -74,7 +76,7 @@ export class ViewportQueryCoordinator {
       activeQueries: this.activeJobs,
       pendingQueries: this.pendingCount(),
       staleResultsDiscarded: this.staleResultsDiscarded,
-      staleResultApplied: false,
+      staleResultApplied: this.staleResultApplied,
     }
   }
 
@@ -82,6 +84,7 @@ export class ViewportQueryCoordinator {
     this.maxObservedConcurrentQueries = this.activeJobs
     this.pendingPeak = this.pendingCount()
     this.staleResultsDiscarded = 0
+    this.staleResultApplied = false
   }
 
   scheduleViewport(
@@ -197,6 +200,9 @@ export class ViewportQueryCoordinator {
       if (this.canApply(state, job, preview)) {
         state.appliedVersion = job.version
         this.dependencies.applyPreview(job.datasetName, preview)
+        if (!this.canApply(state, job, preview)) {
+          this.staleResultApplied = true
+        }
       } else {
         this.staleResultsDiscarded += 1
       }

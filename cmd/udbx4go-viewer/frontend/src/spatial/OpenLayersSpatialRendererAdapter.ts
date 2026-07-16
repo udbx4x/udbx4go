@@ -242,6 +242,18 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     return count
   }
 
+  hasFeature(datasetName: string, featureID: number): boolean {
+    return Boolean(this.sources.get(datasetName)?.getFeatures().some((feature) =>
+      Number(feature.get('featureID')) === featureID,
+    ))
+  }
+
+  isSelectionHighlighted(selection: SelectedMapFeature): boolean {
+    return this.selectedFeature?.datasetName === selection.datasetName
+      && this.selectedFeature.featureID === selection.featureID
+      && this.hasFeature(selection.datasetName, selection.featureID)
+  }
+
   private emitViewport(): void {
     const viewport = this.getViewport()
     if (!viewport) {

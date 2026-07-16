@@ -15,6 +15,7 @@ export type SpatialQueryStrategy = 'rtree' | 'envelope_cache' | 'bounded_sample'
 export interface BenchmarkViewportStep {
   bounds: BoundingBox
   expectedStrategy: SpatialQueryStrategy
+  geometryKind?: 'point' | 'line' | 'polygon'
   hideLayers?: string[]
   showLayers?: string[]
   removeLayers?: string[]
@@ -81,6 +82,7 @@ export interface BenchmarkViewportResult {
   finalFeatureCount: number
   blankRender: boolean
   strategies?: string[]
+  featureIDs: number[]
 }
 
 export interface BenchmarkCoordinatorMetrics {
@@ -102,8 +104,7 @@ export interface BenchmarkDependencies {
   getFeatureAttributes: (datasetName: string, featureID: number) => Promise<FeatureAttributes>
   setLayer: (layer: MapLayerState) => void
   fitAllVisibleLayers: () => void
-  setSelection: (selection: SelectedMapFeature) => void
-  fitFeature: (datasetName: string, featureID: number) => void
+  setSelection: (selection: SelectedMapFeature) => Promise<boolean>
   runViewportStep: (step: BenchmarkViewportStep, requiredIDs: number[]) => Promise<BenchmarkViewportResult>
   getCoordinatorMetrics: () => BenchmarkCoordinatorMetrics
   resetCoordinatorMetrics?: () => void

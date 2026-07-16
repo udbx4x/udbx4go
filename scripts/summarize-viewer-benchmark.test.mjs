@@ -7,9 +7,15 @@ const scenarioNames = [
   'henan-county-envelope-selection',
   'sampledata-multilayer-viewport',
 ]
+const stepCounts = new Map([
+  [scenarioNames[0], 8],
+  [scenarioNames[1], 3],
+  [scenarioNames[2], 4],
+])
 
 function run(scenario, iteration, temperature, overrides = {}) {
   const base = temperature === 'cold' ? 30 : 10
+  const stepCount = stepCounts.get(scenario)
   return {
     runId: `${scenario}-${temperature}-${iteration}`,
     status: 'passed',
@@ -20,8 +26,8 @@ function run(scenario, iteration, temperature, overrides = {}) {
       loadLayersMs: base + 2,
       fitVisibleLayersMs: 2,
       selectAndFitMs: 5,
-      backendQueryMs: [base, base + iteration],
-      moveendToRenderMs: [base + 40, base + 50 + iteration],
+      backendQueryMs: Array.from({ length: stepCount }, (_, index) => base + index + iteration),
+      moveendToRenderMs: Array.from({ length: stepCount }, (_, index) => base + 40 + index + iteration),
       maxConcurrentQueries: 1,
       pendingPeak: 1,
       pendingFinal: 0,
@@ -68,8 +74,8 @@ test('summarizeRuns reports complete cold/warm P50/P95, RSS and gates', () => {
   assert.equal(summary.maxConcurrentQueries, 1)
   assert.equal(summary.scenarios.length, 3)
   assert.equal(summary.scenarios[0].runs.length, 10)
-  assert.equal(summary.scenarios[0].warm.backendQueryMs.p50, 10)
-  assert.equal(summary.scenarios[0].warm.backendQueryMs.p95, 15)
+  assert.equal(summary.scenarios[0].warm.backendQueryMs.p50, 16)
+  assert.equal(summary.scenarios[0].warm.backendQueryMs.p95, 21)
   assert.equal(summary.scenarios[0].peakRssKiB, 200005)
   assert.equal(summary.scenarios[0].gates.pendingDrained, true)
   assert.equal(summary.scenarios[0].gates.noStaleApplied, true)
@@ -87,10 +93,10 @@ test('summarizeRuns reports complete cold/warm P50/P95, RSS and gates', () => {
 
 test('summarizeRuns rejects a missing run, scenario or RSS sample', () => {
   const runs = completeRuns()
-  assert.throws(() => summarizeRuns(runs.slice(1)), /exactly 10 runs|cold runs/)
+  assert.throws(() => summarizeRuns(runs.slice(1)), /exactly 30 runs|exactly 10 runs|cold runs/)
   assert.throws(
     () => summarizeRuns(runs.filter((item) => item.scenario !== scenarioNames[2])),
-    /required scenario/,
+    /exactly 30 runs|required scenario/,
   )
   const missingRss = completeRuns()
   missingRss[0].peakRssKiB = 0
@@ -98,29 +104,96 @@ test('summarizeRuns rejects a missing run, scenario or RSS sample', () => {
   assert.throws(() => summarizeRuns(missingRss), /RSS/)
 })
 
-test('summarizeRuns marks errors, stale application, blank render and pending growth failed', () => {
+test('summarizeRuns rejects duplicate scenario temperature iterations', () => {
+  const runs = completeRuns()
+  runs[1].iteration = runs[0].iteration
+
+  assert.throws(() => summarizeRuns(runs), /unique|iterations 1 through 5/)
+})
+
+test('summarizeRuns rejects mixed build, host, sample and concurrency identities', () => {
+  const mutations = [
+    ['Git commit', (run) => { run.environment.gitCommit = 'other-commit' }],
+    ['app path', (run) => { run.appPath = '/tmp/other.app' }],
+    ['app SHA256', (run) => { run.environment.appSha256 = 'other-app' }],
+    ['macOS', (run) => { run.environment.macOSVersion = 'other-macos' }],
+    ['CPU', (run) => { run.environment.cpu = 'other-cpu' }],
+    ['memory', (run) => { run.environment.memoryBytes += 1 }],
+    ['sample SHA256', (run) => { run.environment.sampleSha256 = 'other-sample' }],
+    ['maxConcurrentQueries', (run) => { run.maxConcurrentQueries = 2 }],
+  ]
+
+  for (const [name, mutate] of mutations) {
+    const runs = completeRuns()
+    mutate(runs[1])
+    assert.throws(() => summarizeRuns(runs), new RegExp(name, 'i'), name)
+  }
+})
+
+test('summarizeRuns rejects missing or invalid per-run metrics and errors', () => {
+  const mutations = [
+    ['rssStartKiB', (run) => { delete run.rssStartKiB }, /RSS/],
+    ['rssEndKiB', (run) => { run.rssEndKiB = Number.NaN }, /RSS/],
+    ['backendQueryMs', (run) => { delete run.metrics.backendQueryMs }, /backendQueryMs/],
+    ['backendQueryMs finite', (run) => { run.metrics.backendQueryMs = [Number.NaN] }, /backendQueryMs/],
+    ['moveendToRenderMs', (run) => { run.metrics.moveendToRenderMs = [] }, /moveendToRenderMs/],
+    ['maxConcurrentQueries', (run) => { delete run.metrics.maxConcurrentQueries }, /maxConcurrentQueries/],
+    ['pendingPeak', (run) => { delete run.metrics.pendingPeak }, /pendingPeak/],
+    ['pendingFinal', (run) => { delete run.metrics.pendingFinal }, /pendingFinal/],
+    ['staleResultApplied', (run) => { delete run.metrics.staleResultApplied }, /staleResultApplied/],
+    ['finalFeatureCount', (run) => { delete run.metrics.finalFeatureCount }, /finalFeatureCount/],
+    ['error', (run) => { run.error = 'query failed' }, /error/],
+  ]
+
+  for (const [name, mutate, expected] of mutations) {
+    const runs = completeRuns()
+    mutate(runs[0])
+    assert.throws(() => summarizeRuns(runs), expected, name)
+  }
+})
+
+test('summarizeRuns rejects null runs and numeric strings', () => {
+  const nullRun = completeRuns()
+  nullRun[0] = null
+  assert.throws(() => summarizeRuns(nullRun), /object|environment/)
+
+  const stringRSS = completeRuns()
+  stringRSS[0].rssStartKiB = '180000'
+  assert.throws(() => summarizeRuns(stringRSS), /RSS/)
+
+  const stringMetric = completeRuns()
+  stringMetric[0].metrics.pendingFinal = '0'
+  assert.throws(() => summarizeRuns(stringMetric), /pendingFinal/)
+})
+
+test('summarizeRuns rejects failed or errored runs', () => {
   const runs = completeRuns()
   runs[0].status = 'failed'
   runs[0].error = 'query failed'
+
+  assert.throws(() => summarizeRuns(runs), /status must be passed|error/)
+})
+
+test('summarizeRuns marks stale application, blank render and pending growth failed', () => {
+  const runs = completeRuns()
   runs[1].metrics.staleResultApplied = true
   runs[2].metrics.blankRenderCount = 1
   runs[3].metrics.pendingFinal = 2
 
   const summary = summarizeRuns(runs)
   assert.equal(summary.status, 'failed')
-  assert.equal(summary.failures.length, 1)
+  assert.equal(summary.failures.length, 0)
   assert.equal(summary.gates.noStaleApplied, false)
   assert.equal(summary.gates.noBlankRender, false)
   assert.equal(summary.gates.pendingDrained, false)
-  assert.match(renderMarkdown(summary), /query failed/)
 })
 
 test('summarizeRuns enforces RTree and end-to-end P95 gates', () => {
   const runs = completeRuns()
   const weiboWarm = runs.find((item) => item.scenario === scenarioNames[0] && item.temperature === 'warm')
-  weiboWarm.metrics.backendQueryMs = [101]
+  weiboWarm.metrics.backendQueryMs = Array(8).fill(101)
   const countyWarm = runs.find((item) => item.scenario === scenarioNames[1] && item.temperature === 'warm')
-  countyWarm.metrics.moveendToRenderMs = [301]
+  countyWarm.metrics.moveendToRenderMs = Array(3).fill(301)
 
   const summary = summarizeRuns(runs)
   assert.equal(summary.status, 'failed')
@@ -169,4 +242,37 @@ test('selectConcurrency rejects candidates from a different build or sample set'
     () => selectConcurrency(summary(1), [summary(2, { samples: [{ path: '/data/henan.udbx', sha256: 'other-sample', sizeBytes: 123 }] }), summary(3)]),
     /same samples/,
   )
+  assert.throws(
+    () => selectConcurrency(summary(1), [summary(2, { environment: { ...identity.environment, cpu: 'other-cpu' } }), summary(3)]),
+    /same host/,
+  )
+})
+
+test('renderMarkdown records candidate comparison and a separate final rerun', () => {
+  const candidateRuns = (concurrency, latencyOffset, appSha256 = 'candidate-app') => completeRuns().map((item) => ({
+    ...item,
+    maxConcurrentQueries: concurrency,
+    metrics: {
+      ...item.metrics,
+      maxConcurrentQueries: Math.min(concurrency, item.scenario.includes('sampledata') ? 3 : 1),
+      moveendToRenderMs: item.metrics.moveendToRenderMs.map((value) => value + latencyOffset),
+    },
+    environment: { ...item.environment, appSha256 },
+  }))
+  const candidates = [
+    summarizeRuns(candidateRuns(1, 80)),
+    summarizeRuns(candidateRuns(2, 60)),
+    summarizeRuns(candidateRuns(3, 50)),
+  ]
+  const selection = selectConcurrency(candidates[0], candidates.slice(1))
+  const finalSummary = summarizeRuns(candidateRuns(selection.selected, 60, 'final-app'))
+
+  const markdown = renderMarkdown(finalSummary, { candidates, selection, finalRerun: true })
+
+  assert.match(markdown, /并发候选比较/)
+  assert.match(markdown, /\| 1 \|/)
+  assert.match(markdown, /\| 2 \|/)
+  assert.match(markdown, /\| 3 \|/)
+  assert.match(markdown, new RegExp(`自动选择.*${selection.selected}`))
+  assert.match(markdown, /最终重建后独立重跑.*PASS/)
 })

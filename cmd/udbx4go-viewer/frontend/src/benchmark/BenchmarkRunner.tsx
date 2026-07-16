@@ -31,6 +31,8 @@ interface BenchmarkMapAdapter {
   setSelection(selection: SelectedMapFeature): void
   fitFeature(datasetName: string, featureID: number): void
   fitBounds(bounds: BoundingBox, geometryKind: 'point' | 'line' | 'polygon'): void
+  hasFeature(datasetName: string, featureID: number): boolean
+  isSelectionHighlighted(selection: SelectedMapFeature): boolean
   setLayerVisible(datasetName: string, visible: boolean): void
   removeLayer(datasetName: string): void
   onViewportChange(handler: (viewport: BoundingBox) => void): () => void
@@ -146,6 +148,10 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
       }
       window.clearTimeout(measurement.timeoutID)
       const finalFeatureCount = adapter.getVisibleFeatureCount()
+      const selectionLayer = layerStates.get(config.scenario.selection.datasetName)
+      const featureIDs = (selectionLayer?.preview?.features ?? [])
+        .map((feature) => feature.id)
+        .filter((featureID) => adapter.hasFeature(config.scenario.selection.datasetName, featureID))
       stepMeasurement = null
       measurement.resolve({
         backendQueryMs: measurement.backendQueryMS,
@@ -153,6 +159,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         finalFeatureCount,
         blankRender: finalFeatureCount === 0,
         strategies: measurement.strategies,
+        featureIDs,
       })
     }
 
@@ -237,8 +244,11 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         style: layer.style ?? createDefaultLayerStyle(layer.kind),
       }),
       fitAllVisibleLayers: () => adapter.fitAllVisibleLayers(),
-      setSelection: (selection) => adapter.setSelection(selection),
-      fitFeature: (datasetName, featureID) => adapter.fitFeature(datasetName, featureID),
+      setSelection: async (selection) => {
+        adapter.setSelection(selection)
+        await adapter.waitForRenderComplete()
+        return adapter.isSelectionHighlighted(selection)
+      },
       runViewportStep: (step, requiredIDs) => {
         currentRequiredIDs = requiredIDs
         for (const datasetName of step.hideLayers ?? []) {
@@ -283,7 +293,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
             timeoutID,
             viewportObserved: false,
           }
-          adapter.fitBounds(step.bounds, geometryKind(fitLayer.kind))
+          adapter.fitBounds(step.bounds, step.geometryKind ?? geometryKind(fitLayer.kind))
           if (!stepMeasurement.viewportObserved) {
             handleViewport(adapter.getViewport() ?? step.bounds)
           }

@@ -87,20 +87,25 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
         datasetName,
         id: featureID,
         geometryType: 'MultiPolygon',
+        bbox: { minX: 112, minY: 32, maxX: 113, maxY: 33 },
         properties: { Name: '示例县' },
       }
     },
     setLayer: (layer) => calls.push(`setLayer:${layer.datasetName}`),
     fitAllVisibleLayers: () => calls.push('fitAll'),
-    setSelection: (selection) => calls.push(`setSelection:${selection.datasetName}:${selection.featureID}`),
-    fitFeature: (datasetName, featureID) => calls.push(`fitFeature:${datasetName}:${featureID}`),
+    setSelection: async (selection) => {
+      calls.push(`setSelection:${selection.datasetName}:${selection.featureID}`)
+      return true
+    },
     runViewportStep: async (step, requiredIDs) => {
-      calls.push(`viewport:${step.expectedStrategy}:${requiredIDs.join(',')}:${step.hideLayers ? 'action' : 'plain'}`)
+      const location = step.geometryKind ? `:${step.bounds.minX}:${step.geometryKind}` : ''
+      calls.push(`viewport:${step.expectedStrategy}:${requiredIDs.join(',')}:${step.hideLayers ? 'action' : 'plain'}${location}`)
       return {
         backendQueryMs: [8],
         moveendToRenderMs: 24,
         finalFeatureCount: 164,
         blankRender: false,
+        featureIDs: [101],
       }
     },
     getCoordinatorMetrics: () => ({
@@ -128,8 +133,8 @@ describe('runBenchmarkScenario', () => {
       'fitAll',
       'page:县级行政区划:2',
       'attributes:县级行政区划:101',
+      'viewport:envelope_cache:101:plain:112:polygon',
       'setSelection:县级行政区划:101',
-      'fitFeature:县级行政区划:101',
       'viewport:envelope_cache:101:plain',
       'viewport:envelope_cache:101:plain',
       'viewport:envelope_cache:101:action',
@@ -157,9 +162,42 @@ describe('runBenchmarkScenario', () => {
       finalFeatureCount: 1,
       blankRender: false,
       strategies: ['bounded_sample'],
+      featureIDs: [101],
     })
 
     await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow('expected strategy')
+  })
+
+  it('定位属性缺少 bbox 时失败', async () => {
+    const dependencies = createDependencies([])
+    dependencies.getFeatureAttributes = async (datasetName, featureID) => ({
+      datasetName,
+      id: featureID,
+      geometryType: 'MultiPolygon',
+      properties: {},
+    })
+
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(/bbox|定位/)
+  })
+
+  it('required ID 不在查询返回或 source 时失败', async () => {
+    const dependencies = createDependencies([])
+    dependencies.runViewportStep = async () => ({
+      backendQueryMs: [1],
+      moveendToRenderMs: 2,
+      finalFeatureCount: 1,
+      blankRender: false,
+      featureIDs: [],
+    })
+
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(/required|source|选中/)
+  })
+
+  it('设置选择后未形成高亮状态时失败', async () => {
+    const dependencies = createDependencies([])
+    dependencies.setSelection = async () => false
+
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(/高亮/)
   })
 
   it('选择行越界时停止要素查询', async () => {

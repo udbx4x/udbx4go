@@ -122,6 +122,38 @@ describe('ViewportQueryCoordinator', () => {
     expect(harness.applyPreview).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['apply 回调中 generation 改变', (harness: Harness) => {
+      harness.fileGeneration = 2
+    }],
+    ['apply 回调中 version 改变', (harness: Harness) => {
+      harness.coordinator.scheduleViewport(viewportB, [layer('points')], 1)
+    }],
+  ])('%s 时记录 staleResultApplied', async (_name, invalidateDuringApply) => {
+    const harness = createHarness()
+    harness.applyPreview.mockImplementationOnce(() => invalidateDuringApply(harness))
+    harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+
+    harness.requests[0].resolve(previewFor(harness.requests[0].job))
+    await flushPromises()
+
+    expect(harness.applyPreview).toHaveBeenCalledOnce()
+    expect(harness.coordinator.getMetrics().staleResultApplied).toBe(true)
+  })
+
+  it('正常 apply 后 staleResultApplied 保持 false，resetMetrics 会清零', async () => {
+    const harness = createHarness()
+    harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    harness.requests[0].resolve(previewFor(harness.requests[0].job))
+    await flushPromises()
+
+    expect(harness.coordinator.getMetrics().staleResultApplied).toBe(false)
+    harness.coordinator.resetMetrics()
+    expect(harness.coordinator.getMetrics().staleResultApplied).toBe(false)
+  })
+
   it('全局并发为 1，前一层完成后立即执行其他层最新 pending', async () => {
     const harness = createHarness()
 

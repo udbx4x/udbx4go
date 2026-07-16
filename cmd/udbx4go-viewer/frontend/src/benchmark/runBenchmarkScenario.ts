@@ -1,4 +1,5 @@
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
+import { featureGeometryKind, isValidBounds } from '../spatial/featureLocation'
 import type { MapLayerState } from '../types'
 import type { BenchmarkConfig, BenchmarkDependencies, BenchmarkResult } from './types'
 
@@ -70,9 +71,24 @@ export async function runBenchmarkScenario(
   if (!/^\d+$/.test(rawFeatureID) || !Number.isSafeInteger(featureID) || featureID <= 0) {
     throw new Error(`属性表 SmID 非法: ${rawFeatureID}`)
   }
-  await dependencies.getFeatureAttributes(selection.datasetName, featureID)
-  dependencies.setSelection({ datasetName: selection.datasetName, featureID })
-  dependencies.fitFeature(selection.datasetName, featureID)
+  const attributes = await dependencies.getFeatureAttributes(selection.datasetName, featureID)
+  const geometryKind = featureGeometryKind(attributes.geometryType)
+  if (!isValidBounds(attributes.bbox) || geometryKind === null) {
+    throw new Error(`选中要素缺少可定位 bbox 或 geometryType: ${selection.datasetName}/${featureID}`)
+  }
+  const selectionStep = {
+    bounds: attributes.bbox,
+    expectedStrategy: config.scenario.viewportSteps[0].expectedStrategy,
+    geometryKind,
+  }
+  const selectionResult = await dependencies.runViewportStep(selectionStep, [featureID])
+  assertExpectedStrategies(selectionStep.expectedStrategy, selectionResult.strategies)
+  if (!selectionResult.featureIDs.includes(featureID)) {
+    throw new Error(`required 选中 ID ${featureID} 不在查询返回或地图 source 中`)
+  }
+  if (!await dependencies.setSelection({ datasetName: selection.datasetName, featureID })) {
+    throw new Error(`选中 ID ${featureID} 未形成地图高亮状态`)
+  }
   const selectAndFitMs = dependencies.now() - started
 
   if (config.temperature === 'warm') {
@@ -89,10 +105,7 @@ export async function runBenchmarkScenario(
   let blankRenderCount = 0
   for (const step of config.scenario.viewportSteps) {
     const viewportResult = await dependencies.runViewportStep(step, [featureID])
-    const strategies = viewportResult.strategies ?? [step.expectedStrategy]
-    if (strategies.some((strategy) => strategy !== step.expectedStrategy)) {
-      throw new Error(`expected strategy ${step.expectedStrategy}, received ${strategies.join(', ')}`)
-    }
+    assertExpectedStrategies(step.expectedStrategy, viewportResult.strategies)
     backendQueryMs.push(...viewportResult.backendQueryMs)
     moveendToRenderMs.push(viewportResult.moveendToRenderMs)
     finalFeatureCount = viewportResult.finalFeatureCount
@@ -123,5 +136,12 @@ export async function runBenchmarkScenario(
       blankRenderCount,
     },
     error: '',
+  }
+}
+
+function assertExpectedStrategies(expectedStrategy: string, strategies: string[] | undefined): void {
+  const actual = strategies ?? [expectedStrategy]
+  if (actual.some((strategy) => strategy !== expectedStrategy)) {
+    throw new Error(`expected strategy ${expectedStrategy}, received ${actual.join(', ')}`)
   }
 }

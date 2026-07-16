@@ -77,6 +77,8 @@ function createAdapter() {
     setSelection: vi.fn(),
     fitFeature: vi.fn(),
     fitBounds: vi.fn((bounds) => viewportHandler?.(bounds)),
+    hasFeature: vi.fn().mockReturnValue(true),
+    isSelectionHighlighted: vi.fn().mockReturnValue(true),
     setLayerVisible: vi.fn(),
     removeLayer: vi.fn(),
     onViewportChange: vi.fn((handler) => {
@@ -210,7 +212,9 @@ describe('BenchmarkRunner', () => {
       finalFeatureCount: 1,
       blankRender: false,
       strategies: ['rtree'],
+      featureIDs: [7],
     })
+    expect(adapter.hasFeature).toHaveBeenCalledWith('BaseMap_P', 7)
     expect(adapter.fitBounds).toHaveBeenCalledWith(config.scenario.viewportSteps[0].bounds, 'point')
     expect(adapter.waitForRenderComplete).toHaveBeenCalledTimes(1)
   })

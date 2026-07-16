@@ -1,0 +1,1 @@
+export const VIEWPORT_QUERY_MAX_CONCURRENCY = 1
