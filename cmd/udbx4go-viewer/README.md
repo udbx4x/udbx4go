@@ -149,32 +149,51 @@ npm run build
 - 当前包络缓存默认策略是单数据集 32 MiB、当前 `DataSource` 合计 64 MiB；关闭或切换文件会释放缓存。这是当前 SDK/Viewer 资源策略，不是 UDBX 格式限制。
 - `invalid_viewport`、`spatial_index_unavailable`、`envelope_cache_budget_exceeded`、`query_timeout`、`corrupt_geometry`、`unsupported_dataset_kind` 是稳定诊断原因码。
 
-无索引包络缓存 PoC 可在 Go 仓库根目录运行。`--report` 必须使用绝对路径；脚本会执行五个规模各 20 次的隔离测量：
+无索引包络缓存 PoC 脚本会执行五个规模各 20 次的隔离测量，`--report` 必须使用绝对路径。
+
+从 `udbx4x` 工作区根目录运行时：
 
 ```bash
 cd udbx4go
-mkdir -p "$PWD/.benchmark-results"
 ./scripts/run-envelope-cache-poc.sh \
-  --report "$PWD/.benchmark-results/envelope-cache-poc-local.md"
+  --report "$(cd .. && pwd)/docs/superpowers/reports/2026-07-16-udbx-viewer-envelope-cache-poc.md"
 ```
 
-仓库决策报告见 `docs/superpowers/reports/2026-07-16-udbx-viewer-envelope-cache-poc.md`。
+从独立 `udbx4go` 仓库根目录运行时，不执行 `cd udbx4go`，并把报告写到用户选择的绝对路径：
+
+```bash
+./scripts/run-envelope-cache-poc.sh \
+  --report /absolute/path/to/envelope-cache-poc.md
+```
+
+项目级 PoC 报告只存在于 `udbx4x` 工作区的 `docs/superpowers/reports/`，不是独立 `udbx4go` 仓库内的相对文件。
 
 ## macOS 本机性能与打包验收
 
 该流程只用于当前 macOS 电脑上的可重复验收，不是 CI 门禁，也不把 `henan.udbx`、原始结果或构建产物提交到仓库。运行前需要安装 Go、Wails v2、Node.js、npm 和 `jq`；脚本还会使用 macOS 自带的 `ps`、`awk`、`shasum`、`stat`、`sw_vers` 和 `sysctl`。
 
-完整执行命令：
+从 `udbx4x` 工作区根目录运行完整验收，并将成功报告写回项目级报告路径：
 
 ```bash
 cd udbx4go
 ./scripts/run-viewer-macos-benchmark.sh \
   --sample-data /absolute/path/to/SampleData.udbx \
   --henan-data /absolute/path/to/henan.udbx \
-  --output-dir "$PWD/.benchmark-results/manual-run"
+  --output-dir "$PWD/.benchmark-results/manual-run" \
+  --acceptance-report "$(cd .. && pwd)/docs/superpowers/reports/2026-07-16-udbx-viewer-viewport-spatial-query-acceptance.md"
 ```
 
-未传入样本路径时，脚本默认读取工作区 `data/SampleData.udbx` 和 `data/henan.udbx`；未传入输出目录时，结果写入 `.benchmark-results/<timestamp>/`。默认流程会以并发 1 构建同一个 universal `.app`，在同一构建和样本上运行并发 1/2/3 候选，选择较小合格值，然后写入最终常量、重新构建并独立重跑。只有显式指定 `--max-concurrent 1|2|3` 的单套件模式才可配合 `--skip-build`。
+从独立 `udbx4go` 仓库根目录运行时，不执行 `cd udbx4go`。独立仓不包含项目级验收报告，`--acceptance-report` 必须指向用户选择的绝对路径：
+
+```bash
+./scripts/run-viewer-macos-benchmark.sh \
+  --sample-data /absolute/path/to/SampleData.udbx \
+  --henan-data /absolute/path/to/henan.udbx \
+  --output-dir "$PWD/.benchmark-results/manual-run" \
+  --acceptance-report /absolute/path/to/viewport-spatial-query-acceptance.md
+```
+
+未传入样本路径时，脚本默认读取 Go 仓库相邻的 `../data/SampleData.udbx` 和 `../data/henan.udbx`；独立仓通常没有这些相邻样本，因此应显式传入绝对样本路径。未传入输出目录时，结果写入 `.benchmark-results/<timestamp>/`。默认流程会以并发 1 构建同一个 universal `.app`，在同一构建和样本上运行并发 1/2/3 候选，选择较小合格值，然后写入最终常量、重新构建并独立重跑。只有显式指定 `--max-concurrent 1|2|3` 的单套件模式才可配合 `--skip-build`。
 
 固定场景：
 
@@ -219,7 +238,7 @@ cd udbx4go
 5. 单图层查询失败保留旧图形，其他图层继续可用。
 6. 关闭或切换文件后旧请求不写入新地图。
 
-人工结果填写到最终 `summary.md`。截至 2026-07-17，实现、SDK/前端测试、打包构建和非 GUI 工作流门禁已完成；因 macOS 锁屏，真实三场景十轮、并发 1/2/3 候选、最终重跑和人工六项仍未验收，最终并发保持 1。阻塞证据与解锁后复现命令见工作区 `docs/superpowers/reports/2026-07-16-udbx-viewer-viewport-spatial-query-acceptance.md`。性能数据只适合作为当前电脑、当前系统和当前样本的本机基线；不同 CPU、内存、macOS 版本、后台负载或文件缓存条件下的绝对数值不能直接比较。
+人工结果填写到最终 `summary.md`。截至 2026-07-17，实现、SDK/前端测试、打包构建和非 GUI 工作流门禁已完成；因 macOS 锁屏，真实三场景十轮、并发 1/2/3 候选、最终重跑和人工六项仍未验收，最终并发保持 1。阻塞证据与解锁后复现命令记录在 `udbx4x` 工作区的项目级验收报告 `docs/superpowers/reports/2026-07-16-udbx-viewer-viewport-spatial-query-acceptance.md`；该文件不属于独立 `udbx4go` 仓库。性能数据只适合作为当前电脑、当前系统和当前样本的本机基线；不同 CPU、内存、macOS 版本、后台负载或文件缓存条件下的绝对数值不能直接比较。
 
 ## 维护约束
 
