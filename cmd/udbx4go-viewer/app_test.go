@@ -1,12 +1,16 @@
 package main
 
 import (
+	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	udbx4go "github.com/udbx4x/udbx4go"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
@@ -494,7 +498,7 @@ func TestFormatPreviewFeaturesReportsVertexBudgetReached(t *testing.T) {
 		},
 	}
 
-	previewFeatures, vertexBudgetReached := app.formatPreviewFeatures(features, nil, 1)
+	previewFeatures, vertexBudgetReached := app.formatPreviewFeatures(features, nil, 1, nil)
 
 	if len(previewFeatures) != 0 {
 		t.Fatalf("len(previewFeatures) = %d, want 0", len(previewFeatures))
@@ -502,6 +506,400 @@ func TestFormatPreviewFeaturesReportsVertexBudgetReached(t *testing.T) {
 	if !vertexBudgetReached {
 		t.Fatal("vertexBudgetReached = false, want true")
 	}
+}
+
+func TestViewerSpatialViewportPassesBoundsToSDKAndKeepsRequiredID(t *testing.T) {
+	path, _ := createViewerPointFixture(t, true, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	viewport := &BoundingBoxDTO{MinX: 0, MinY: 0, MaxX: 5, MaxY: 5}
+	preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+		Viewport:    viewport,
+		Limit:       100,
+		MaxVertices: minSpatialPreviewVertexBudget,
+		RequiredIDs: []int{2},
+	})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview() error = %v", err)
+	}
+
+	if preview.QueriedBounds == nil || *preview.QueriedBounds != *viewport {
+		t.Fatalf("QueriedBounds = %+v, want %+v", preview.QueriedBounds, viewport)
+	}
+	if preview.Strategy != string(types.SpatialQueryStrategyRTree) {
+		t.Fatalf("Strategy = %q, want rtree", preview.Strategy)
+	}
+	if preview.HasMore {
+		t.Fatal("HasMore = true, want false")
+	}
+	if preview.DegradedReason != "" {
+		t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
+	}
+	if preview.QueryDurationMS < 0 {
+		t.Fatalf("QueryDurationMS = %f, want non-negative", preview.QueryDurationMS)
+	}
+	if preview.FileGeneration == 0 {
+		t.Fatal("FileGeneration = 0, want current file generation")
+	}
+
+	ids := make(map[int]bool, len(preview.Features))
+	for _, feature := range preview.Features {
+		ids[feature.ID] = true
+	}
+	if !ids[1] || !ids[2] {
+		t.Fatalf("feature IDs = %v, want viewport ID 1 and required outside ID 2", ids)
+	}
+	if ids[3] {
+		t.Fatalf("feature IDs = %v, outside non-required ID 3 must be filtered", ids)
+	}
+}
+
+func TestViewerSpatialViewportRejectsInvalidBoundsWithStableReason(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	_, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+		Viewport: &BoundingBoxDTO{MinX: 10, MinY: 0, MaxX: 1, MaxY: 5},
+		Limit:    100,
+	})
+	if err == nil || !strings.Contains(err.Error(), string(types.SpatialQueryReasonInvalidViewport)) {
+		t.Fatalf("LoadSpatialPreview(invalid viewport) error = %v, want invalid_viewport", err)
+	}
+}
+
+func TestViewerSpatialDeclaredExtentComesFromSmRegisterWithoutReadingGeometry(t *testing.T) {
+	path, tableName := createViewerPointFixture(t, false, 0)
+	db := openViewerFixtureDB(t, path)
+	if _, err := db.Exec(fmt.Sprintf(`UPDATE %q SET SmGeometry = x'00'`, tableName)); err != nil {
+		t.Fatalf("corrupt fixture geometry: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture database: %v", err)
+	}
+
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+	summary, err := app.GetDatasetSpatialSummary("viewer_points")
+	if err != nil {
+		t.Fatalf("GetDatasetSpatialSummary() error = %v", err)
+	}
+	want := BoundingBoxDTO{MinX: -10, MinY: -20, MaxX: 30, MaxY: 40}
+	if summary.Extent == nil || *summary.Extent != want {
+		t.Fatalf("Extent = %+v, want declared %+v", summary.Extent, want)
+	}
+	if summary.EstimatedVertexCount != 0 {
+		t.Fatalf("EstimatedVertexCount = %d, want 0 without geometry sampling", summary.EstimatedVertexCount)
+	}
+}
+
+func TestViewerSpatialReasonMapsRTreeCacheAndBoundedSampleStates(t *testing.T) {
+	t.Run("rtree capability", func(t *testing.T) {
+		path, _ := createViewerPointFixture(t, true, 0)
+		app := NewApp()
+		if _, err := app.OpenUDBXFile(path); err != nil {
+			t.Fatalf("OpenUDBXFile() error = %v", err)
+		}
+		summary, err := app.GetDatasetSpatialSummary("viewer_points")
+		if err != nil {
+			t.Fatalf("GetDatasetSpatialSummary() error = %v", err)
+		}
+		if !summary.ViewportQuerySupported || !summary.RTreeAvailable || summary.QueryDiagnosticReason != "" {
+			t.Fatalf("summary query capability = %+v", summary)
+		}
+	})
+
+	t.Run("envelope cache", func(t *testing.T) {
+		path, _ := createViewerPointFixture(t, false, 0)
+		app := NewApp()
+		if _, err := app.OpenUDBXFile(path); err != nil {
+			t.Fatalf("OpenUDBXFile() error = %v", err)
+		}
+		summary, err := app.GetDatasetSpatialSummary("viewer_points")
+		if err != nil {
+			t.Fatalf("GetDatasetSpatialSummary() error = %v", err)
+		}
+		if !summary.ViewportQuerySupported || summary.RTreeAvailable {
+			t.Fatalf("summary query capability = %+v", summary)
+		}
+		if summary.QueryDiagnosticReason != string(types.SpatialQueryReasonSpatialIndexUnavailable) {
+			t.Fatalf("QueryDiagnosticReason = %q, want spatial_index_unavailable", summary.QueryDiagnosticReason)
+		}
+
+		preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+			Viewport: &BoundingBoxDTO{MinX: 0, MinY: 0, MaxX: 5, MaxY: 5},
+			Limit:    100,
+		})
+		if err != nil {
+			t.Fatalf("LoadSpatialPreview() error = %v", err)
+		}
+		if preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) || preview.DegradedReason != "" {
+			t.Fatalf("preview strategy = %q, reason = %q", preview.Strategy, preview.DegradedReason)
+		}
+	})
+
+	t.Run("bounded sample", func(t *testing.T) {
+		path, _ := createViewerPointFixture(t, false, 1_000_000)
+		app := NewApp()
+		if _, err := app.OpenUDBXFile(path); err != nil {
+			t.Fatalf("OpenUDBXFile() error = %v", err)
+		}
+		preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+			Viewport: &BoundingBoxDTO{MinX: 0, MinY: 0, MaxX: 5, MaxY: 5},
+			Limit:    100,
+		})
+		if err != nil {
+			t.Fatalf("LoadSpatialPreview() error = %v", err)
+		}
+		if preview.Strategy != string(types.SpatialQueryStrategyBoundedSample) {
+			t.Fatalf("Strategy = %q, want bounded_sample", preview.Strategy)
+		}
+		if preview.DegradedReason != string(types.SpatialQueryReasonEnvelopeCacheBudgetExceeded) {
+			t.Fatalf("DegradedReason = %q, want envelope_cache_budget_exceeded", preview.DegradedReason)
+		}
+		if !preview.HasMore {
+			t.Fatal("HasMore = false, want SDK bounded sample result")
+		}
+	})
+}
+
+func TestViewerSpatialReasonTextAndCADIgnoreViewportQuery(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
+	}
+
+	invalidViewport := &BoundingBoxDTO{MinX: 10, MinY: 10, MaxX: -10, MaxY: -10}
+	for _, datasetName := range []string{"County_T", "CADDT"} {
+		t.Run(datasetName, func(t *testing.T) {
+			summary, err := app.GetDatasetSpatialSummary(datasetName)
+			if err != nil {
+				t.Fatalf("GetDatasetSpatialSummary(%s) error = %v", datasetName, err)
+			}
+			if !summary.PreviewSupported || summary.ViewportQuerySupported || summary.RTreeAvailable {
+				t.Fatalf("summary(%s) = %+v", datasetName, summary)
+			}
+			if summary.QueryDiagnosticReason != string(types.SpatialQueryReasonUnsupportedDatasetKind) {
+				t.Fatalf("QueryDiagnosticReason = %q, want unsupported_dataset_kind", summary.QueryDiagnosticReason)
+			}
+
+			preview, err := app.LoadSpatialPreview(datasetName, SpatialPreviewRequestDTO{
+				Viewport: invalidViewport,
+				Limit:    100,
+			})
+			if err != nil {
+				t.Fatalf("LoadSpatialPreview(%s) error = %v", datasetName, err)
+			}
+			if preview.QueriedBounds != nil {
+				t.Fatalf("QueriedBounds = %+v, want nil for ignored viewport", preview.QueriedBounds)
+			}
+			if preview.Strategy != string(types.SpatialQueryStrategyBoundedSample) {
+				t.Fatalf("Strategy = %q, want bounded_sample", preview.Strategy)
+			}
+			if preview.DegradedReason != string(types.SpatialQueryReasonUnsupportedDatasetKind) {
+				t.Fatalf("DegradedReason = %q, want unsupported_dataset_kind", preview.DegradedReason)
+			}
+		})
+	}
+}
+
+func TestViewerSpatialRequiredIDBypassesOrdinaryVertexBudget(t *testing.T) {
+	app := NewApp()
+	features := []*types.Feature{
+		{ID: 1, Geometry: &types.PointGeometry{Coordinates: []float64{0, 0}, BBox: []float64{0, 0, 0, 0}}},
+		{ID: 2, Geometry: &types.MultiLineStringGeometry{Coordinates: [][][]float64{{{0, 0}, {1, 1}}}, BBox: []float64{0, 0, 1, 1}}},
+		{ID: 99, Geometry: &types.MultiLineStringGeometry{Coordinates: [][][]float64{{{2, 2}, {3, 3}}}, BBox: []float64{2, 2, 3, 3}}},
+	}
+	required := map[int]struct{}{99: {}}
+
+	previewFeatures, vertexBudgetReached := app.formatPreviewFeatures(features, nil, 1, required)
+
+	if !vertexBudgetReached {
+		t.Fatal("vertexBudgetReached = false, want true")
+	}
+	if len(previewFeatures) != 2 || previewFeatures[0].ID != 1 || previewFeatures[1].ID != 99 {
+		t.Fatalf("preview feature IDs = %v, want ordinary ID 1 plus required ID 99", previewFeatureIDs(previewFeatures))
+	}
+}
+
+func TestViewerSpatialRequiredIDVertexBudgetDoesNotChangeSDKHasMore(t *testing.T) {
+	response := &SpatialPreviewDTO{HasMore: false}
+
+	applySpatialPreviewSampling(response, true)
+
+	if response.HasMore {
+		t.Fatal("HasMore changed to true after viewer vertex-budget truncation")
+	}
+	if !response.Sampled || !strings.Contains(response.SampleReason, "顶点上限") {
+		t.Fatalf("sampling state = sampled %v, reason %q", response.Sampled, response.SampleReason)
+	}
+}
+
+func TestViewerSpatialLifecycleCloseWaitsForActiveQueryLease(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	_, generation, release, err := app.acquireDataSource()
+	if err != nil {
+		t.Fatalf("acquireDataSource() error = %v", err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- app.CloseUDBXFile() }()
+
+	select {
+	case err := <-closed:
+		t.Fatalf("CloseUDBXFile() returned before query release: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	if err := <-closed; err != nil {
+		t.Fatalf("CloseUDBXFile() error = %v", err)
+	}
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile(reopen) error = %v", err)
+	}
+	preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview() error = %v", err)
+	}
+	if preview.FileGeneration <= generation {
+		t.Fatalf("FileGeneration = %d, want greater than previous %d", preview.FileGeneration, generation)
+	}
+}
+
+func TestViewerSpatialLifecycleSerializesConcurrentOpenAndClose(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	_, _, release, err := app.acquireDataSource()
+	if err != nil {
+		t.Fatalf("acquireDataSource() error = %v", err)
+	}
+	opened := make(chan error, 1)
+	go func() {
+		_, openErr := app.OpenUDBXFile(path)
+		opened <- openErr
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for app.GetCurrentFile() != "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if app.GetCurrentFile() != "" {
+		release()
+		t.Fatal("OpenUDBXFile() did not detach the old data source")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- app.CloseUDBXFile() }()
+	select {
+	case err := <-closed:
+		release()
+		t.Fatalf("concurrent CloseUDBXFile() bypassed in-progress open: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	release()
+	if err := <-opened; err != nil {
+		t.Fatalf("OpenUDBXFile(reopen) error = %v", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("CloseUDBXFile() error = %v", err)
+	}
+	if current := app.GetCurrentFile(); current != "" {
+		t.Fatalf("GetCurrentFile() = %q, want closed after later close", current)
+	}
+}
+
+func createViewerPointFixture(t *testing.T, withRTree bool, objectCountOverride int) (string, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "viewer-spatial.udbx")
+	source, err := udbx4go.Create(path)
+	if err != nil {
+		t.Fatalf("create fixture: %v", err)
+	}
+	points, err := source.CreatePointDataset("viewer_points", 4326, nil)
+	if err != nil {
+		t.Fatalf("create point dataset: %v", err)
+	}
+	tableName := points.Info().TableName
+	for _, feature := range []*types.Feature{
+		{ID: 1, Geometry: &types.PointGeometry{Type: "Point", Coordinates: []float64{1, 1}, SRID: 4326, BBox: []float64{1, 1, 1, 1}}},
+		{ID: 2, Geometry: &types.PointGeometry{Type: "Point", Coordinates: []float64{20, 20}, SRID: 4326, BBox: []float64{20, 20, 20, 20}}},
+		{ID: 3, Geometry: &types.PointGeometry{Type: "Point", Coordinates: []float64{30, 30}, SRID: 4326, BBox: []float64{30, 30, 30, 30}}},
+	} {
+		if err := points.Insert(feature); err != nil {
+			t.Fatalf("insert point %d: %v", feature.ID, err)
+		}
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close fixture source: %v", err)
+	}
+
+	db := openViewerFixtureDB(t, path)
+	objectCount := 3
+	if objectCountOverride > 0 {
+		objectCount = objectCountOverride
+	}
+	if _, err := db.Exec(`
+		UPDATE SmRegister
+		SET SmObjectCount = ?, SmLeft = -10, SmBottom = -20, SmRight = 30, SmTop = 40,
+		    SmIDColName = 'SmID', SmGeoColName = 'SmGeometry'
+		WHERE SmDatasetName = 'viewer_points'`, objectCount); err != nil {
+		t.Fatalf("update fixture metadata: %v", err)
+	}
+	if withRTree {
+		if _, err := db.Exec(`UPDATE geometry_columns SET spatial_index_enabled = 1 WHERE f_table_name = ?`, tableName); err != nil {
+			t.Fatalf("enable fixture RTree metadata: %v", err)
+		}
+		rtreeName := "idx_" + tableName + "_SmGeometry"
+		if _, err := db.Exec(fmt.Sprintf(`CREATE VIRTUAL TABLE %q USING rtree(pkid, xmin, xmax, ymin, ymax)`, rtreeName)); err != nil {
+			t.Fatalf("create fixture RTree: %v", err)
+		}
+		for _, row := range []struct {
+			id int
+			x  float64
+		}{{1, 1}, {2, 20}, {3, 30}} {
+			if _, err := db.Exec(fmt.Sprintf(`INSERT INTO %q VALUES (?, ?, ?, ?, ?)`, rtreeName), row.id, row.x, row.x, row.x, row.x); err != nil {
+				t.Fatalf("insert fixture RTree row %d: %v", row.id, err)
+			}
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture database: %v", err)
+	}
+	return path, tableName
+}
+
+func openViewerFixtureDB(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatalf("open fixture database: %v", err)
+	}
+	return db
+}
+
+func previewFeatureIDs(features []PreviewFeatureDTO) []int {
+	ids := make([]int, len(features))
+	for i, feature := range features {
+		ids[i] = feature.ID
+	}
+	return ids
 }
 
 func TestViewerSpatialPreviewLoadsAllHenanCountyRegionsForTableSelection(t *testing.T) {

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	udbx4go "github.com/udbx4x/udbx4go"
 )
 
 // ViewerSettingsDTO describes viewer settings exchanged with the frontend.
@@ -88,6 +90,10 @@ func clampInt(value int, min int, max int) int {
 		return max
 	}
 	return value
+}
+
+func spatialQueryPolicy() udbx4go.SpatialQueryPolicy {
+	return udbx4go.DefaultSpatialQueryPolicy()
 }
 
 func (a *App) GetViewerSettings() (*ViewerSettingsDTO, error) {

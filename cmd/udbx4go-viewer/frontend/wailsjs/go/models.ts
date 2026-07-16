@@ -338,6 +338,12 @@ export namespace main {
 	    estimatedVertexCount: number;
 	    sampled: boolean;
 	    sampleReason?: string;
+	    queriedBounds?: BoundingBoxDTO;
+	    strategy: string;
+	    hasMore: boolean;
+	    degradedReason?: string;
+	    queryDurationMs: number;
+	    fileGeneration: number;
 
 	    static createFrom(source: any = {}) {
 	        return new SpatialPreviewDTO(source);
@@ -353,6 +359,12 @@ export namespace main {
 	        this.estimatedVertexCount = source["estimatedVertexCount"];
 	        this.sampled = source["sampled"];
 	        this.sampleReason = source["sampleReason"];
+	        this.queriedBounds = this.convertValues(source["queriedBounds"], BoundingBoxDTO);
+	        this.strategy = source["strategy"];
+	        this.hasMore = source["hasMore"];
+	        this.degradedReason = source["degradedReason"];
+	        this.queryDurationMs = source["queryDurationMs"];
+	        this.fileGeneration = source["fileGeneration"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -378,6 +390,7 @@ export namespace main {
 	    limit: number;
 	    maxVertices: number;
 	    simplify: boolean;
+	    requiredIds?: number[];
 
 	    static createFrom(source: any = {}) {
 	        return new SpatialPreviewRequestDTO(source);
@@ -389,6 +402,7 @@ export namespace main {
 	        this.limit = source["limit"];
 	        this.maxVertices = source["maxVertices"];
 	        this.simplify = source["simplify"];
+	        this.requiredIds = source["requiredIds"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -434,6 +448,9 @@ export namespace main {
 	    estimatedVertexCount: number;
 	    previewSupported: boolean;
 	    unsupportedReason?: string;
+	    viewportQuerySupported: boolean;
+	    rtreeAvailable: boolean;
+	    queryDiagnosticReason?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new SpatialSummaryDTO(source);
@@ -449,6 +466,9 @@ export namespace main {
 	        this.estimatedVertexCount = source["estimatedVertexCount"];
 	        this.previewSupported = source["previewSupported"];
 	        this.unsupportedReason = source["unsupportedReason"];
+	        this.viewportQuerySupported = source["viewportQuerySupported"];
+	        this.rtreeAvailable = source["rtreeAvailable"];
+	        this.queryDiagnosticReason = source["queryDiagnosticReason"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

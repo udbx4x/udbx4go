@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	udbx4go "github.com/udbx4x/udbx4go"
 )
 
 func TestDefaultViewerSettings(t *testing.T) {
@@ -237,6 +240,22 @@ func TestViewerSettingsCorruptFileReturnsDefaults(t *testing.T) {
 	}
 	if loaded.SpatialPreview.FeatureLimit != DefaultViewerSettings().SpatialPreview.FeatureLimit {
 		t.Fatalf("loaded FeatureLimit = %d, want default", loaded.SpatialPreview.FeatureLimit)
+	}
+}
+
+func TestSpatialQueryPolicyUsesSDKDefaultsWithoutViewerSettingsFields(t *testing.T) {
+	if got, want := spatialQueryPolicy(), udbx4go.DefaultSpatialQueryPolicy(); got != want {
+		t.Fatalf("spatialQueryPolicy() = %+v, want SDK default %+v", got, want)
+	}
+
+	content, err := json.Marshal(DefaultViewerSettings())
+	if err != nil {
+		t.Fatalf("json.Marshal(DefaultViewerSettings()) error = %v", err)
+	}
+	for _, forbidden := range []string{"cacheMiB", "concurrency", "maxDatasetCacheBytes", "maxTotalCacheBytes"} {
+		if strings.Contains(string(content), forbidden) {
+			t.Fatalf("viewer settings expose internal spatial policy field %q: %s", forbidden, content)
+		}
 	}
 }
 
