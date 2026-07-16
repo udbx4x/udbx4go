@@ -224,16 +224,28 @@ type (
 
 // Error checking functions.
 var (
-	IsFormatError             = errors.IsFormatError
-	IsNotFound                = errors.IsNotFound
-	IsUnsupported             = errors.IsUnsupported
-	IsConstraintViolation     = errors.IsConstraintViolation
-	IsIOError                 = errors.IsIOError
-	IsUdbxError               = errors.IsUdbxError
-	DefaultSpatialQueryPolicy = types.DefaultSpatialQueryPolicy
-	NewSpatialQueryError      = errors.NewSpatialQueryError
-	SpatialQueryReasonOf      = errors.SpatialQueryReasonOf
+	IsFormatError         = errors.IsFormatError
+	IsNotFound            = errors.IsNotFound
+	IsUnsupported         = errors.IsUnsupported
+	IsConstraintViolation = errors.IsConstraintViolation
+	IsIOError             = errors.IsIOError
+	IsUdbxError           = errors.IsUdbxError
 )
+
+// DefaultSpatialQueryPolicy returns the standard spatial-query resource limits.
+func DefaultSpatialQueryPolicy() SpatialQueryPolicy {
+	return types.DefaultSpatialQueryPolicy()
+}
+
+// NewSpatialQueryError creates a validated spatial-query error.
+func NewSpatialQueryError(reason SpatialQueryReason, cause error) (*SpatialQueryError, error) {
+	return errors.NewSpatialQueryError(reason, cause)
+}
+
+// SpatialQueryReasonOf extracts a spatial-query reason from an error chain.
+func SpatialQueryReasonOf(err error) (SpatialQueryReason, bool) {
+	return errors.SpatialQueryReasonOf(err)
+}
 
 // Sentinel errors.
 var (

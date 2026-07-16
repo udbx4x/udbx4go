@@ -58,11 +58,12 @@ type SmRegisterRecord struct {
 
 // ToDatasetInfo converts a SmRegisterRecord to DatasetInfo.
 func (r *SmRegisterRecord) ToDatasetInfo() *types.DatasetInfo {
+	kind := types.DatasetKind(r.SmDatasetType)
 	info := &types.DatasetInfo{
 		ID:          r.SmDatasetID,
 		Name:        r.SmDatasetName,
 		TableName:   r.SmTableName,
-		Kind:        types.DatasetKind(r.SmDatasetType),
+		Kind:        kind,
 		ObjectCount: r.SmObjectCount,
 	}
 
@@ -71,12 +72,12 @@ func (r *SmRegisterRecord) ToDatasetInfo() *types.DatasetInfo {
 		info.SRID = &srid
 	}
 
-	if types.DatasetKind(r.SmDatasetType).IsSpatial() {
-		geoType := types.DatasetKind(r.SmDatasetType).GeometryType()
+	if kind.IsSpatial() {
+		geoType := kind.GeometryType()
 		info.GeometryType = &geoType
 	}
 
-	if r.SmLeft.Valid && r.SmBottom.Valid && r.SmRight.Valid && r.SmTop.Valid {
+	if kind.IsSpatial() && r.SmLeft.Valid && r.SmBottom.Valid && r.SmRight.Valid && r.SmTop.Valid {
 		extent := types.BoundingBox{
 			MinX: r.SmLeft.Float64,
 			MinY: r.SmBottom.Float64,

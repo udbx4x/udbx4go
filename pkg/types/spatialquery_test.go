@@ -85,7 +85,10 @@ func TestSpatialQueryConstantValues(t *testing.T) {
 	}
 	for _, tt := range reasons {
 		assert.Equal(t, tt.want, string(tt.value))
+		assert.True(t, tt.value.Valid())
 	}
+	assert.False(t, SpatialQueryReason("").Valid())
+	assert.False(t, SpatialQueryReason("arbitrary_reason").Valid())
 }
 
 func TestSpatialQueryOptionsNormalize(t *testing.T) {
@@ -121,6 +124,7 @@ func TestSpatialQueryOptionsNormalizeRejectsInvalidInput(t *testing.T) {
 		},
 		{name: "zero limit", options: SpatialQueryOptions{Bounds: BoundingBox{}, Limit: 0}},
 		{name: "negative limit", options: SpatialQueryOptions{Bounds: BoundingBox{}, Limit: -1}},
+		{name: "limit cannot allow limit plus one", options: SpatialQueryOptions{Bounds: BoundingBox{}, Limit: math.MaxInt}},
 		{name: "zero required id", options: SpatialQueryOptions{Bounds: BoundingBox{}, Limit: 1, RequiredIDs: []int{1, 0}}},
 		{name: "negative required id", options: SpatialQueryOptions{Bounds: BoundingBox{}, Limit: 1, RequiredIDs: []int{-1}}},
 	}
@@ -128,9 +132,20 @@ func TestSpatialQueryOptionsNormalizeRejectsInvalidInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := tt.options.Normalize()
-			assert.Error(t, err)
+			require.Error(t, err)
+			if tt.options.Limit == math.MaxInt {
+				assert.Contains(t, err.Error(), "limit must allow limit + 1")
+			}
 		})
 	}
+}
+
+func TestSpatialQueryOptionsNormalizeAllowsLargestSafeLimit(t *testing.T) {
+	options := SpatialQueryOptions{Bounds: BoundingBox{}, Limit: math.MaxInt - 1}
+
+	normalized, err := options.Normalize()
+	require.NoError(t, err)
+	assert.Equal(t, math.MaxInt-1, normalized.Limit)
 }
 
 func TestSpatialQueryPolicyDefaultAndValidate(t *testing.T) {

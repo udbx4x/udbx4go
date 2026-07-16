@@ -12,17 +12,15 @@ import (
 
 func TestSpatialQueryErrorWrapsCauseAndExposesReason(t *testing.T) {
 	cause := stderrors.New("database interrupted")
-	err := NewSpatialQueryError(types.SpatialQueryReasonQueryTimeout, cause)
-	require.Error(t, err)
+	err, createErr := NewSpatialQueryError(types.SpatialQueryReasonQueryTimeout, cause)
+	require.NoError(t, createErr)
 	assert.ErrorIs(t, err, cause)
 	assert.Contains(t, err.Error(), "query_timeout")
 	assert.Contains(t, err.Error(), cause.Error())
-
-	var spatialErr *SpatialQueryError
-	require.ErrorAs(t, err, &spatialErr)
-	assert.Equal(t, types.SpatialQueryReasonQueryTimeout, spatialErr.Reason)
-	assert.Equal(t, cause, spatialErr.Err)
-	assert.Equal(t, cause, spatialErr.Unwrap())
+	assert.Equal(t, types.SpatialQueryReasonQueryTimeout, err.Reason())
+	assert.Equal(t, cause, err.Unwrap())
+	assert.Equal(t, CodeUdbxError, err.Code())
+	assert.True(t, IsUdbxError(err))
 }
 
 func TestNewSpatialQueryErrorRejectsInvalidArgumentsWithoutPanic(t *testing.T) {
@@ -32,6 +30,7 @@ func TestNewSpatialQueryErrorRejectsInvalidArgumentsWithoutPanic(t *testing.T) {
 		err    error
 	}{
 		{name: "empty reason", err: stderrors.New("cause")},
+		{name: "unknown reason", reason: types.SpatialQueryReason("unknown"), err: stderrors.New("cause")},
 		{name: "nil cause", reason: types.SpatialQueryReasonInvalidViewport},
 		{name: "both invalid"},
 	}
@@ -39,18 +38,39 @@ func TestNewSpatialQueryErrorRejectsInvalidArgumentsWithoutPanic(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.NotPanics(t, func() {
-				err := NewSpatialQueryError(tt.reason, tt.err)
+				spatialErr, err := NewSpatialQueryError(tt.reason, tt.err)
+				assert.Nil(t, spatialErr)
 				require.Error(t, err)
-				var spatialErr *SpatialQueryError
-				assert.False(t, stderrors.As(err, &spatialErr))
 			})
+		})
+	}
+}
+
+func TestSpatialQueryErrorPreservesUdbxErrorCode(t *testing.T) {
+	tests := []struct {
+		name  string
+		cause error
+		code  string
+	}{
+		{name: "IO error", cause: IOError("read failed"), code: CodeIOError},
+		{name: "format error", cause: FormatError("invalid geometry"), code: CodeFormatError},
+		{name: "wrapped IO error", cause: fmt.Errorf("context: %w", IOError("read failed")), code: CodeIOError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err, createErr := NewSpatialQueryError(types.SpatialQueryReasonCorruptGeometry, tt.cause)
+			require.NoError(t, createErr)
+			assert.Equal(t, tt.code, err.Code())
+			assert.True(t, IsUdbxError(err))
 		})
 	}
 }
 
 func TestSpatialQueryReasonOfUsesStandardErrorChain(t *testing.T) {
 	cause := stderrors.New("corrupt blob")
-	spatialErr := NewSpatialQueryError(types.SpatialQueryReasonCorruptGeometry, cause)
+	spatialErr, err := NewSpatialQueryError(types.SpatialQueryReasonCorruptGeometry, cause)
+	require.NoError(t, err)
 	wrapped := fmt.Errorf("read feature: %w", spatialErr)
 
 	reason, ok := SpatialQueryReasonOf(wrapped)
@@ -63,7 +83,6 @@ func TestSpatialQueryReasonOfUsesStandardErrorChain(t *testing.T) {
 	}{
 		{name: "nil"},
 		{name: "unrelated", err: stderrors.New("other")},
-		{name: "empty reason", err: &SpatialQueryError{Err: cause}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

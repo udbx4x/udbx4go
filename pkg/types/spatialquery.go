@@ -55,6 +55,21 @@ const (
 	SpatialQueryReasonUnsupportedDatasetKind      SpatialQueryReason = "unsupported_dataset_kind"
 )
 
+// Valid reports whether the reason is one of the specification-defined values.
+func (r SpatialQueryReason) Valid() bool {
+	switch r {
+	case SpatialQueryReasonInvalidViewport,
+		SpatialQueryReasonSpatialIndexUnavailable,
+		SpatialQueryReasonEnvelopeCacheBudgetExceeded,
+		SpatialQueryReasonQueryTimeout,
+		SpatialQueryReasonCorruptGeometry,
+		SpatialQueryReasonUnsupportedDatasetKind:
+		return true
+	default:
+		return false
+	}
+}
+
 // SpatialQueryOptions provides options for a viewport spatial query.
 type SpatialQueryOptions struct {
 	Bounds      BoundingBox
@@ -69,6 +84,9 @@ func (o SpatialQueryOptions) Normalize() (SpatialQueryOptions, error) {
 	}
 	if o.Limit <= 0 {
 		return SpatialQueryOptions{}, fmt.Errorf("spatial query limit must be positive")
+	}
+	if o.Limit == math.MaxInt {
+		return SpatialQueryOptions{}, fmt.Errorf("spatial query limit must allow limit + 1")
 	}
 
 	normalized := SpatialQueryOptions{Bounds: o.Bounds, Limit: o.Limit}
@@ -100,13 +118,18 @@ type SpatialQueryResult struct {
 	DegradedReason SpatialQueryReason
 }
 
-// SpatialQueryPolicy limits spatial-query fallback resource usage.
+// SpatialQueryPolicy limits spatial-query fallback resource usage. Its zero
+// value is invalid; use DefaultSpatialQueryPolicy for standard limits.
 type SpatialQueryPolicy struct {
-	// MaxDatasetCacheBytes and MaxTotalCacheBytes are estimated resident memory
-	// budgets, not hard thresholds on object counts.
+	// MaxDatasetCacheBytes is the estimated resident cache budget for one
+	// dataset within a DataSource, not a hard threshold on object counts.
 	MaxDatasetCacheBytes int64
-	MaxTotalCacheBytes   int64
-	BuildTimeout         time.Duration
+	// MaxTotalCacheBytes is the estimated resident budget for all envelope
+	// caches within the same DataSource, not a hard threshold on object counts.
+	MaxTotalCacheBytes int64
+	// BuildTimeout is the additional limit for the first envelope-cache build.
+	// The earlier deadline between this limit and the call context applies.
+	BuildTimeout time.Duration
 }
 
 // DefaultSpatialQueryPolicy returns the isolated PoC resource limits.

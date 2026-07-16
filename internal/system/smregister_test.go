@@ -249,6 +249,7 @@ func TestDatasetInfoExtentMapsOnlyValidDeclaredBounds(t *testing.T) {
 
 	tests := []struct {
 		name   string
+		kind   types.DatasetKind
 		left   sql.NullFloat64
 		bottom sql.NullFloat64
 		right  sql.NullFloat64
@@ -257,6 +258,7 @@ func TestDatasetInfoExtentMapsOnlyValidDeclaredBounds(t *testing.T) {
 	}{
 		{
 			name:   "normal extent",
+			kind:   types.DatasetKindPoint,
 			left:   valid(-10),
 			bottom: valid(-20),
 			right:  valid(30),
@@ -265,30 +267,33 @@ func TestDatasetInfoExtentMapsOnlyValidDeclaredBounds(t *testing.T) {
 		},
 		{
 			name:   "zero area extent",
+			kind:   types.DatasetKindPoint,
 			left:   valid(5),
 			bottom: valid(6),
 			right:  valid(5),
 			top:    valid(6),
 			want:   &types.BoundingBox{MinX: 5, MinY: 6, MaxX: 5, MaxY: 6},
 		},
-		{name: "null left", bottom: valid(0), right: valid(1), top: valid(1)},
-		{name: "null bottom", left: valid(0), right: valid(1), top: valid(1)},
-		{name: "null right", left: valid(0), bottom: valid(0), top: valid(1)},
-		{name: "null top", left: valid(0), bottom: valid(0), right: valid(1)},
-		{name: "nan", left: valid(math.NaN()), bottom: valid(0), right: valid(1), top: valid(1)},
-		{name: "positive infinity", left: valid(0), bottom: valid(math.Inf(1)), right: valid(1), top: valid(1)},
-		{name: "negative infinity", left: valid(0), bottom: valid(0), right: valid(math.Inf(-1)), top: valid(1)},
-		{name: "inverted x", left: valid(2), bottom: valid(0), right: valid(1), top: valid(1)},
-		{name: "inverted y", left: valid(0), bottom: valid(2), right: valid(1), top: valid(1)},
+		{name: "tabular declared zero extent", kind: types.DatasetKindTabular, left: valid(0), bottom: valid(0), right: valid(0), top: valid(0)},
+		{name: "null left", kind: types.DatasetKindPoint, bottom: valid(0), right: valid(1), top: valid(1)},
+		{name: "null bottom", kind: types.DatasetKindPoint, left: valid(0), right: valid(1), top: valid(1)},
+		{name: "null right", kind: types.DatasetKindPoint, left: valid(0), bottom: valid(0), top: valid(1)},
+		{name: "null top", kind: types.DatasetKindPoint, left: valid(0), bottom: valid(0), right: valid(1)},
+		{name: "nan", kind: types.DatasetKindPoint, left: valid(math.NaN()), bottom: valid(0), right: valid(1), top: valid(1)},
+		{name: "positive infinity", kind: types.DatasetKindPoint, left: valid(0), bottom: valid(math.Inf(1)), right: valid(1), top: valid(1)},
+		{name: "negative infinity", kind: types.DatasetKindPoint, left: valid(0), bottom: valid(0), right: valid(math.Inf(-1)), top: valid(1)},
+		{name: "inverted x", kind: types.DatasetKindPoint, left: valid(2), bottom: valid(0), right: valid(1), top: valid(1)},
+		{name: "inverted y", kind: types.DatasetKindPoint, left: valid(0), bottom: valid(2), right: valid(1), top: valid(1)},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			record := &SmRegisterRecord{
-				SmLeft:   tt.left,
-				SmBottom: tt.bottom,
-				SmRight:  tt.right,
-				SmTop:    tt.top,
+				SmDatasetType: int(tt.kind),
+				SmLeft:        tt.left,
+				SmBottom:      tt.bottom,
+				SmRight:       tt.right,
+				SmTop:         tt.top,
 			}
 
 			info := record.ToDatasetInfo()
