@@ -23,37 +23,37 @@ func NewSmRegisterDao(db *sql.DB) *SmRegisterDao {
 // SmRegisterRecord represents a record in the SmRegister table.
 // Column names match Java/SuperMap UDBX format.
 type SmRegisterRecord struct {
-	SmDatasetID               int
-	SmDatasetName             string
-	SmTableName               string
-	SmOption                  sql.NullInt32
-	SmEncType                 sql.NullInt32
-	SmParentDTID              int
-	SmDatasetType             int
-	SmObjectCount             int
-	SmLeft                    sql.NullFloat64
-	SmRight                   sql.NullFloat64
-	SmTop                     sql.NullFloat64
-	SmBottom                  sql.NullFloat64
-	SmIDColName               sql.NullString
-	SmGeoColName              sql.NullString
-	SmMinZ                    sql.NullFloat64
-	SmMaxZ                    sql.NullFloat64
-	SmSRID                    sql.NullInt32
-	SmIndexType               sql.NullInt32
-	SmToleRanceFuzzy          sql.NullFloat64
-	SmToleranceDAngle         sql.NullFloat64
-	SmToleranceNodeSnap       sql.NullFloat64
-	SmToleranceSmallPolygon   sql.NullFloat64
-	SmToleranceGrain          sql.NullFloat64
-	SmMaxGeometrySize         int
-	SmOptimizeCount           int
-	SmOptimizeRatio           sql.NullFloat64
-	SmDescription             sql.NullString
-	SmExtInfo                 sql.NullString
-	SmCreateTime              sql.NullString
-	SmLastUpdateTime          sql.NullString
-	SmProjectInfo             []byte
+	SmDatasetID             int
+	SmDatasetName           string
+	SmTableName             string
+	SmOption                sql.NullInt32
+	SmEncType               sql.NullInt32
+	SmParentDTID            int
+	SmDatasetType           int
+	SmObjectCount           int
+	SmLeft                  sql.NullFloat64
+	SmRight                 sql.NullFloat64
+	SmTop                   sql.NullFloat64
+	SmBottom                sql.NullFloat64
+	SmIDColName             sql.NullString
+	SmGeoColName            sql.NullString
+	SmMinZ                  sql.NullFloat64
+	SmMaxZ                  sql.NullFloat64
+	SmSRID                  sql.NullInt32
+	SmIndexType             sql.NullInt32
+	SmToleRanceFuzzy        sql.NullFloat64
+	SmToleranceDAngle       sql.NullFloat64
+	SmToleranceNodeSnap     sql.NullFloat64
+	SmToleranceSmallPolygon sql.NullFloat64
+	SmToleranceGrain        sql.NullFloat64
+	SmMaxGeometrySize       int
+	SmOptimizeCount         int
+	SmOptimizeRatio         sql.NullFloat64
+	SmDescription           sql.NullString
+	SmExtInfo               sql.NullString
+	SmCreateTime            sql.NullString
+	SmLastUpdateTime        sql.NullString
+	SmProjectInfo           []byte
 }
 
 // ToDatasetInfo converts a SmRegisterRecord to DatasetInfo.
@@ -74,6 +74,18 @@ func (r *SmRegisterRecord) ToDatasetInfo() *types.DatasetInfo {
 	if types.DatasetKind(r.SmDatasetType).IsSpatial() {
 		geoType := types.DatasetKind(r.SmDatasetType).GeometryType()
 		info.GeometryType = &geoType
+	}
+
+	if r.SmLeft.Valid && r.SmBottom.Valid && r.SmRight.Valid && r.SmTop.Valid {
+		extent := types.BoundingBox{
+			MinX: r.SmLeft.Float64,
+			MinY: r.SmBottom.Float64,
+			MaxX: r.SmRight.Float64,
+			MaxY: r.SmTop.Float64,
+		}
+		if extent.Validate() == nil {
+			info.Extent = &extent
+		}
 	}
 
 	return info

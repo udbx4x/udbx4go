@@ -140,6 +140,27 @@ type (
 	// QueryOptions provides options for querying features.
 	QueryOptions = types.QueryOptions
 
+	// BoundingBox is an axis-aligned spatial extent.
+	BoundingBox = types.BoundingBox
+
+	// SpatialQueryStrategy identifies how a spatial query was executed.
+	SpatialQueryStrategy = types.SpatialQueryStrategy
+
+	// SpatialQueryReason explains why a spatial query failed or degraded.
+	SpatialQueryReason = types.SpatialQueryReason
+
+	// SpatialQueryOptions provides options for a viewport spatial query.
+	SpatialQueryOptions = types.SpatialQueryOptions
+
+	// SpatialQueryResult contains features and execution facts for a spatial query.
+	SpatialQueryResult = types.SpatialQueryResult
+
+	// SpatialQueryPolicy limits spatial-query fallback resource usage.
+	SpatialQueryPolicy = types.SpatialQueryPolicy
+
+	// SpatialQueryCapability describes the available spatial-query execution paths.
+	SpatialQueryCapability = types.SpatialQueryCapability
+
 	// FeatureChanges holds geometry and attribute changes for vector dataset updates.
 	FeatureChanges = dataset.FeatureChanges
 )
@@ -155,6 +176,23 @@ const (
 	DatasetKindLineZ   = types.DatasetKindLineZ
 	DatasetKindRegionZ = types.DatasetKindRegionZ
 	DatasetKindCAD     = types.DatasetKindCAD
+)
+
+// SpatialQueryStrategy constants.
+const (
+	SpatialQueryStrategyRTree         = types.SpatialQueryStrategyRTree
+	SpatialQueryStrategyEnvelopeCache = types.SpatialQueryStrategyEnvelopeCache
+	SpatialQueryStrategyBoundedSample = types.SpatialQueryStrategyBoundedSample
+)
+
+// SpatialQueryReason constants.
+const (
+	SpatialQueryReasonInvalidViewport             = types.SpatialQueryReasonInvalidViewport
+	SpatialQueryReasonSpatialIndexUnavailable     = types.SpatialQueryReasonSpatialIndexUnavailable
+	SpatialQueryReasonEnvelopeCacheBudgetExceeded = types.SpatialQueryReasonEnvelopeCacheBudgetExceeded
+	SpatialQueryReasonQueryTimeout                = types.SpatialQueryReasonQueryTimeout
+	SpatialQueryReasonCorruptGeometry             = types.SpatialQueryReasonCorruptGeometry
+	SpatialQueryReasonUnsupportedDatasetKind      = types.SpatialQueryReasonUnsupportedDatasetKind
 )
 
 // FieldType constants.
@@ -179,16 +217,22 @@ const (
 type (
 	// UdbxError is the interface for all UDBX errors.
 	UdbxError = errors.UdbxError
+
+	// SpatialQueryError associates a spatial-query failure reason with its cause.
+	SpatialQueryError = errors.SpatialQueryError
 )
 
 // Error checking functions.
 var (
-	IsFormatError         = errors.IsFormatError
-	IsNotFound            = errors.IsNotFound
-	IsUnsupported         = errors.IsUnsupported
-	IsConstraintViolation = errors.IsConstraintViolation
-	IsIOError             = errors.IsIOError
-	IsUdbxError           = errors.IsUdbxError
+	IsFormatError             = errors.IsFormatError
+	IsNotFound                = errors.IsNotFound
+	IsUnsupported             = errors.IsUnsupported
+	IsConstraintViolation     = errors.IsConstraintViolation
+	IsIOError                 = errors.IsIOError
+	IsUdbxError               = errors.IsUdbxError
+	DefaultSpatialQueryPolicy = types.DefaultSpatialQueryPolicy
+	NewSpatialQueryError      = errors.NewSpatialQueryError
+	SpatialQueryReasonOf      = errors.SpatialQueryReasonOf
 )
 
 // Sentinel errors.

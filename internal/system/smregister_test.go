@@ -2,6 +2,7 @@ package system
 
 import (
 	"database/sql"
+	"math"
 	"path/filepath"
 	"testing"
 
@@ -239,4 +240,59 @@ func TestSmRegisterRecord_ToDatasetInfo_NoSRID(t *testing.T) {
 
 	assert.Nil(t, info.SRID)
 	assert.Nil(t, info.GeometryType) // Tabular has no geometry
+}
+
+func TestDatasetInfoExtentMapsOnlyValidDeclaredBounds(t *testing.T) {
+	valid := func(value float64) sql.NullFloat64 {
+		return sql.NullFloat64{Float64: value, Valid: true}
+	}
+
+	tests := []struct {
+		name   string
+		left   sql.NullFloat64
+		bottom sql.NullFloat64
+		right  sql.NullFloat64
+		top    sql.NullFloat64
+		want   *types.BoundingBox
+	}{
+		{
+			name:   "normal extent",
+			left:   valid(-10),
+			bottom: valid(-20),
+			right:  valid(30),
+			top:    valid(40),
+			want:   &types.BoundingBox{MinX: -10, MinY: -20, MaxX: 30, MaxY: 40},
+		},
+		{
+			name:   "zero area extent",
+			left:   valid(5),
+			bottom: valid(6),
+			right:  valid(5),
+			top:    valid(6),
+			want:   &types.BoundingBox{MinX: 5, MinY: 6, MaxX: 5, MaxY: 6},
+		},
+		{name: "null left", bottom: valid(0), right: valid(1), top: valid(1)},
+		{name: "null bottom", left: valid(0), right: valid(1), top: valid(1)},
+		{name: "null right", left: valid(0), bottom: valid(0), top: valid(1)},
+		{name: "null top", left: valid(0), bottom: valid(0), right: valid(1)},
+		{name: "nan", left: valid(math.NaN()), bottom: valid(0), right: valid(1), top: valid(1)},
+		{name: "positive infinity", left: valid(0), bottom: valid(math.Inf(1)), right: valid(1), top: valid(1)},
+		{name: "negative infinity", left: valid(0), bottom: valid(0), right: valid(math.Inf(-1)), top: valid(1)},
+		{name: "inverted x", left: valid(2), bottom: valid(0), right: valid(1), top: valid(1)},
+		{name: "inverted y", left: valid(0), bottom: valid(2), right: valid(1), top: valid(1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := &SmRegisterRecord{
+				SmLeft:   tt.left,
+				SmBottom: tt.bottom,
+				SmRight:  tt.right,
+				SmTop:    tt.top,
+			}
+
+			info := record.ToDatasetInfo()
+			assert.Equal(t, tt.want, info.Extent)
+		})
+	}
 }
