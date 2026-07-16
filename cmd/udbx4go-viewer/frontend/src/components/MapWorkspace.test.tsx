@@ -9,6 +9,7 @@ const adapterInstances = vi.hoisted(() => [] as Array<Record<string, ReturnType<
 
 vi.mock('../spatial/OpenLayersSpatialRendererAdapter', () => ({
   OpenLayersSpatialRendererAdapter: vi.fn().mockImplementation(() => {
+    const unsubscribeViewport = vi.fn()
     const instance = {
       mount: vi.fn(),
       destroy: vi.fn(),
@@ -20,9 +21,11 @@ vi.mock('../spatial/OpenLayersSpatialRendererAdapter', () => ({
       fitBounds: vi.fn(),
       setSelection: vi.fn(),
       fitFeature: vi.fn(),
-      onViewportChange: vi.fn(() => vi.fn()),
+      onViewportChange: vi.fn(() => unsubscribeViewport),
+      unsubscribeViewport,
     } satisfies SpatialRendererAdapter & {
       fitFeature(datasetName: string, featureID: number): void
+      unsubscribeViewport(): void
     }
     adapterInstances.push(instance)
     return instance
@@ -49,6 +52,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={null}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -63,6 +67,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={null}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -77,6 +82,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={null}
         autoFitOnLayerChange={false}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -92,6 +98,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={false}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -107,6 +114,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={null}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={false}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -120,6 +128,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={false}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -136,6 +145,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -159,6 +169,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -171,6 +182,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -204,6 +216,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -216,6 +229,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -228,6 +242,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -247,6 +262,7 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={false}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
@@ -259,10 +275,113 @@ describe('MapWorkspace settings behavior', () => {
         selectedFeature={selectedFeatureFixture}
         autoFitOnLayerChange={true}
         zoomToSelectedFeature={false}
+        onViewportChange={vi.fn()}
         onFeatureSelect={vi.fn()}
       />,
     )
 
     expect(adapter.fitFeature).not.toHaveBeenCalled()
+  })
+
+  it('订阅稳定视口并在卸载时解除订阅', () => {
+    const onViewportChange = vi.fn()
+    const { unmount } = render(
+      <MapWorkspace
+        layers={[]}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onViewportChange={onViewportChange}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+    const adapter = latestAdapter()
+    const handler = adapter.onViewportChange.mock.calls[0][0]
+
+    handler({ minX: 1, minY: 2, maxX: 3, maxY: 4 })
+    expect(onViewportChange).toHaveBeenCalledWith({ minX: 1, minY: 2, maxX: 3, maxY: 4 })
+
+    unmount()
+    expect(adapter.unsubscribeViewport).toHaveBeenCalledOnce()
+  })
+
+  it('新增可查询图层用声明范围 fitBounds，等待 moveend 首查', () => {
+    const pendingLayer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      preview: null,
+      summary: {
+        datasetName: 'BaseMap_P',
+        kind: 'point',
+        extent: { minX: 10, minY: 20, maxX: 40, maxY: 60 },
+        objectCount: 10,
+        estimatedVertexCount: 10,
+        previewSupported: true,
+        viewportQuerySupported: true,
+        rtreeAvailable: true,
+      },
+    }
+
+    render(
+      <MapWorkspace
+        layers={[pendingLayer]}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(latestAdapter().fitBounds).toHaveBeenCalledWith(
+      { minX: 10, minY: 20, maxX: 40, maxY: 60 },
+      'point',
+    )
+    expect(latestAdapter().fitAllVisibleLayers).not.toHaveBeenCalled()
+  })
+
+  it('可查询图层状态和结果更新后不重复自动 fit', () => {
+    const summary = {
+      datasetName: 'BaseMap_P',
+      kind: 'point',
+      extent: { minX: 10, minY: 20, maxX: 40, maxY: 60 },
+      objectCount: 10,
+      estimatedVertexCount: 10,
+      previewSupported: true,
+      viewportQuerySupported: true,
+      rtreeAvailable: true,
+    }
+    const pendingLayer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      preview: null,
+      summary,
+      queryStatus: 'idle',
+    }
+    const { rerender } = render(
+      <MapWorkspace
+        layers={[pendingLayer]}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+    const adapter = latestAdapter()
+    adapter.fitBounds.mockClear()
+    adapter.fitAllVisibleLayers.mockClear()
+
+    rerender(
+      <MapWorkspace
+        layers={[{ ...mapLayerFixtures[0], summary, queryStatus: 'ready' }]}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(adapter.fitBounds).not.toHaveBeenCalled()
+    expect(adapter.fitAllVisibleLayers).not.toHaveBeenCalled()
   })
 })

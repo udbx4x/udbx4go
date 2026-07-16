@@ -45,6 +45,10 @@ describe('LayerPanel', () => {
       features: [],
       estimatedVertexCount: 0,
       sampled: false,
+      strategy: 'rtree',
+      hasMore: false,
+      queryDurationMs: 0,
+      fileGeneration: 0,
     },
   }
 
@@ -94,8 +98,7 @@ describe('LayerPanel', () => {
 
     renderLayerPanel({ layers: [sampledLayer], showPreviewStats: true })
 
-    expect(screen.getByText('预览要素 1')).toBeInTheDocument()
-    expect(screen.getByText('顶点 1')).toBeInTheDocument()
+    expect(screen.getByText('bounded_sample · 0 ms · 要素 1 · 顶点 1')).toBeInTheDocument()
   })
 
   it('多图层时通过当前打开的菜单移除对应图层', () => {
@@ -150,7 +153,47 @@ describe('LayerPanel', () => {
     renderLayerPanel({ layers: [sampledMapLayerFixture], showPreviewStats: true })
 
     expect(screen.getAllByText('预览达到要素上限')).toHaveLength(1)
-    expect(screen.getByText('预览要素 0')).toBeInTheDocument()
-    expect(screen.getByText('顶点 50000')).toBeInTheDocument()
+    expect(screen.getByText('bounded_sample · 0 ms · 要素 0 · 顶点 50000')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['error', '当前范围加载失败'],
+    ['degraded', '无空间索引，显示有界预览'],
+    ['ready', '当前范围 0+ 个对象，请继续放大'],
+    ['loading', '加载当前范围'],
+  ] as const)('按最高优先级显示 %s 查询状态', (queryStatus, message) => {
+    const layer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      queryStatus,
+      queryError: queryStatus === 'error' ? 'backend details' : null,
+      preview: {
+        ...mapLayerFixtures[0].preview!,
+        strategy: queryStatus === 'degraded' ? 'bounded_sample' : 'rtree',
+        degradedReason: queryStatus === 'degraded' ? 'spatial_index_unavailable' : undefined,
+        hasMore: queryStatus === 'ready',
+      },
+    }
+
+    renderLayerPanel({ layers: [layer] })
+
+    expect(screen.getByText(message)).toBeInTheDocument()
+  })
+
+  it('ShowPreviewStats 开启时显示查询策略、耗时、要素、顶点和原因', () => {
+    const layer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      queryStatus: 'degraded',
+      preview: {
+        ...mapLayerFixtures[0].preview!,
+        strategy: 'bounded_sample',
+        queryDurationMs: 12.5,
+        degradedReason: 'spatial_index_unavailable',
+        hasMore: false,
+      },
+    }
+
+    renderLayerPanel({ layers: [layer], showPreviewStats: true })
+
+    expect(screen.getByText('bounded_sample · 12.5 ms · 要素 0 · 顶点 0 · spatial_index_unavailable')).toBeInTheDocument()
   })
 })

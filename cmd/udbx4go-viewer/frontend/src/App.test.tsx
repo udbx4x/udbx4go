@@ -33,6 +33,7 @@ type CapturedSettingsDialogProps = {
 type CapturedMapWorkspaceProps = {
   autoFitOnLayerChange: boolean
   zoomToSelectedFeature: boolean
+  onViewportChange: (viewport: { minX: number; minY: number; maxX: number; maxY: number }) => void
 }
 type CapturedInspectorPanelProps = {
   layers: MapLayerState[]
@@ -181,6 +182,7 @@ const baseUdbxState = {
   setMapLayerVisible: vi.fn(),
   removeMapLayer: vi.fn(),
   selectFeature: vi.fn(),
+  queryViewport: vi.fn(),
 }
 
 const loadedSettings: ViewerSettings = {
@@ -353,6 +355,7 @@ describe('App settings integration', () => {
     })
     expect(capturedMapWorkspaceProps?.autoFitOnLayerChange).toBe(false)
     expect(capturedMapWorkspaceProps?.zoomToSelectedFeature).toBe(false)
+    expect(capturedMapWorkspaceProps?.onViewportChange).toBe(baseUdbxState.queryViewport)
     expect(capturedInspectorPanelProps?.showPreviewStats).toBe(true)
   })
 

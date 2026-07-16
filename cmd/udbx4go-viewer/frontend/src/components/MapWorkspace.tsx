@@ -3,7 +3,7 @@ import { Box, IconButton, Paper, Tooltip, Typography } from '@mui/material'
 import { CenterFocusStrong as FitIcon } from '@mui/icons-material'
 import { viewerColors } from '../theme/viewerTheme'
 import { OpenLayersSpatialRendererAdapter } from '../spatial/OpenLayersSpatialRendererAdapter'
-import type { MapLayerState, SelectedMapFeature } from '../types'
+import type { BoundingBox, MapLayerState, SelectedMapFeature } from '../types'
 import { EmptyState } from './EmptyState'
 
 interface MapWorkspaceProps {
@@ -11,6 +11,7 @@ interface MapWorkspaceProps {
   selectedFeature: SelectedMapFeature | null
   autoFitOnLayerChange: boolean
   zoomToSelectedFeature: boolean
+  onViewportChange: (viewport: BoundingBox) => void
   onFeatureSelect: (datasetName: string, featureID: number) => void
 }
 
@@ -19,6 +20,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   selectedFeature,
   autoFitOnLayerChange,
   zoomToSelectedFeature,
+  onViewportChange,
   onFeatureSelect,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -29,6 +31,8 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   const selectedFeatureRef = useRef<SelectedMapFeature | null>(selectedFeature)
   const zoomToSelectedFeatureRef = useRef(zoomToSelectedFeature)
   const featureSelectHandlerRef = useRef(onFeatureSelect)
+  const viewportChangeHandlerRef = useRef(onViewportChange)
+  const fittedSummaryLayersRef = useRef<Set<string>>(new Set())
   const sampledLayerCount = layers.filter((layer) => layer.preview?.sampled).length
 
   useEffect(() => {
@@ -36,11 +40,18 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   }, [onFeatureSelect])
 
   useEffect(() => {
+    viewportChangeHandlerRef.current = onViewportChange
+  }, [onViewportChange])
+
+  useEffect(() => {
     if (!containerRef.current) {
       return
     }
 
     const adapter = new OpenLayersSpatialRendererAdapter()
+    const unsubscribeViewport = adapter.onViewportChange((viewport) => {
+      viewportChangeHandlerRef.current(viewport)
+    })
     adapter.mount(containerRef.current)
     adapter.onFeatureClick((datasetName, featureID) => {
       featureSelectHandlerRef.current(datasetName, featureID)
@@ -48,11 +59,13 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     adapterRef.current = adapter
 
     return () => {
+      unsubscribeViewport()
       adapter.destroy()
       adapterRef.current = null
       renderedLayerNamesRef.current.clear()
       layerPreviewReadyRef.current.clear()
       hasSyncedLayersRef.current = false
+      fittedSummaryLayersRef.current.clear()
     }
   }, [])
 
@@ -66,6 +79,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     renderedLayerNamesRef.current.forEach((datasetName) => {
       if (!nextLayerNames.has(datasetName)) {
         adapter.removeLayer(datasetName)
+        fittedSummaryLayersRef.current.delete(datasetName)
       }
     })
 
@@ -98,7 +112,23 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     renderedLayerNamesRef.current = nextLayerNames
     layerPreviewReadyRef.current = nextPreviewReady
     hasSyncedLayersRef.current = true
-    if (autoFitOnLayerChange) {
+    const layerToFit = layers.find((layer) =>
+      layer.visible &&
+      layer.summary?.viewportQuerySupported &&
+      layer.summary.extent &&
+      !fittedSummaryLayersRef.current.has(layer.datasetName),
+    )
+    if (autoFitOnLayerChange && layerToFit?.summary?.extent) {
+      fittedSummaryLayersRef.current.add(layerToFit.datasetName)
+      adapter.fitBounds(layerToFit.summary.extent, geometryKindFromDatasetKind(layerToFit.kind))
+    } else if (
+      autoFitOnLayerChange &&
+      layers.some((layer) =>
+        !layer.summary?.viewportQuerySupported &&
+        Boolean(layer.preview) &&
+        previousPreviewReady.get(layer.datasetName) !== true,
+      )
+    ) {
       adapter.fitAllVisibleLayers()
     }
     if (shouldFitSelectedAfterLayerSync && currentSelectedFeature) {
@@ -177,4 +207,14 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       </Box>
     </Paper>
   )
+}
+
+function geometryKindFromDatasetKind(kind: string): 'point' | 'line' | 'polygon' {
+  if (kind === 'line' || kind === 'lineZ') {
+    return 'line'
+  }
+  if (kind === 'region' || kind === 'regionZ') {
+    return 'polygon'
+  }
+  return 'point'
 }

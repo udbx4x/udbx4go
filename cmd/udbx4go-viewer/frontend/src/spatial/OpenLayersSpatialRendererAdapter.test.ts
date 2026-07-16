@@ -360,7 +360,13 @@ function createLayer(features: PreviewFeature[], fillColor = '#1971c2'): MapLaye
       features,
       estimatedVertexCount: features.length,
       sampled: false,
+      strategy: 'rtree',
+      hasMore: false,
+      queryDurationMs: 0,
+      fileGeneration: 0,
     },
+    queryStatus: 'ready',
+    queryError: null,
     style: {
       point: { radius: 4, fillColor, strokeColor: '#ffffff', strokeWidth: 1 },
       line: { strokeColor: '#1971c2', strokeWidth: 1.5 },

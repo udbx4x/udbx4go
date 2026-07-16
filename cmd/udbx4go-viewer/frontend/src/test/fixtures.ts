@@ -73,7 +73,13 @@ export const mapLayerFixtures: MapLayerState[] = [
       features: [],
       estimatedVertexCount: 0,
       sampled: false,
+      strategy: 'bounded_sample',
+      hasMore: false,
+      queryDurationMs: 0,
+      fileGeneration: 0,
     },
+    queryStatus: 'ready',
+    queryError: null,
     style: {
       point: { radius: 4, fillColor: '#1971C2', strokeColor: '#FFFFFF', strokeWidth: 1 },
       line: { strokeColor: '#1971C2', strokeWidth: 1.5 },
@@ -100,5 +106,9 @@ export const sampledMapLayerFixture: MapLayerState = {
     estimatedVertexCount: 50000,
     sampled: true,
     sampleReason: '预览达到要素上限',
+    strategy: 'bounded_sample',
+    hasMore: false,
+    queryDurationMs: 0,
+    fileGeneration: 0,
   },
 }

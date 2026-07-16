@@ -42,6 +42,8 @@ export async function runBenchmarkScenario(
       error: null,
       summary,
       preview,
+      queryStatus: preview.degradedReason ? 'degraded' : 'ready',
+      queryError: null,
     }
     dependencies.setLayer(layer)
   }

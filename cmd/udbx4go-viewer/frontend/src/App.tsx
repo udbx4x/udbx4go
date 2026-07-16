@@ -52,6 +52,7 @@ export function ViewerApp() {
     setMapLayerVisible,
     removeMapLayer,
     selectFeature,
+    queryViewport,
   } = udbx
 
   const [errorOpen, setErrorOpen] = React.useState(false)
@@ -136,6 +137,7 @@ export function ViewerApp() {
             selectedFeature={selectedMapFeature}
             autoFitOnLayerChange={settings.spatialPreview.autoFitOnLayerChange}
             zoomToSelectedFeature={settings.mapInteraction.zoomToSelectedFeature}
+            onViewportChange={queryViewport}
             onFeatureSelect={selectFeature}
           />
         }

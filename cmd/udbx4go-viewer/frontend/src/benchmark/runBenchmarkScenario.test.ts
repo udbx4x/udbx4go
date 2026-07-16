@@ -37,6 +37,8 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
         objectCount: 164,
         estimatedVertexCount: 1000,
         previewSupported: true,
+        viewportQuerySupported: true,
+        rtreeAvailable: true,
       }
     },
     loadSpatialPreview: async (datasetName, request) => {
@@ -51,6 +53,10 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
         }],
         estimatedVertexCount: 1000,
         sampled: false,
+        strategy: 'rtree',
+        hasMore: false,
+        queryDurationMs: 1,
+        fileGeneration: 0,
       }
     },
     loadDatasetPage: async (datasetName, page) => {
