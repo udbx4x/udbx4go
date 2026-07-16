@@ -191,6 +191,19 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     this.featureClickHandler = handler
   }
 
+  getViewport(): BoundingBox | null {
+    const extent = this.map?.getView().calculateExtent(this.map.getSize())
+    if (!extent || !isValidExtent([extent[0], extent[1], extent[2], extent[3]])) {
+      return null
+    }
+    return {
+      minX: extent[0],
+      minY: extent[1],
+      maxX: extent[2],
+      maxY: extent[3],
+    }
+  }
+
   onViewportChange(handler: (viewport: BoundingBox) => void): () => void {
     this.viewportChangeHandler = handler
     return () => {
@@ -201,16 +214,11 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   }
 
   private emitViewport(): void {
-    const extent = this.map?.getView().calculateExtent(this.map.getSize())
-    if (!extent || !isValidExtent([extent[0], extent[1], extent[2], extent[3]])) {
+    const viewport = this.getViewport()
+    if (!viewport) {
       return
     }
-    this.viewportChangeHandler?.({
-      minX: extent[0],
-      minY: extent[1],
-      maxX: extent[2],
-      maxY: extent[3],
-    })
+    this.viewportChangeHandler?.(viewport)
   }
 
   private createStyle(datasetName: string, featureID: number): Style {

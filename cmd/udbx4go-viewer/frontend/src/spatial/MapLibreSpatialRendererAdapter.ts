@@ -38,6 +38,10 @@ export class MapLibreSpatialRendererAdapter implements SpatialRendererAdapter {
     // No-op until MapLibre is wired into the viewer UI.
   }
 
+  getViewport(): BoundingBox | null {
+    return null
+  }
+
   onViewportChange(_handler: (viewport: BoundingBox) => void): () => void {
     return () => {
       // No-op until MapLibre is wired into the viewer UI.

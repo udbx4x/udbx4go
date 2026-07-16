@@ -21,11 +21,13 @@ type ExpectedFitBounds = (
 type ExpectedViewportSubscription = (
   handler: (viewport: BoundingBox) => void,
 ) => () => void
+type ExpectedGetViewport = () => BoundingBox | null
 
 type _FitBoundsContract = Assert<IsExact<SpatialRendererAdapter['fitBounds'], ExpectedFitBounds>>
 type _ViewportSubscriptionContract = Assert<
   IsExact<SpatialRendererAdapter['onViewportChange'], ExpectedViewportSubscription>
 >
+type _GetViewportContract = Assert<IsExact<SpatialRendererAdapter['getViewport'], ExpectedGetViewport>>
 
 const openLayersMocks = vi.hoisted(() => {
   class MockView {
@@ -142,6 +144,21 @@ describe('OpenLayersSpatialRendererAdapter viewport', () => {
 
     expect(handler).toHaveBeenCalledOnce()
     expect(handler).toHaveBeenCalledWith({ minX: -10, minY: -5, maxX: 20, maxY: 30 })
+  })
+
+  it('同步返回当前有限有序视口，未挂载或非法范围返回 null', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    expect(adapter.getViewport()).toBeNull()
+    adapter.mount(document.createElement('div'))
+    const view = openLayersMocks.MockView.instances[0]
+
+    view.extent = [-10, -5, 20, 30]
+    expect(adapter.getViewport()).toEqual({ minX: -10, minY: -5, maxX: 20, maxY: 30 })
+
+    view.extent = [Number.NaN, 0, 10, 10]
+    expect(adapter.getViewport()).toBeNull()
+    view.extent = [10, 0, 0, 10]
+    expect(adapter.getViewport()).toBeNull()
   })
 
   it('mount 建立渲染基线后，首次 fitBounds 由 moveend 发送视口', () => {

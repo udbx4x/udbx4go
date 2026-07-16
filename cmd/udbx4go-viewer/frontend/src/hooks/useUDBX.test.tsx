@@ -57,6 +57,88 @@ describe('useUDBX viewport spatial previews', () => {
     })
   })
 
+  it('隐藏期间更新视口后，重新显示图层会按最后视口查询', async () => {
+    const hiddenViewport = { minX: 200, minY: 100, maxX: 300, maxY: 180 }
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+    })
+
+    act(() => result.current.setMapLayerVisible('BaseMap_P', false))
+    act(() => result.current.queryViewport(hiddenViewport))
+    expect(mocks.LoadSpatialPreview).not.toHaveBeenCalled()
+    act(() => result.current.setMapLayerVisible('BaseMap_P', true))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledOnce()
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledWith(
+      'BaseMap_P',
+      expect.objectContaining({
+        viewport: { minX: 185, minY: 88, maxX: 315, maxY: 192 },
+      }),
+    )
+  })
+
+  it('隐藏执行中图层后退出 loading 且迟到结果不回写', async () => {
+    const deferred = createDeferred<SpatialPreview>()
+    mocks.LoadSpatialPreview.mockImplementationOnce(() => deferred.promise)
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+    })
+    act(() => result.current.queryViewport(viewport))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+
+    expect(result.current.mapLayers[0].queryStatus).toBe('loading')
+    act(() => result.current.setMapLayerVisible('BaseMap_P', false))
+    expect(result.current.mapLayers[0].queryStatus).toBe('idle')
+
+    deferred.resolve(preview({ queriedBounds: mocks.LoadSpatialPreview.mock.calls[0][1].viewport }))
+    await act(flushPromises)
+    expect(result.current.mapLayers[0]).toMatchObject({ preview: null, queryStatus: 'idle' })
+  })
+
+  it('已记录当前视口时，新空间矢量图层无需再次移动即可首查', async () => {
+    const { result } = renderViewerHook()
+    act(() => result.current.queryViewport(viewport))
+
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+    })
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledOnce()
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledWith(
+      'BaseMap_P',
+      expect.objectContaining({
+        viewport: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
+      }),
+    )
+  })
+
+  it('切换文件只失效旧查询，保留地图最后视口供新文件图层首查', async () => {
+    mocks.OpenFileDialog.mockResolvedValue('/tmp/next.udbx')
+    mocks.OpenUDBXFile.mockResolvedValue({ path: '/tmp/next.udbx', datasetCount: 1 })
+    const { result } = renderViewerHook()
+    act(() => result.current.queryViewport(viewport))
+    await act(async () => {
+      await result.current.openFileDialog()
+      await result.current.addDatasetToMap('BaseMap_P')
+    })
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledOnce()
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledWith(
+      'BaseMap_P',
+      expect.objectContaining({
+        viewport: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
+      }),
+    )
+  })
+
   it.each(['text', 'cad'])('%s 加层时立即加载有界预览', async (kind) => {
     mocks.GetDatasetSpatialSummary.mockResolvedValue({
       ...vectorSummary(),
@@ -135,6 +217,30 @@ describe('useUDBX viewport spatial previews', () => {
     await act(flushPromises)
 
     expect(result.current.mapLayers[0].preview?.viewportFeatureCount).toBe(expectedCount)
+  })
+
+  it('普通视口对象数只计有效有限有序且与查询范围闭区间相交的 BBox', async () => {
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+    })
+    mocks.LoadSpatialPreview.mockImplementationOnce((_datasetName, request) => Promise.resolve(preview({
+      queriedBounds: request.viewport,
+      features: [
+        previewFeature(1, { minX: 10, minY: 10, maxX: 10, maxY: 10 }),
+        previewFeature(2, { minX: request.viewport.maxX, minY: 0, maxX: request.viewport.maxX, maxY: 0 }),
+        previewFeature(3, { minX: Number.NaN, minY: 0, maxX: 1, maxY: 1 }),
+        previewFeature(4, { minX: 20, minY: 0, maxX: 10, maxY: 1 }),
+        { id: 5, geometry: { type: 'Point', coordinates: [1, 1], hasZ: false } },
+        previewFeature(6, { minX: 1000, minY: 1000, maxX: 1001, maxY: 1001 }),
+      ],
+    })))
+
+    act(() => result.current.queryViewport(viewport))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(result.current.mapLayers[0].preview?.viewportFeatureCount).toBe(2)
   })
 
   it('查询时保留旧 preview，成功后原子替换并记录范围', async () => {
@@ -256,6 +362,56 @@ describe('useUDBX viewport spatial previews', () => {
 
     expect(result.current.selectedMapFeature).toEqual({ datasetName: 'BaseMap_P', featureID: 8 })
     expect(result.current.selectedFeatureAttributes).toEqual(featureAttributes(8))
+  })
+
+  it('快速重复选择同一对象时立即清空旧属性并忽略旧请求响应', async () => {
+    const first = createDeferred<ReturnType<typeof featureAttributes>>()
+    const second = createDeferred<ReturnType<typeof featureAttributes>>()
+    mocks.GetFeatureAttributes
+      .mockResolvedValueOnce(featureAttributes(6))
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.selectFeature('BaseMap_P', 6)
+    })
+    expect(result.current.selectedFeatureAttributes).toEqual(featureAttributes(6))
+
+    let firstSelection!: Promise<void>
+    let secondSelection!: Promise<void>
+    act(() => {
+      firstSelection = result.current.selectFeature('BaseMap_P', 7)
+    })
+    expect(result.current.selectedFeatureAttributes).toBeNull()
+    act(() => {
+      secondSelection = result.current.selectFeature('BaseMap_P', 7)
+    })
+
+    first.resolve(featureAttributes(7))
+    await act(async () => firstSelection)
+    expect(result.current.selectedMapFeature).toEqual({ datasetName: 'BaseMap_P', featureID: 7 })
+    expect(result.current.selectedFeatureAttributes).toBeNull()
+
+    second.resolve(featureAttributes(7))
+    await act(async () => secondSelection)
+    expect(result.current.selectedFeatureAttributes).toEqual(featureAttributes(7))
+  })
+
+  it('当前属性响应 ID 不匹配时保留选择并保持属性为空', async () => {
+    mocks.GetFeatureAttributes
+      .mockResolvedValueOnce(featureAttributes(6))
+      .mockResolvedValueOnce(featureAttributes(8))
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.selectFeature('BaseMap_P', 6)
+    })
+    await act(async () => {
+      await result.current.selectFeature('BaseMap_P', 7)
+    })
+
+    expect(result.current.selectedMapFeature).toEqual({ datasetName: 'BaseMap_P', featureID: 7 })
+    expect(result.current.selectedFeatureAttributes).toBeNull()
+    expect(result.current.selectionLocationError).toBe('定位失败')
   })
 
   it.each([

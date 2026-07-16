@@ -10,6 +10,7 @@ export interface SpatialRendererAdapter {
   fitBounds(bounds: BoundingBox, geometryKind: 'point' | 'line' | 'polygon'): void
   setSelection(selection: SelectedMapFeature | null): void
   onFeatureClick(handler: (datasetName: string, featureID: number) => void): void
+  getViewport(): BoundingBox | null
   onViewportChange(handler: (viewport: BoundingBox) => void): () => void
 }
 

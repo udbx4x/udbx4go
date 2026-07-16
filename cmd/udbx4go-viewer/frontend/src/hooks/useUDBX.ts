@@ -12,7 +12,7 @@ import {
 } from '../../wailsjs/go/main/App'
 import { main } from '../../wailsjs/go/models'
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
-import { isLocatableFeature } from '../spatial/featureLocation'
+import { isLocatableFeature, isValidBounds } from '../spatial/featureLocation'
 import {
   ViewportQueryCoordinator,
   type ViewportQueryJob,
@@ -48,22 +48,24 @@ export function useUDBX(options: UseUDBXOptions) {
   const [error, setError] = useState<string | null>(null)
   const mapLayersRef = useRef<MapLayerState[]>([])
   const selectedMapFeatureRef = useRef<SelectedMapFeature | null>(null)
+  const selectionRequestTokenRef = useRef(0)
   const fileGenerationRef = useRef(0)
+  const lastViewportRef = useRef<BoundingBox | null>(null)
   const optionsRef = useRef(options)
 
   optionsRef.current = options
 
   const setMapLayers = useCallback((update: (layers: MapLayerState[]) => MapLayerState[]) => {
-    setMapLayersState((layers) => {
-      const next = update(layers)
-      mapLayersRef.current = next
-      return next
-    })
+    const next = update(mapLayersRef.current)
+    mapLayersRef.current = next
+    setMapLayersState(next)
   }, [])
 
   const setSelectedMapFeature = useCallback((selection: SelectedMapFeature | null) => {
+    selectionRequestTokenRef.current += 1
     selectedMapFeatureRef.current = selection
     setSelectedMapFeatureState(selection)
+    setSelectedFeatureAttributes(null)
   }, [])
 
   const coordinatorRef = useRef<ViewportQueryCoordinator | null>(null)
@@ -104,6 +106,23 @@ export function useUDBX(options: UseUDBXOptions) {
   }
 
   useEffect(() => () => coordinatorRef.current?.invalidateAll(), [])
+
+  const scheduleViewport = useCallback((viewport: BoundingBox) => {
+    if (!isValidBounds(viewport)) {
+      return
+    }
+    lastViewportRef.current = viewport
+    const layers = mapLayersRef.current
+      .filter((layer) => layer.visible && layer.summary?.viewportQuerySupported)
+      .map((layer) => ({
+        datasetName: layer.datasetName,
+        visible: layer.visible,
+        requiredIds: selectedMapFeatureRef.current?.datasetName === layer.datasetName
+          ? [selectedMapFeatureRef.current.featureID]
+          : [],
+      }))
+    coordinatorRef.current?.scheduleViewport(viewport, layers, fileGenerationRef.current)
+  }, [])
 
   const resetFileState = useCallback(() => {
     coordinatorRef.current?.invalidateAll()
@@ -204,6 +223,9 @@ export function useUDBX(options: UseUDBXOptions) {
       ))
 
       if (summary.viewportQuerySupported) {
+        if (lastViewportRef.current) {
+          scheduleViewport(lastViewportRef.current)
+        }
         return
       }
 
@@ -223,7 +245,7 @@ export function useUDBX(options: UseUDBXOptions) {
         : layer,
       ))
     }
-  }, [setMapLayers])
+  }, [scheduleViewport, setMapLayers])
 
   const loadDataset = useCallback(async (datasetName: string, page = 1) => {
     try {
@@ -242,26 +264,29 @@ export function useUDBX(options: UseUDBXOptions) {
   }, [addDatasetToMap, loadTableDataset, setSelectedMapFeature])
 
   const queryViewport = useCallback((viewport: BoundingBox) => {
-    const layers = mapLayersRef.current
-      .filter((layer) => layer.visible && layer.summary?.viewportQuerySupported)
-      .map((layer) => ({
-        datasetName: layer.datasetName,
-        visible: layer.visible,
-        requiredIds: selectedMapFeatureRef.current?.datasetName === layer.datasetName
-          ? [selectedMapFeatureRef.current.featureID]
-          : [],
-      }))
-    coordinatorRef.current?.scheduleViewport(viewport, layers, fileGenerationRef.current)
-  }, [])
+    scheduleViewport(viewport)
+  }, [scheduleViewport])
 
   const setMapLayerVisible = useCallback((datasetName: string, visible: boolean) => {
     if (!visible) {
       coordinatorRef.current?.invalidateLayer(datasetName)
     }
     setMapLayers((layers) => layers.map((layer) =>
-      layer.datasetName === datasetName ? { ...layer, visible } : layer,
+      layer.datasetName === datasetName
+        ? {
+            ...layer,
+            visible,
+            queryStatus: !visible && layer.queryStatus === 'loading'
+              ? stableQueryStatus(layer.preview)
+              : layer.queryStatus,
+            queryError: !visible && layer.queryStatus === 'loading' ? null : layer.queryError,
+          }
+        : layer,
     ))
-  }, [setMapLayers])
+    if (visible && lastViewportRef.current) {
+      scheduleViewport(lastViewportRef.current)
+    }
+  }, [scheduleViewport, setMapLayers])
 
   const removeMapLayer = useCallback((datasetName: string) => {
     coordinatorRef.current?.invalidateLayer(datasetName)
@@ -274,12 +299,13 @@ export function useUDBX(options: UseUDBXOptions) {
   }, [setMapLayers, setSelectedMapFeature])
 
   const selectFeature = useCallback(async (datasetName: string, featureID: number) => {
+    setSelectedMapFeature({ datasetName, featureID })
+    const requestToken = selectionRequestTokenRef.current
+    setSelectionLocationError(null)
     try {
       setError(null)
-      setSelectedMapFeature({ datasetName, featureID })
-      setSelectionLocationError(null)
       const attributes: FeatureAttributes = await GetFeatureAttributes(datasetName, featureID)
-      if (!selectionMatches(selectedMapFeatureRef.current, datasetName, featureID)) {
+      if (!selectionRequestMatches(requestToken, selectionRequestTokenRef.current, selectedMapFeatureRef.current, datasetName, featureID)) {
         return
       }
       if (attributes.datasetName !== datasetName || attributes.id !== featureID) {
@@ -294,7 +320,7 @@ export function useUDBX(options: UseUDBXOptions) {
         await loadTableDataset(datasetName, 1)
       }
     } catch (err) {
-      if (!selectionMatches(selectedMapFeatureRef.current, datasetName, featureID)) {
+      if (!selectionRequestMatches(requestToken, selectionRequestTokenRef.current, selectedMapFeatureRef.current, datasetName, featureID)) {
         return
       }
       setSelectedFeatureAttributes(null)
@@ -387,8 +413,25 @@ function selectionMatches(
   return selection?.datasetName === datasetName && selection.featureID === featureID
 }
 
+function selectionRequestMatches(
+  requestToken: number,
+  currentToken: number,
+  selection: SelectedMapFeature | null,
+  datasetName: string,
+  featureID: number,
+): boolean {
+  return requestToken === currentToken && selectionMatches(selection, datasetName, featureID)
+}
+
 function isDegradedViewportPreview(preview: SpatialPreview): boolean {
   return preview.strategy === 'bounded_sample' && preview.degradedReason === 'envelope_cache_budget_exceeded'
+}
+
+function stableQueryStatus(preview: SpatialPreview | null): MapLayerState['queryStatus'] {
+  if (!preview) {
+    return 'idle'
+  }
+  return isDegradedViewportPreview(preview) ? 'degraded' : 'ready'
 }
 
 function withViewportFeatureCount(preview: SpatialPreview): SpatialPreview {
@@ -398,7 +441,7 @@ function withViewportFeatureCount(preview: SpatialPreview): SpatialPreview {
   return {
     ...preview,
     viewportFeatureCount: preview.features.filter((feature) =>
-      feature.bbox ? boundsIntersect(feature.bbox, preview.queriedBounds!) : true,
+      isValidBounds(feature.bbox) && boundsIntersect(feature.bbox, preview.queriedBounds!),
     ).length,
   }
 }
