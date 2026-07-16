@@ -132,7 +132,8 @@ type SpatialQueryPolicy struct {
 	BuildTimeout time.Duration
 }
 
-// DefaultSpatialQueryPolicy returns the isolated PoC resource limits.
+// DefaultSpatialQueryPolicy returns the default spatial-query resource policy.
+// SDK defaults may evolve with measurements and are not format limits.
 func DefaultSpatialQueryPolicy() SpatialQueryPolicy {
 	return SpatialQueryPolicy{
 		MaxDatasetCacheBytes: 32 * 1024 * 1024,

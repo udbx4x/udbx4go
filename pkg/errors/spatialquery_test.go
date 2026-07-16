@@ -83,6 +83,7 @@ func TestSpatialQueryReasonOfUsesStandardErrorChain(t *testing.T) {
 	}{
 		{name: "nil"},
 		{name: "unrelated", err: stderrors.New("other")},
+		{name: "zero value", err: &SpatialQueryError{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -91,4 +92,20 @@ func TestSpatialQueryReasonOfUsesStandardErrorChain(t *testing.T) {
 			assert.Empty(t, reason)
 		})
 	}
+}
+
+func TestSpatialQueryErrorTypedNilIsDefensive(t *testing.T) {
+	var spatialErr *SpatialQueryError
+	var typedNil error = spatialErr
+
+	assert.NotPanics(t, func() {
+		assert.Equal(t, "spatial query error: <nil>", spatialErr.Error())
+		assert.Nil(t, spatialErr.Unwrap())
+		assert.Empty(t, spatialErr.Reason())
+		assert.Equal(t, CodeUdbxError, spatialErr.Code())
+	})
+
+	reason, ok := SpatialQueryReasonOf(typedNil)
+	assert.False(t, ok)
+	assert.Empty(t, reason)
 }

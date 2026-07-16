@@ -15,21 +15,33 @@ type SpatialQueryError struct {
 
 // Error returns the spatial-query failure message.
 func (e *SpatialQueryError) Error() string {
+	if e == nil {
+		return "spatial query error: <nil>"
+	}
 	return fmt.Sprintf("spatial query %s: %v", e.reason, e.cause)
 }
 
 // Unwrap returns the underlying spatial-query failure.
 func (e *SpatialQueryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
 	return e.cause
 }
 
 // Reason returns the spatial-query diagnostic reason.
 func (e *SpatialQueryError) Reason() types.SpatialQueryReason {
+	if e == nil {
+		return ""
+	}
 	return e.reason
 }
 
 // Code returns the wrapped UDBX error code or the general UDBX error code.
 func (e *SpatialQueryError) Code() string {
+	if e == nil {
+		return CodeUdbxError
+	}
 	var udbxErr UdbxError
 	if stderrors.As(e.cause, &udbxErr) {
 		return udbxErr.Code()
@@ -51,8 +63,12 @@ func NewSpatialQueryError(reason types.SpatialQueryReason, cause error) (*Spatia
 // SpatialQueryReasonOf extracts a spatial-query reason from an error chain.
 func SpatialQueryReasonOf(err error) (types.SpatialQueryReason, bool) {
 	var spatialErr *SpatialQueryError
-	if !stderrors.As(err, &spatialErr) {
+	if !stderrors.As(err, &spatialErr) || spatialErr == nil {
 		return "", false
 	}
-	return spatialErr.Reason(), true
+	reason := spatialErr.Reason()
+	if !reason.Valid() {
+		return "", false
+	}
+	return reason, true
 }
