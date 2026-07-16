@@ -21,6 +21,7 @@ import { viewerTheme } from './theme/viewerTheme'
 import type { DatasetInfo } from './types'
 import type { AttributeTableMode } from './components/AttributeTableDrawer'
 import type { BenchmarkConfig } from './benchmark/types'
+import type { main } from '../wailsjs/go/models'
 
 export function ViewerApp() {
   const {
@@ -231,7 +232,7 @@ function App() {
           return
         }
         if (config) {
-          setGate({ status: 'benchmark', config })
+          setGate({ status: 'benchmark', config: toBenchmarkConfig(config) })
         } else {
           setGate({ status: 'viewer' })
         }
@@ -258,6 +259,20 @@ function App() {
     return <BenchmarkRunner config={gate.config} />
   }
   return <ViewerApp />
+}
+
+function toBenchmarkConfig(config: main.BenchmarkConfigDTO): BenchmarkConfig {
+  return {
+    ...config,
+    temperature: config.temperature as BenchmarkConfig['temperature'],
+    scenario: {
+      ...config.scenario,
+      viewportSteps: config.scenario.viewportSteps.map((step) => ({
+        ...step,
+        expectedStrategy: step.expectedStrategy as BenchmarkConfig['scenario']['viewportSteps'][number]['expectedStrategy'],
+      })),
+    },
+  }
 }
 
 export default App

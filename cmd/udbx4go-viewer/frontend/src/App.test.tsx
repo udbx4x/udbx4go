@@ -239,11 +239,17 @@ describe('App settings integration', () => {
     mockGetBenchmarkConfig.mockResolvedValue({
       runId: 'sampledata-01',
       outputPath: '/tmp/sampledata-01.json',
+      temperature: 'cold',
+      maxConcurrentQueries: 1,
       scenario: {
         name: 'sampledata-multilayer',
         filePath: '/data/SampleData.udbx',
         layers: ['BaseMap_P'],
         selection: { datasetName: 'BaseMap_P', page: 1, rowIndex: 0 },
+        viewportSteps: [{
+          bounds: { minX: 115, minY: 38, maxX: 118, maxY: 42 },
+          expectedStrategy: 'envelope_cache',
+        }],
       },
     })
 

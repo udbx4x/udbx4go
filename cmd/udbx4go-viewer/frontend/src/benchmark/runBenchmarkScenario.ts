@@ -32,7 +32,9 @@ export async function runBenchmarkScenario(
     if (!summary.previewSupported) {
       throw new Error(summary.unsupportedReason || `数据集不支持空间预览: ${datasetName}`)
     }
-    const preview = await dependencies.loadSpatialPreview(datasetName, previewRequest)
+    const preview = summary.viewportQuerySupported
+      ? null
+      : await dependencies.loadSpatialPreview(datasetName, previewRequest)
     const layer: MapLayerState = {
       datasetName,
       kind: summary.kind,
@@ -42,7 +44,7 @@ export async function runBenchmarkScenario(
       error: null,
       summary,
       preview,
-      queryStatus: preview.degradedReason ? 'degraded' : 'ready',
+      queryStatus: preview?.degradedReason ? 'degraded' : 'idle',
       queryError: null,
     }
     dependencies.setLayer(layer)
@@ -73,6 +75,33 @@ export async function runBenchmarkScenario(
   dependencies.fitFeature(selection.datasetName, featureID)
   const selectAndFitMs = dependencies.now() - started
 
+  if (config.temperature === 'warm') {
+    for (const step of config.scenario.viewportSteps) {
+      const { hideLayers: _hide, showLayers: _show, removeLayers: _remove, ...warmupStep } = step
+      await dependencies.runViewportStep(warmupStep, [featureID])
+    }
+    dependencies.resetCoordinatorMetrics?.()
+  }
+
+  const backendQueryMs: number[] = []
+  const moveendToRenderMs: number[] = []
+  let finalFeatureCount = 0
+  let blankRenderCount = 0
+  for (const step of config.scenario.viewportSteps) {
+    const viewportResult = await dependencies.runViewportStep(step, [featureID])
+    const strategies = viewportResult.strategies ?? [step.expectedStrategy]
+    if (strategies.some((strategy) => strategy !== step.expectedStrategy)) {
+      throw new Error(`expected strategy ${step.expectedStrategy}, received ${strategies.join(', ')}`)
+    }
+    backendQueryMs.push(...viewportResult.backendQueryMs)
+    moveendToRenderMs.push(viewportResult.moveendToRenderMs)
+    finalFeatureCount = viewportResult.finalFeatureCount
+    if (viewportResult.blankRender) {
+      blankRenderCount += 1
+    }
+  }
+  const coordinatorMetrics = dependencies.getCoordinatorMetrics()
+
   return {
     runId: config.runId,
     status: 'passed',
@@ -83,6 +112,15 @@ export async function runBenchmarkScenario(
       loadLayersMs,
       fitVisibleLayersMs,
       selectAndFitMs,
+      backendQueryMs,
+      moveendToRenderMs,
+      maxConcurrentQueries: coordinatorMetrics.maxConcurrentQueries,
+      pendingPeak: coordinatorMetrics.pendingPeak,
+      pendingFinal: coordinatorMetrics.pendingQueries,
+      staleResultsDiscarded: coordinatorMetrics.staleResultsDiscarded,
+      staleResultApplied: coordinatorMetrics.staleResultApplied,
+      finalFeatureCount,
+      blankRenderCount,
     },
     error: '',
   }

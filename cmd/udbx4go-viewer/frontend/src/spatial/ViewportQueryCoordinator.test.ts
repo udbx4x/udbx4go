@@ -88,6 +88,40 @@ describe('ViewportQueryCoordinator', () => {
     expect(harness.requests[0].job.bounds).toEqual({ minX: 85, minY: 35, maxX: 215, maxY: 165 })
   })
 
+  it('按配置限制并发并暴露 pending、并发和迟到丢弃观测', async () => {
+    const harness = createHarness(2)
+    harness.layers.set('counties', { visible: true })
+
+    harness.coordinator.scheduleViewport(
+      viewportA,
+      [layer('points'), layer('roads'), layer('counties')],
+      1,
+    )
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(harness.requests).toHaveLength(2)
+    expect(harness.coordinator.getMetrics()).toMatchObject({
+      maxConcurrentQueries: 2,
+      pendingPeak: 3,
+      activeQueries: 2,
+      pendingQueries: 1,
+      staleResultsDiscarded: 0,
+      staleResultApplied: false,
+    })
+
+    harness.coordinator.scheduleViewport(
+      viewportB,
+      [layer('points'), layer('roads'), layer('counties')],
+      1,
+    )
+    await vi.advanceTimersByTimeAsync(250)
+    harness.requests[0].resolve(previewFor(harness.requests[0].job))
+    await flushPromises()
+
+    expect(harness.coordinator.getMetrics().staleResultsDiscarded).toBe(1)
+    expect(harness.applyPreview).not.toHaveBeenCalled()
+  })
+
   it('全局并发为 1，前一层完成后立即执行其他层最新 pending', async () => {
     const harness = createHarness()
 
@@ -266,6 +300,17 @@ describe('ViewportQueryCoordinator', () => {
     expect(harness.applyPreview).not.toHaveBeenCalled()
     expect(harness.applyError).toHaveBeenCalledWith('points', 'query failed')
   })
+
+  it('保留 Wails 字符串拒绝原因用于诊断', async () => {
+    const harness = createHarness()
+    harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+
+    harness.requests[0].reject('backend query failed')
+    await flushPromises()
+
+    expect(harness.applyError).toHaveBeenCalledWith('points', 'backend query failed')
+  })
 })
 
 interface ControlledRequest {
@@ -287,7 +332,7 @@ interface Harness {
   activeRequests: () => number
 }
 
-function createHarness(): Harness {
+function createHarness(maxConcurrentQueries = 1): Harness {
   const harness = {
     fileGeneration: 1,
     layers: new Map([['points', { visible: true }], ['roads', { visible: true }]]),
@@ -330,7 +375,7 @@ function createHarness(): Harness {
     applyError: harness.applyError,
     getFileGeneration: () => result.fileGeneration,
     getLayer: (datasetName) => harness.layers.get(datasetName),
-  })
+  }, 250, 0.15, maxConcurrentQueries)
 
   result.coordinator = coordinator
   return result

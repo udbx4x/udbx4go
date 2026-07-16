@@ -36,8 +36,18 @@ interface DebouncedViewport {
   fileGeneration: number
 }
 
+export interface ViewportQueryMetrics {
+  maxConcurrentQueries: number
+  pendingPeak: number
+  activeQueries: number
+  pendingQueries: number
+  staleResultsDiscarded: number
+  staleResultApplied: boolean
+}
+
 const DEFAULT_DEBOUNCE_MS = 250
 const DEFAULT_BUFFER_RATIO = 0.15
+export const VIEWPORT_QUERY_MAX_CONCURRENCY = 1
 
 export class ViewportQueryCoordinator {
   private readonly layerStates = new Map<string, LayerRequestState>()
@@ -46,12 +56,33 @@ export class ViewportQueryCoordinator {
   private readonly readyQueue: string[] = []
   private readonly queuedLayers = new Set<string>()
   private activeJobs = 0
+  private maxObservedConcurrentQueries = 0
+  private pendingPeak = 0
+  private staleResultsDiscarded = 0
 
   constructor(
     private readonly dependencies: CoordinatorDependencies,
     private readonly debounceMs = DEFAULT_DEBOUNCE_MS,
     private readonly bufferRatio = DEFAULT_BUFFER_RATIO,
+    private readonly maxConcurrentQueries = VIEWPORT_QUERY_MAX_CONCURRENCY,
   ) {}
+
+  getMetrics(): ViewportQueryMetrics {
+    return {
+      maxConcurrentQueries: this.maxObservedConcurrentQueries,
+      pendingPeak: this.pendingPeak,
+      activeQueries: this.activeJobs,
+      pendingQueries: this.pendingCount(),
+      staleResultsDiscarded: this.staleResultsDiscarded,
+      staleResultApplied: false,
+    }
+  }
+
+  resetMetrics(): void {
+    this.maxObservedConcurrentQueries = this.activeJobs
+    this.pendingPeak = this.pendingCount()
+    this.staleResultsDiscarded = 0
+  }
 
   scheduleViewport(
     viewport: BoundingBox,
@@ -127,11 +158,12 @@ export class ViewportQueryCoordinator {
       }
       this.enqueueLayer(layer.datasetName)
     })
+    this.pendingPeak = Math.max(this.pendingPeak, this.pendingCount())
     this.pump()
   }
 
   private pump(): void {
-    if (this.activeJobs >= 1) {
+    if (this.activeJobs >= this.maxConcurrentQueries) {
       return
     }
 
@@ -150,9 +182,12 @@ export class ViewportQueryCoordinator {
       }
       state.inFlight = job
       this.activeJobs += 1
+      this.maxObservedConcurrentQueries = Math.max(this.maxObservedConcurrentQueries, this.activeJobs)
       this.dependencies.applyLoading(datasetName)
       void this.runJob(state, job)
-      return
+      if (this.activeJobs >= this.maxConcurrentQueries) {
+        return
+      }
     }
   }
 
@@ -162,6 +197,8 @@ export class ViewportQueryCoordinator {
       if (this.canApply(state, job, preview)) {
         state.appliedVersion = job.version
         this.dependencies.applyPreview(job.datasetName, preview)
+      } else {
+        this.staleResultsDiscarded += 1
       }
     } catch (error) {
       if (this.canApply(state, job)) {
@@ -177,6 +214,16 @@ export class ViewportQueryCoordinator {
       }
       this.pump()
     }
+  }
+
+  private pendingCount(): number {
+    let count = this.readyQueue.length
+    this.layerStates.forEach((state) => {
+      if (state.pending && !this.queuedLayers.has(state.pending.datasetName)) {
+        count += 1
+      }
+    })
+    return count
   }
 
   private canStart(state: LayerRequestState, job: ViewportQueryJob): boolean {
@@ -265,5 +312,11 @@ function uniqueIDs(ids: number[]): number[] {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : '当前范围加载失败'
+  if (error instanceof Error) {
+    return error.message
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error
+  }
+  return '当前范围加载失败'
 }

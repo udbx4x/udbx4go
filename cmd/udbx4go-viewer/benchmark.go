@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,16 +13,27 @@ import (
 )
 
 type BenchmarkConfigDTO struct {
-	RunID      string               `json:"runId"`
-	OutputPath string               `json:"outputPath"`
-	Scenario   BenchmarkScenarioDTO `json:"scenario"`
+	RunID                string               `json:"runId"`
+	OutputPath           string               `json:"outputPath"`
+	Temperature          string               `json:"temperature"`
+	MaxConcurrentQueries int                  `json:"maxConcurrentQueries"`
+	Scenario             BenchmarkScenarioDTO `json:"scenario"`
 }
 
 type BenchmarkScenarioDTO struct {
-	Name      string                `json:"name"`
-	FilePath  string                `json:"filePath"`
-	Layers    []string              `json:"layers"`
-	Selection BenchmarkSelectionDTO `json:"selection"`
+	Name          string                     `json:"name"`
+	FilePath      string                     `json:"filePath"`
+	Layers        []string                   `json:"layers"`
+	Selection     BenchmarkSelectionDTO      `json:"selection"`
+	ViewportSteps []BenchmarkViewportStepDTO `json:"viewportSteps"`
+}
+
+type BenchmarkViewportStepDTO struct {
+	Bounds           BoundingBoxDTO `json:"bounds"`
+	ExpectedStrategy string         `json:"expectedStrategy"`
+	HideLayers       []string       `json:"hideLayers,omitempty"`
+	ShowLayers       []string       `json:"showLayers,omitempty"`
+	RemoveLayers     []string       `json:"removeLayers,omitempty"`
 }
 
 type BenchmarkSelectionDTO struct {
@@ -31,10 +43,19 @@ type BenchmarkSelectionDTO struct {
 }
 
 type BenchmarkMetricsDTO struct {
-	OpenFileMS         float64 `json:"openFileMs"`
-	LoadLayersMS       float64 `json:"loadLayersMs"`
-	FitVisibleLayersMS float64 `json:"fitVisibleLayersMs"`
-	SelectAndFitMS     float64 `json:"selectAndFitMs"`
+	OpenFileMS            float64   `json:"openFileMs"`
+	LoadLayersMS          float64   `json:"loadLayersMs"`
+	FitVisibleLayersMS    float64   `json:"fitVisibleLayersMs"`
+	SelectAndFitMS        float64   `json:"selectAndFitMs"`
+	BackendQueryMS        []float64 `json:"backendQueryMs"`
+	MoveendToRenderMS     []float64 `json:"moveendToRenderMs"`
+	MaxConcurrentQueries  int       `json:"maxConcurrentQueries"`
+	PendingPeak           int       `json:"pendingPeak"`
+	PendingFinal          int       `json:"pendingFinal"`
+	StaleResultsDiscarded int       `json:"staleResultsDiscarded"`
+	StaleResultApplied    bool      `json:"staleResultApplied"`
+	FinalFeatureCount     int       `json:"finalFeatureCount"`
+	BlankRenderCount      int       `json:"blankRenderCount"`
 }
 
 type BenchmarkResultDTO struct {
@@ -96,6 +117,12 @@ func validateBenchmarkConfig(config BenchmarkConfigDTO) error {
 	if strings.TrimSpace(config.Scenario.Name) == "" {
 		return fmt.Errorf("scenario.name is required")
 	}
+	if config.Temperature != "cold" && config.Temperature != "warm" {
+		return fmt.Errorf("temperature must be cold or warm")
+	}
+	if config.MaxConcurrentQueries < 1 || config.MaxConcurrentQueries > 3 {
+		return fmt.Errorf("maxConcurrentQueries must be between 1 and 3")
+	}
 	if !filepath.IsAbs(config.Scenario.FilePath) {
 		return fmt.Errorf("scenario.filePath must be absolute: %s", config.Scenario.FilePath)
 	}
@@ -104,6 +131,17 @@ func validateBenchmarkConfig(config BenchmarkConfigDTO) error {
 	}
 	if len(config.Scenario.Layers) == 0 {
 		return fmt.Errorf("scenario.layers must not be empty")
+	}
+	if len(config.Scenario.ViewportSteps) == 0 {
+		return fmt.Errorf("scenario.viewportSteps must not be empty")
+	}
+	for index, step := range config.Scenario.ViewportSteps {
+		if !validBenchmarkBounds(step.Bounds) {
+			return fmt.Errorf("scenario.viewportSteps[%d].bounds is invalid", index)
+		}
+		if !validBenchmarkStrategy(step.ExpectedStrategy) {
+			return fmt.Errorf("scenario.viewportSteps[%d].expectedStrategy is invalid", index)
+		}
 	}
 	for index, layer := range config.Scenario.Layers {
 		if strings.TrimSpace(layer) == "" {
@@ -123,12 +161,32 @@ func validateBenchmarkConfig(config BenchmarkConfigDTO) error {
 	return nil
 }
 
+func validBenchmarkBounds(bounds BoundingBoxDTO) bool {
+	values := []float64{bounds.MinX, bounds.MinY, bounds.MaxX, bounds.MaxY}
+	for _, value := range values {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return false
+		}
+	}
+	return bounds.MinX <= bounds.MaxX && bounds.MinY <= bounds.MaxY
+}
+
+func validBenchmarkStrategy(strategy string) bool {
+	switch strategy {
+	case "rtree", "envelope_cache", "bounded_sample":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *App) GetBenchmarkConfig() (*BenchmarkConfigDTO, error) {
 	if a.benchmarkConfig == nil {
 		return nil, nil
 	}
 	config := *a.benchmarkConfig
 	config.Scenario.Layers = append([]string(nil), a.benchmarkConfig.Scenario.Layers...)
+	config.Scenario.ViewportSteps = append([]BenchmarkViewportStepDTO(nil), a.benchmarkConfig.Scenario.ViewportSteps...)
 	return &config, nil
 }
 

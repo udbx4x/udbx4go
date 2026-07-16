@@ -4,80 +4,181 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const metricNames = [
-  'openFileMs',
-  'loadLayersMs',
-  'fitVisibleLayersMs',
-  'selectAndFitMs',
+const requiredScenarios = [
+  'henan-weibo-rtree-pan-zoom',
+  'henan-county-envelope-selection',
+  'sampledata-multilayer-viewport',
 ]
+const scalarMetricNames = ['openFileMs', 'loadLayersMs', 'fitVisibleLayersMs', 'selectAndFitMs']
+const maxRssGrowthKiB = 64 * 1024
 
-function median(values) {
-  if (values.length === 0) {
-    return null
-  }
+function percentile(values, fraction) {
+  if (values.length === 0) return null
   const sorted = [...values].sort((a, b) => a - b)
-  const middle = Math.floor(sorted.length / 2)
-  if (sorted.length % 2 === 1) {
-    return sorted[middle]
+  return sorted[Math.max(0, Math.ceil(sorted.length * fraction) - 1)]
+}
+
+function distribution(values) {
+  const finite = values.map(Number).filter(Number.isFinite)
+  return { p50: percentile(finite, 0.5), p95: percentile(finite, 0.95) }
+}
+
+function validateRuns(runs) {
+  if (!Array.isArray(runs) || runs.length === 0) throw new Error('benchmark results must contain runs')
+  for (const name of requiredScenarios) {
+    const scenarioRuns = runs.filter((run) => run.scenario === name)
+    if (scenarioRuns.length === 0) throw new Error(`required scenario ${name} is missing`)
+    if (scenarioRuns.length !== 10) throw new Error(`scenario ${name} must contain exactly 10 runs`)
+    for (const temperature of ['cold', 'warm']) {
+      const temperatureRuns = scenarioRuns.filter((run) => run.temperature === temperature)
+      if (temperatureRuns.length !== 5) throw new Error(`scenario ${name} must contain exactly 5 ${temperature} runs`)
+      const iterations = temperatureRuns.map((run) => run.iteration).sort((a, b) => a - b)
+      if (iterations.some((iteration, index) => iteration !== index + 1)) {
+        throw new Error(`scenario ${name} ${temperature} runs must contain iterations 1 through 5`)
+      }
+    }
   }
-  return (sorted[middle - 1] + sorted[middle]) / 2
+  if (runs.some((run) => !Number.isFinite(Number(run.peakRssKiB)) || Number(run.peakRssKiB) <= 0 || run.memoryCaptureError)) {
+    throw new Error('every benchmark run must contain a valid RSS sample')
+  }
+}
+
+function summarizeTemperature(runs) {
+  const result = {}
+  for (const metricName of scalarMetricNames) {
+    result[metricName] = distribution(runs.map((run) => run.metrics[metricName]))
+  }
+  result.backendQueryMs = distribution(runs.flatMap((run) => run.metrics.backendQueryMs ?? []))
+  result.moveendToRenderMs = distribution(runs.flatMap((run) => run.metrics.moveendToRenderMs ?? []))
+  result.peakRssKiB = distribution(runs.map((run) => run.peakRssKiB))
+  result.rssGrowthKiB = distribution(runs.map((run) => Math.max(0, Number(run.rssEndKiB) - Number(run.rssStartKiB))))
+  return result
 }
 
 export function summarizeRuns(runs) {
-  if (!Array.isArray(runs) || runs.length === 0) {
-    throw new Error('benchmark results must contain runs')
-  }
+  validateRuns(runs)
+  const unexpected = [...new Set(runs.map((run) => run.scenario))].filter((name) => !requiredScenarios.includes(name))
+  if (unexpected.length > 0) throw new Error(`unexpected scenario: ${unexpected.join(', ')}`)
 
-  const groups = new Map()
-  for (const run of runs) {
-    const group = groups.get(run.scenario) ?? []
-    group.push(run)
-    groups.set(run.scenario, group)
-  }
-
-  const scenarios = []
-  for (const [name, scenarioRuns] of groups) {
-    if (scenarioRuns.length !== 5) {
-      throw new Error(`scenario ${name} must contain exactly 5 runs`)
-    }
-    scenarioRuns.sort((a, b) => a.iteration - b.iteration)
-    const cold = scenarioRuns.find((run) => run.iteration === 1)
-    const warmRuns = scenarioRuns.filter((run) => run.iteration > 1 && run.status === 'passed')
-    if (!cold) {
-      throw new Error(`scenario ${name} is missing cold iteration 1`)
-    }
-
-    const warm = {}
-    for (const metricName of metricNames) {
-      const values = warmRuns.map((run) => Number(run.metrics[metricName]))
-      warm[metricName] = {
-        median: median(values),
-        slowest: values.length > 0 ? Math.max(...values) : null,
-      }
-    }
-
-    const rssValues = scenarioRuns
-      .map((run) => Number(run.peakRssKiB))
-      .filter((value) => Number.isFinite(value) && value > 0)
-    scenarios.push({
+  const scenarios = requiredScenarios.map((name) => {
+    const scenarioRuns = runs.filter((run) => run.scenario === name).sort((a, b) =>
+      a.temperature.localeCompare(b.temperature) || a.iteration - b.iteration,
+    )
+    const coldRuns = scenarioRuns.filter((run) => run.temperature === 'cold')
+    const warmRuns = scenarioRuns.filter((run) => run.temperature === 'warm')
+    const staleApplied = scenarioRuns.some((run) => Boolean(run.metrics.staleResultApplied))
+    const blankRendered = scenarioRuns.some((run) => Number(run.metrics.blankRenderCount) > 0)
+    const pendingDrained = scenarioRuns.every((run) => Number(run.metrics.pendingFinal) === 0)
+    const noSustainedRssGrowth = scenarioRuns.every((run) =>
+      Number(run.rssEndKiB) - Number(run.rssStartKiB) <= maxRssGrowthKiB,
+    )
+    return {
       name,
-      cold,
       runs: scenarioRuns,
-      warm,
-      peakRssKiB: rssValues.length > 0 ? Math.max(...rssValues) : null,
-    })
-  }
+      cold: summarizeTemperature(coldRuns),
+      warm: summarizeTemperature(warmRuns),
+      peakRssKiB: Math.max(...scenarioRuns.map((run) => Number(run.peakRssKiB))),
+      gates: {
+        allRunsPassed: scenarioRuns.every((run) => run.status === 'passed'),
+        pendingDrained,
+        noStaleApplied: !staleApplied,
+        noBlankRender: !blankRendered,
+        noSustainedRssGrowth,
+      },
+    }
+  })
 
   const failures = runs
     .filter((run) => run.status !== 'passed')
     .map((run) => ({ runId: run.runId, scenario: run.scenario, error: run.error || 'unknown error' }))
-
+  const weibo = scenarios.find((scenario) => scenario.name === requiredScenarios[0])
+  const gates = {
+    completeTenRuns: true,
+    allRunsPassed: failures.length === 0,
+    rtreeBackendP95: weibo.warm.backendQueryMs.p95 != null && weibo.warm.backendQueryMs.p95 <= 100,
+    moveendToRenderP95: scenarios.every((scenario) =>
+      scenario.warm.moveendToRenderMs.p95 != null && scenario.warm.moveendToRenderMs.p95 <= 300,
+    ),
+    pendingDrained: scenarios.every((scenario) => scenario.gates.pendingDrained),
+    noStaleApplied: scenarios.every((scenario) => scenario.gates.noStaleApplied),
+    noBlankRender: scenarios.every((scenario) => scenario.gates.noBlankRender),
+    noSustainedRssGrowth: scenarios.every((scenario) => scenario.gates.noSustainedRssGrowth),
+  }
+  const maxConcurrentQueries = Math.max(...runs.map((run) => Number(run.maxConcurrentQueries ?? 0)))
   return {
-    status: failures.length === 0 ? 'passed' : 'failed',
+    status: Object.values(gates).every(Boolean) ? 'passed' : 'failed',
     generatedAt: new Date().toISOString(),
+    completeTenRunGate: true,
+    maxConcurrentQueries,
+    appPath: runs[0].appPath,
     environment: runs[0].environment ?? {},
+    samples: [...new Map(runs.map((run) => [run.environment?.samplePath, {
+      path: run.environment?.samplePath,
+      sha256: run.environment?.sampleSha256,
+      sizeBytes: run.environment?.sampleSizeBytes,
+    }])).values()],
     scenarios,
     failures,
+    gates,
+  }
+}
+
+function concurrencyComparisonValue(summary, selector) {
+  return Math.max(...summary.scenarios.map(selector))
+}
+
+function sampleFingerprint(samples) {
+  return JSON.stringify(
+    [...(samples ?? [])]
+      .map((sample) => ({ path: sample.path, sha256: sample.sha256, sizeBytes: Number(sample.sizeBytes) }))
+      .sort((left, right) => left.path.localeCompare(right.path)),
+  )
+}
+
+function assertSameCandidateInputs(baseline, candidate) {
+  const sameApp = candidate.appPath === baseline.appPath
+    && candidate.environment?.gitCommit === baseline.environment?.gitCommit
+    && candidate.environment?.appSha256
+    && candidate.environment.appSha256 === baseline.environment?.appSha256
+  if (!sameApp) {
+    throw new Error('concurrency candidates must use the same packaged app')
+  }
+  if (sampleFingerprint(candidate.samples) !== sampleFingerprint(baseline.samples)) {
+    throw new Error('concurrency candidates must use the same samples')
+  }
+}
+
+export function selectConcurrency(baseline, candidates) {
+  if (baseline.status !== 'passed' || baseline.maxConcurrentQueries !== 1) {
+    throw new Error('concurrency baseline must be a passed concurrency-1 summary')
+  }
+  const candidateConcurrencies = candidates.map((candidate) => candidate.maxConcurrentQueries).sort((a, b) => a - b)
+  if (candidateConcurrencies.length !== 2 || candidateConcurrencies[0] !== 2 || candidateConcurrencies[1] !== 3) {
+    throw new Error('concurrency candidates must contain concurrency 2 and 3 exactly once')
+  }
+  candidates.forEach((candidate) => assertSameCandidateInputs(baseline, candidate))
+  const baselineP95 = concurrencyComparisonValue(baseline, (scenario) => scenario.warm.moveendToRenderMs.p95)
+  const baselineRss = concurrencyComparisonValue(baseline, (scenario) => scenario.peakRssKiB)
+  const comparisons = candidates
+    .slice()
+    .sort((left, right) => left.maxConcurrentQueries - right.maxConcurrentQueries)
+    .map((candidate) => {
+      const moveendP95 = concurrencyComparisonValue(candidate, (scenario) => scenario.warm.moveendToRenderMs.p95)
+      const peakRssKiB = concurrencyComparisonValue(candidate, (scenario) => scenario.peakRssKiB)
+      const latencyRatio = moveendP95 / baselineP95
+      const rssRatio = peakRssKiB / baselineRss
+      return {
+        concurrency: candidate.maxConcurrentQueries,
+        latencyRatio,
+        rssRatio,
+        qualified: candidate.status === 'passed' && latencyRatio <= 0.95 && rssRatio <= 1.10,
+      }
+    })
+  return {
+    selected: comparisons.find((candidate) => candidate.qualified)?.concurrency ?? 1,
+    baselineP95,
+    baselineRssKiB: baselineRss,
+    comparisons,
   }
 }
 
@@ -89,52 +190,65 @@ function formatMiB(kib) {
   return kib == null ? 'N/A' : (Number(kib) / 1024).toFixed(2)
 }
 
+function pass(value) {
+  return value ? 'PASS' : 'FAIL'
+}
+
 export function renderMarkdown(summary) {
   const lines = [
-    '# udbx-viewer macOS 本机性能报告',
-    '',
-    `- 状态：${summary.status}`,
+    '# udbx-viewer 视口空间查询验收报告', '',
+    `- 自动验收：${summary.status.toUpperCase()}`,
     `- 生成时间：${summary.generatedAt}`,
     `- Git 提交：${summary.environment.gitCommit ?? 'N/A'}`,
+    `- 应用 SHA256：${summary.environment.appSha256 ?? 'N/A'}`,
     `- macOS：${summary.environment.macOSVersion ?? 'N/A'}`,
     `- CPU：${summary.environment.cpu ?? 'N/A'}`,
-    `- 物理内存：${summary.environment.memoryBytes ? `${(summary.environment.memoryBytes / 1024 / 1024 / 1024).toFixed(2)} GiB` : 'N/A'}`,
-    '',
+    `- 物理内存：${summary.environment.memoryBytes ? `${(summary.environment.memoryBytes / 1024 ** 3).toFixed(2)} GiB` : 'N/A'}`,
+    `- 应用路径：${summary.appPath ?? 'N/A'}`,
+    `- 最终并发：${summary.maxConcurrentQueries}`, '',
+    '## 样本', '',
+    '| 路径 | 样本 SHA256 | 字节数 |', '| --- | --- | ---: |',
+    ...summary.samples.map((sample) => `| ${sample.path} | ${sample.sha256} | ${sample.sizeBytes} |`), '',
+    '## 自动门禁', '',
+    '| 门禁 | 结果 |', '| --- | --- |',
+    `| 三场景各冷 5 + 热 5 完整十轮 | ${pass(summary.gates.completeTenRuns)} |`,
+    `| 全部轮次无错误 | ${pass(summary.gates.allRunsPassed)} |`,
+    `| weibo RTree 热后端 P95 <= 100 ms | ${pass(summary.gates.rtreeBackendP95)} |`,
+    `| 全场景热 moveend -> render P95 <= 300 ms | ${pass(summary.gates.moveendToRenderP95)} |`,
+    `| pending 最终清空 | ${pass(summary.gates.pendingDrained)} |`,
+    `| 无旧结果应用 | ${pass(summary.gates.noStaleApplied)} |`,
+    `| 无白屏 | ${pass(summary.gates.noBlankRender)} |`,
+    `| RSS 结束增长 <= 64 MiB | ${pass(summary.gates.noSustainedRssGrowth)} |`, '',
   ]
 
   for (const scenario of summary.scenarios) {
     lines.push(`## ${scenario.name}`, '')
-    lines.push('| 轮次 | 温度 | 打开文件 ms | 加载图层 ms | 适配范围 ms | 选择定位 ms | 峰值 RSS MiB | 状态 |')
-    lines.push('| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |')
+    lines.push('| 温度 | 后端查询 P50/P95 ms | moveend -> render P50/P95 ms | RSS 峰值 P50/P95 MiB | RSS 增长 P50/P95 MiB |')
+    lines.push('| --- | ---: | ---: | ---: | ---: |')
+    for (const temperature of ['cold', 'warm']) {
+      const item = scenario[temperature]
+      lines.push(`| ${temperature} | ${formatNumber(item.backendQueryMs.p50)} / ${formatNumber(item.backendQueryMs.p95)} | ${formatNumber(item.moveendToRenderMs.p50)} / ${formatNumber(item.moveendToRenderMs.p95)} | ${formatMiB(item.peakRssKiB.p50)} / ${formatMiB(item.peakRssKiB.p95)} | ${formatMiB(item.rssGrowthKiB.p50)} / ${formatMiB(item.rssGrowthKiB.p95)} |`)
+    }
+    lines.push('', '### 原始十轮', '')
+    lines.push('| 温度 | 轮次 | backendQueryMs | moveendToRenderMs | maxConcurrent | pendingPeak/final | stale discard/applied | final count | 白屏 | RSS peak/start/end MiB | 状态 |')
+    lines.push('| --- | ---: | --- | --- | ---: | --- | --- | ---: | ---: | --- | --- |')
     for (const run of scenario.runs) {
-      lines.push(`| ${run.iteration} | ${run.temperature} | ${formatNumber(run.metrics.openFileMs)} | ${formatNumber(run.metrics.loadLayersMs)} | ${formatNumber(run.metrics.fitVisibleLayersMs)} | ${formatNumber(run.metrics.selectAndFitMs)} | ${formatMiB(run.peakRssKiB)} | ${run.status} |`)
-    }
-    lines.push('', '| 指标 | 冷启动 | 热运行中位数 | 热运行最慢值 |', '| --- | ---: | ---: | ---: |')
-    for (const metricName of metricNames) {
-      lines.push(`| ${metricName} | ${formatNumber(scenario.cold.metrics[metricName])} | ${formatNumber(scenario.warm[metricName].median)} | ${formatNumber(scenario.warm[metricName].slowest)} |`)
-    }
-    lines.push(`| peakRssMiB | ${formatMiB(scenario.cold.peakRssKiB)} | N/A | ${formatMiB(scenario.peakRssKiB)} |`, '')
-  }
-
-  lines.push('## 失败详情', '')
-  if (summary.failures.length === 0) {
-    lines.push('无。', '')
-  } else {
-    for (const failure of summary.failures) {
-      lines.push(`- ${failure.runId}（${failure.scenario}）：${failure.error}`)
+      lines.push(`| ${run.temperature} | ${run.iteration} | ${(run.metrics.backendQueryMs ?? []).map(formatNumber).join(', ')} | ${(run.metrics.moveendToRenderMs ?? []).map(formatNumber).join(', ')} | ${run.metrics.maxConcurrentQueries} | ${run.metrics.pendingPeak}/${run.metrics.pendingFinal} | ${run.metrics.staleResultsDiscarded}/${run.metrics.staleResultApplied} | ${run.metrics.finalFeatureCount} | ${run.metrics.blankRenderCount} | ${formatMiB(run.peakRssKiB)}/${formatMiB(run.rssStartKiB)}/${formatMiB(run.rssEndKiB)} | ${run.status} |`)
     }
     lines.push('')
   }
 
+  lines.push('## 失败详情', '')
+  if (summary.failures.length === 0) lines.push('无。', '')
+  else lines.push(...summary.failures.map((failure) => `- ${failure.runId}（${failure.scenario}）：${failure.error}`), '')
   lines.push(
-    '## 人工验收',
-    '',
-    '- [ ] SampleData 点、线、面和 CADDT 多图层加载、显隐与移除正常。',
-    '- [ ] 地图与属性表双向选择，点、线、面按对应几何范围定位。',
-    '- [ ] henan 县级行政区划 164 条完整可见，第 2 页记录可高亮定位。',
-    '- [ ] Viewer 设置持久化、采样提示和错误提示正常。',
-    '- [ ] 损坏文件或不支持数据集显示错误且不白屏、不崩溃。',
-    '',
+    '## 人工验收', '',
+    '- PENDING：henan.udbx/weibo 平移缩放只加载当前范围，放大后截断提示消失。',
+    '- PENDING：县级行政区划 164 条按不同视口浏览；第二页表格选择可定位并高亮。',
+    '- PENDING：SampleData.udbx 点、线、面、CAD 多图层显隐和移除；CAD 保持有界预览。',
+    '- PENDING：快速连续缩放无白屏、无旧范围回跳。',
+    '- PENDING：单图层查询失败保留旧图形，其他图层可继续操作。',
+    '- PENDING：关闭或切换文件后旧请求不写入新地图。', '',
   )
   return `${lines.join('\n')}\n`
 }
@@ -144,7 +258,7 @@ function parseArgs(args) {
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index]
     const value = args[index + 1]
-    if (!value || !['--input-dir', '--json-out', '--markdown-out'].includes(flag)) {
+    if (!value || !['--input-dir', '--json-out', '--markdown-out', '--acceptance-report'].includes(flag)) {
       throw new Error(`invalid argument: ${flag ?? ''}`)
     }
     options[flag.slice(2)] = value
@@ -152,25 +266,26 @@ function parseArgs(args) {
   if (!options['input-dir'] || !options['json-out'] || !options['markdown-out']) {
     throw new Error('--input-dir, --json-out and --markdown-out are required')
   }
+  if (options['acceptance-report'] && !path.isAbsolute(options['acceptance-report'])) {
+    throw new Error('--acceptance-report must be absolute')
+  }
   return options
 }
 
 async function main() {
   const options = parseArgs(process.argv.slice(2))
-  const names = (await fs.readdir(options['input-dir']))
-    .filter((name) => name.endsWith('.json') && name !== 'summary.json')
-    .sort()
-  const runs = await Promise.all(names.map(async (name) => {
-    const data = await fs.readFile(path.join(options['input-dir'], name), 'utf8')
-    return JSON.parse(data)
-  }))
+  const names = (await fs.readdir(options['input-dir'])).filter((name) => name.endsWith('.json')).sort()
+  const runs = await Promise.all(names.map(async (name) => JSON.parse(await fs.readFile(path.join(options['input-dir'], name), 'utf8'))))
   const summary = summarizeRuns(runs)
+  const markdown = renderMarkdown(summary)
   await fs.mkdir(path.dirname(options['json-out']), { recursive: true })
   await fs.writeFile(options['json-out'], `${JSON.stringify(summary, null, 2)}\n`, 'utf8')
-  await fs.writeFile(options['markdown-out'], renderMarkdown(summary), 'utf8')
-  if (summary.status !== 'passed') {
-    process.exitCode = 1
+  await fs.writeFile(options['markdown-out'], markdown, 'utf8')
+  if (options['acceptance-report']) {
+    await fs.mkdir(path.dirname(options['acceptance-report']), { recursive: true })
+    await fs.writeFile(options['acceptance-report'], markdown, 'utf8')
   }
+  if (summary.status !== 'passed') process.exitCode = 1
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

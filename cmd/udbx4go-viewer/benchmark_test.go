@@ -12,8 +12,10 @@ func validBenchmarkConfig(t *testing.T) BenchmarkConfigDTO {
 	t.Helper()
 	dir := t.TempDir()
 	return BenchmarkConfigDTO{
-		RunID:      "sampledata-01",
-		OutputPath: filepath.Join(dir, "result.json"),
+		RunID:                "sampledata-01",
+		OutputPath:           filepath.Join(dir, "result.json"),
+		Temperature:          "warm",
+		MaxConcurrentQueries: 1,
 		Scenario: BenchmarkScenarioDTO{
 			Name:     "sampledata-multilayer",
 			FilePath: sampleDataPath(t),
@@ -23,6 +25,10 @@ func validBenchmarkConfig(t *testing.T) BenchmarkConfigDTO {
 				Page:        1,
 				RowIndex:    0,
 			},
+			ViewportSteps: []BenchmarkViewportStepDTO{{
+				Bounds:           BoundingBoxDTO{MinX: 115, MinY: 38, MaxX: 118, MaxY: 42},
+				ExpectedStrategy: "envelope_cache",
+			}},
 		},
 	}
 }
@@ -164,5 +170,82 @@ func TestSaveBenchmarkResultRejectsMismatchedRun(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "runId") {
 		t.Fatalf("SaveBenchmarkResult() error = %v", err)
+	}
+}
+
+func TestBenchmarkSpatialConfigRequiresViewportStepsAndConcurrency(t *testing.T) {
+	config := validBenchmarkConfig(t)
+	config.MaxConcurrentQueries = 2
+	config.Temperature = "warm"
+	config.Scenario.ViewportSteps = []BenchmarkViewportStepDTO{{
+		Bounds:           BoundingBoxDTO{MinX: 110.36, MinY: 31.39, MaxX: 116.63, MaxY: 36.36},
+		ExpectedStrategy: "rtree",
+	}}
+
+	path := writeBenchmarkConfigFixture(t, config)
+	loaded, err := loadBenchmarkConfig(path)
+	if err != nil {
+		t.Fatalf("loadBenchmarkConfig() error = %v", err)
+	}
+	if loaded.MaxConcurrentQueries != 2 || loaded.Temperature != "warm" {
+		t.Fatalf("loaded config = %+v", loaded)
+	}
+	if got := loaded.Scenario.ViewportSteps[0].ExpectedStrategy; got != "rtree" {
+		t.Fatalf("expected strategy = %q", got)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*BenchmarkConfigDTO)
+		want   string
+	}{
+		{"missing viewport steps", func(c *BenchmarkConfigDTO) { c.Scenario.ViewportSteps = nil }, "viewportSteps"},
+		{"invalid strategy", func(c *BenchmarkConfigDTO) { c.Scenario.ViewportSteps[0].ExpectedStrategy = "scan" }, "expectedStrategy"},
+		{"invalid bounds", func(c *BenchmarkConfigDTO) {
+			c.Scenario.ViewportSteps[0].Bounds.MaxX = c.Scenario.ViewportSteps[0].Bounds.MinX - 1
+		}, "bounds"},
+		{"invalid concurrency", func(c *BenchmarkConfigDTO) { c.MaxConcurrentQueries = 4 }, "maxConcurrentQueries"},
+		{"invalid temperature", func(c *BenchmarkConfigDTO) { c.Temperature = "lukewarm" }, "temperature"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := config
+			candidate.Scenario.ViewportSteps = append([]BenchmarkViewportStepDTO(nil), config.Scenario.ViewportSteps...)
+			tt.mutate(&candidate)
+			_, err := loadBenchmarkConfig(writeBenchmarkConfigFixture(t, candidate))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("loadBenchmarkConfig() error = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestBenchmarkSpatialResultPersistsViewportMetrics(t *testing.T) {
+	config := validBenchmarkConfig(t)
+	config.MaxConcurrentQueries = 1
+	config.Temperature = "cold"
+	config.Scenario.ViewportSteps = []BenchmarkViewportStepDTO{{
+		Bounds:           BoundingBoxDTO{MinX: 115, MinY: 38, MaxX: 118, MaxY: 42},
+		ExpectedStrategy: "envelope_cache",
+	}}
+	app := NewApp()
+	app.benchmarkConfig = &config
+	result := BenchmarkResultDTO{
+		RunID: config.RunID, Status: "passed", Scenario: config.Scenario.Name,
+		Metrics: BenchmarkMetricsDTO{
+			BackendQueryMS: []float64{12.5}, MoveendToRenderMS: []float64{42},
+			MaxConcurrentQueries: 1, PendingPeak: 1, StaleResultsDiscarded: 2,
+			StaleResultApplied: false, FinalFeatureCount: 164, BlankRenderCount: 0,
+		},
+	}
+	if err := app.SaveBenchmarkResult(result); err != nil {
+		t.Fatalf("SaveBenchmarkResult() error = %v", err)
+	}
+	data, err := os.ReadFile(config.OutputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"moveendToRenderMs"`) || !strings.Contains(string(data), `"finalFeatureCount": 164`) {
+		t.Fatalf("saved result lacks spatial metrics: %s", data)
 	}
 }

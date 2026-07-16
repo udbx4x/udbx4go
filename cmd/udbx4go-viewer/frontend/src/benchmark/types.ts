@@ -1,4 +1,5 @@
 import type {
+  BoundingBox,
   DatasetInfo,
   FeatureAttributes,
   FileInfo,
@@ -8,6 +9,16 @@ import type {
   SpatialPreview,
   SpatialSummary,
 } from '../types'
+
+export type SpatialQueryStrategy = 'rtree' | 'envelope_cache' | 'bounded_sample'
+
+export interface BenchmarkViewportStep {
+  bounds: BoundingBox
+  expectedStrategy: SpatialQueryStrategy
+  hideLayers?: string[]
+  showLayers?: string[]
+  removeLayers?: string[]
+}
 
 export interface BenchmarkSelection {
   datasetName: string
@@ -20,11 +31,14 @@ export interface BenchmarkScenario {
   filePath: string
   layers: string[]
   selection: BenchmarkSelection
+  viewportSteps: BenchmarkViewportStep[]
 }
 
 export interface BenchmarkConfig {
   runId: string
   outputPath: string
+  temperature: 'cold' | 'warm'
+  maxConcurrentQueries: number
   scenario: BenchmarkScenario
 }
 
@@ -33,6 +47,15 @@ export interface BenchmarkMetrics {
   loadLayersMs: number
   fitVisibleLayersMs: number
   selectAndFitMs: number
+  backendQueryMs: number[]
+  moveendToRenderMs: number[]
+  maxConcurrentQueries: number
+  pendingPeak: number
+  pendingFinal: number
+  staleResultsDiscarded: number
+  staleResultApplied: boolean
+  finalFeatureCount: number
+  blankRenderCount: number
 }
 
 export interface BenchmarkResult {
@@ -48,6 +71,25 @@ export interface SpatialPreviewRequest {
   limit: number
   maxVertices: number
   simplify: boolean
+  viewport?: BoundingBox
+  requiredIds?: number[]
+}
+
+export interface BenchmarkViewportResult {
+  backendQueryMs: number[]
+  moveendToRenderMs: number
+  finalFeatureCount: number
+  blankRender: boolean
+  strategies?: string[]
+}
+
+export interface BenchmarkCoordinatorMetrics {
+  maxConcurrentQueries: number
+  pendingPeak: number
+  activeQueries: number
+  pendingQueries: number
+  staleResultsDiscarded: number
+  staleResultApplied: boolean
 }
 
 export interface BenchmarkDependencies {
@@ -62,4 +104,7 @@ export interface BenchmarkDependencies {
   fitAllVisibleLayers: () => void
   setSelection: (selection: SelectedMapFeature) => void
   fitFeature: (datasetName: string, featureID: number) => void
+  runViewportStep: (step: BenchmarkViewportStep, requiredIDs: number[]) => Promise<BenchmarkViewportResult>
+  getCoordinatorMetrics: () => BenchmarkCoordinatorMetrics
+  resetCoordinatorMetrics?: () => void
 }

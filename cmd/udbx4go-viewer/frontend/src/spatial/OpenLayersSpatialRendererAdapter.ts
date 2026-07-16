@@ -213,6 +213,35 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     }
   }
 
+  waitForRenderComplete(timeoutMS = 5000): Promise<void> {
+    if (!this.map) {
+      return Promise.reject(new Error('OpenLayers map is not mounted'))
+    }
+    return new Promise((resolve, reject) => {
+      const map = this.map!
+      const timeoutID = window.setTimeout(() => {
+        map.un('rendercomplete', finish)
+        reject(new Error(`rendercomplete timed out after ${timeoutMS}ms`))
+      }, timeoutMS)
+      const finish = () => {
+        window.clearTimeout(timeoutID)
+        resolve()
+      }
+      map.once('rendercomplete', finish)
+      map.render()
+    })
+  }
+
+  getVisibleFeatureCount(): number {
+    let count = 0
+    this.sources.forEach((source, datasetName) => {
+      if (this.layers.get(datasetName)?.getVisible()) {
+        count += source.getFeatures().length
+      }
+    })
+    return count
+  }
+
   private emitViewport(): void {
     const viewport = this.getViewport()
     if (!viewport) {
