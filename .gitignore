@@ -30,6 +30,9 @@ coverage.out
 coverage.html
 *.cover
 
+# Local viewer benchmark results
+.benchmark-results/
+
 # Build output
 bin/
 dist/

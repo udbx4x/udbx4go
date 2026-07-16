@@ -140,6 +140,59 @@ npm run build
 
 后续稳定化任务应继续补充前端测试覆盖，重点覆盖加载状态、错误提示、数据集选择、分页交互和地图联动。
 
+## macOS 本机性能与打包验收
+
+该流程只用于当前 macOS 电脑上的可重复验收，不是 CI 门禁，也不把 `henan.udbx`、原始结果或构建产物提交到仓库。运行前需要安装 Go、Wails v2、Node.js、npm 和 `jq`；脚本还会使用 macOS 自带的 `ps`、`awk`、`shasum`、`stat`、`sw_vers` 和 `sysctl`。
+
+完整执行命令：
+
+```bash
+cd udbx4go
+./scripts/run-viewer-macos-benchmark.sh \
+  --sample-data /absolute/path/to/SampleData.udbx \
+  --henan-data /absolute/path/to/henan.udbx \
+  --output-dir "$PWD/.benchmark-results/manual-run"
+```
+
+未传入样本路径时，脚本默认读取工作区 `data/SampleData.udbx` 和 `data/henan.udbx`；未传入输出目录时，结果写入 `.benchmark-results/<timestamp>/`。脚本默认执行 `wails build -platform darwin/universal -skipbindings`。已经确认当前 `.app` 是待测版本时，可以传入 `--skip-build` 复用现有构建。
+
+固定场景：
+
+- `sampledata-multilayer`：打开 `SampleData.udbx`，加载 `BaseMap_P`、`BaseMap_L`、`BaseMap_R` 和 `CADDT`，适配全部图层，并选择 `BaseMap_R` 第 1 页第 1 条记录。
+- `henan-county-page-2`：打开 `henan.udbx`，加载“县级行政区划”，适配图层，并选择第 2 页第 1 条记录。
+
+每个场景启动打包应用 5 次，共产生 10 轮结果。第 1 轮标记为 `cold`，其余 4 轮标记为 `warm`；每轮都是独立应用进程，“热运行”表示同一轮批次中的后续启动，仍可能受 macOS 文件缓存和 WebKit 缓存影响。报告保留冷运行原值，并计算四次热运行的中位数和最慢值。
+
+耗时指标：
+
+- `openFileMs`：打开 UDBX 文件并读取数据集列表。
+- `loadLayersMs`：加载场景要求的空间图层。
+- `fitVisibleLayersMs`：适配全部可见图层范围。
+- `selectAndFitMs`：读取指定分页记录、查询属性、高亮并定位要素。
+
+`peakRssKiB` 由外部脚本每 100 ms 对 Viewer 根进程及其全部后代进程的 RSS 求和并取最大值，因此包含 Wails 应用和 WebKit 子进程。没有采集到有效 RSS 时，结果通过 `memoryCaptureError` 明确记录，不能把 `0` 当作真实内存值。
+
+结果目录结构：
+
+```text
+.benchmark-results/<run>/
+├── configs/       # 每轮只读基准配置
+├── raw/           # 10 份带环境和 RSS 的原始 JSON
+├── *.log          # 每轮打包应用日志
+├── summary.json   # 机器可读汇总
+└── summary.md     # 性能表、失败详情和人工验收清单
+```
+
+缺少样本、构建失败、应用超时、结果不完整或任一轮 `status != passed` 时，脚本以非零状态退出；已经生成的原始结果和失败原因仍会保留。自动基准通过后，还必须使用同一次构建的 `.app` 完成人工验收：
+
+1. `SampleData.udbx` 的点、线、面和 `CADDT` 可同时显示，图层显隐和移除正常。
+2. 地图与属性表双向选择正常，点、线、面按各自几何范围定位。
+3. `henan.udbx` 的县级行政区划完整显示 164 条，第 2 页记录可高亮定位。
+4. Viewer 设置修改后可持久化，采样状态和错误提示可见。
+5. 损坏文件或不支持数据集显示错误，应用不白屏、不崩溃。
+
+人工结果填写到本次 `summary.md`。性能数据只适合作为当前电脑、当前系统和当前样本的本机基线；不同 CPU、内存、macOS 版本、后台负载或文件缓存条件下的绝对数值不能直接比较，也不能据此判定性能回归。
+
 ## 维护约束
 
 - 数据读取必须通过 `udbx4go` SDK。

@@ -23,6 +23,8 @@ type App struct {
 	dataSource           *udbx4go.DataSource
 	currentPath          string
 	settingsPathOverride string
+	benchmarkConfigPath  string
+	benchmarkConfig      *BenchmarkConfigDTO
 }
 
 // DatasetInfoDTO represents dataset information for the frontend
@@ -754,6 +756,10 @@ func getIconType(kind types.DatasetKind) string {
 		return "line"
 	case types.DatasetKindRegion, types.DatasetKindRegionZ:
 		return "region"
+	case types.DatasetKindText:
+		return "text"
+	case types.DatasetKindCAD:
+		return "cad"
 	case types.DatasetKindTabular:
 		return "tabular"
 	default:
