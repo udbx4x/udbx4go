@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mapLayerFixtures, sampledMapLayerFixture, selectedFeatureFixture } from '../test/fixtures'
+import type { SpatialRendererAdapter } from '../spatial/SpatialRendererAdapter'
 import type { MapLayerState } from '../types'
 import { MapWorkspace } from './MapWorkspace'
 
@@ -16,8 +17,12 @@ vi.mock('../spatial/OpenLayersSpatialRendererAdapter', () => ({
       removeLayer: vi.fn(),
       setLayerVisible: vi.fn(),
       fitAllVisibleLayers: vi.fn(),
+      fitBounds: vi.fn(),
       setSelection: vi.fn(),
       fitFeature: vi.fn(),
+      onViewportChange: vi.fn(() => vi.fn()),
+    } satisfies SpatialRendererAdapter & {
+      fitFeature(datasetName: string, featureID: number): void
     }
     adapterInstances.push(instance)
     return instance

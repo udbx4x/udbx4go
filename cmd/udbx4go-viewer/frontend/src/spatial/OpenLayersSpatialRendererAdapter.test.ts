@@ -2,7 +2,30 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type VectorLayer from 'ol/layer/Vector'
 import type VectorSource from 'ol/source/Vector'
 import type CircleStyle from 'ol/style/Circle'
-import type { MapLayerState, PreviewFeature } from '../types'
+import type { BoundingBox, MapLayerState, PreviewFeature } from '../types'
+import type { SpatialRendererAdapter } from './SpatialRendererAdapter'
+
+type IsExact<Actual, Expected> =
+  (<Value>() => Value extends Actual ? 1 : 2) extends
+  (<Value>() => Value extends Expected ? 1 : 2)
+    ? (<Value>() => Value extends Expected ? 1 : 2) extends
+      (<Value>() => Value extends Actual ? 1 : 2)
+      ? true
+      : false
+    : false
+type Assert<Condition extends true> = Condition
+type ExpectedFitBounds = (
+  bounds: BoundingBox,
+  geometryKind: 'point' | 'line' | 'polygon',
+) => void
+type ExpectedViewportSubscription = (
+  handler: (viewport: BoundingBox) => void,
+) => () => void
+
+type _FitBoundsContract = Assert<IsExact<SpatialRendererAdapter['fitBounds'], ExpectedFitBounds>>
+type _ViewportSubscriptionContract = Assert<
+  IsExact<SpatialRendererAdapter['onViewportChange'], ExpectedViewportSubscription>
+>
 
 const openLayersMocks = vi.hoisted(() => {
   class MockView {

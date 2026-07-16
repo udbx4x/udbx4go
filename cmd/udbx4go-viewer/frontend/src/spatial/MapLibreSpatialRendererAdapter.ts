@@ -26,6 +26,10 @@ export class MapLibreSpatialRendererAdapter implements SpatialRendererAdapter {
     throw new Error('MapLibre 空间预览 adapter 暂未接入多图层 viewer UI')
   }
 
+  fitBounds(_bounds: BoundingBox, _geometryKind: 'point' | 'line' | 'polygon'): void {
+    throw new Error('MapLibre 空间预览 adapter 暂未接入多图层 viewer UI')
+  }
+
   setSelection(_selection: SelectedMapFeature | null): void {
     throw new Error('MapLibre 空间预览 adapter 暂未接入多图层 viewer UI')
   }
@@ -34,7 +38,9 @@ export class MapLibreSpatialRendererAdapter implements SpatialRendererAdapter {
     // No-op until MapLibre is wired into the viewer UI.
   }
 
-  onViewportChange(_handler: (viewport: BoundingBox) => void): void {
-    // No-op until MapLibre is wired into the viewer UI.
+  onViewportChange(_handler: (viewport: BoundingBox) => void): () => void {
+    return () => {
+      // No-op until MapLibre is wired into the viewer UI.
+    }
   }
 }
