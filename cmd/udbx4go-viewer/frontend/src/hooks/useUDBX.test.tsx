@@ -529,6 +529,95 @@ describe('useUDBX viewport spatial previews', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('A 表请求失效且 B 表已打开时，A 结束会清除自己的 loading 而不改写 B', async () => {
+    const firstPage = createDeferred<{ columns: string[]; rows: string[][]; currentPage: number; totalPages: number }>()
+    const bPage = {
+      columns: ['SmID', 'name'],
+      rows: [['2', 'B']],
+      currentPage: 1,
+      totalPages: 1,
+    }
+    mocks.GetFeatureAttributes.mockImplementation((datasetName: string, featureID: number) => Promise.resolve({
+      datasetName,
+      id: featureID,
+      geometryType: 'Point',
+      bbox: { minX: featureID, minY: featureID, maxX: featureID, maxY: featureID },
+      properties: {},
+    }))
+    mocks.LoadDatasetPage
+      .mockResolvedValueOnce(bPage)
+      .mockImplementationOnce(() => firstPage.promise)
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.loadTableDataset('LayerB', 1)
+    })
+
+    let firstSelection!: Promise<void>
+    act(() => {
+      firstSelection = result.current.selectFeature('LayerA', 1)
+    })
+    await act(flushPromises)
+    expect(result.current.loading).toBe(true)
+
+    await act(async () => {
+      await result.current.selectFeature('LayerB', 2)
+    })
+    expect(mocks.LoadDatasetPage).toHaveBeenCalledTimes(2)
+    firstPage.resolve({
+      columns: ['SmID', 'name'],
+      rows: [['1', 'A']],
+      currentPage: 1,
+      totalPages: 1,
+    })
+    await act(async () => firstSelection)
+
+    expect(result.current.selectedDataset).toBe('LayerB')
+    expect(result.current.activeTableDataset).toBe('LayerB')
+    expect(result.current.pageData).toEqual(bPage)
+    expect(result.current.loading).toBe(false)
+    expect(result.current.error).toBeNull()
+  })
+
+  it('A 表结束时不能清除仍在执行的 B 表 loading', async () => {
+    const firstPage = createDeferred<{ columns: string[]; rows: string[][]; currentPage: number; totalPages: number }>()
+    const secondPage = createDeferred<{ columns: string[]; rows: string[][]; currentPage: number; totalPages: number }>()
+    mocks.GetFeatureAttributes.mockImplementation((datasetName: string, featureID: number) => Promise.resolve({
+      datasetName,
+      id: featureID,
+      geometryType: 'Point',
+      bbox: { minX: featureID, minY: featureID, maxX: featureID, maxY: featureID },
+      properties: {},
+    }))
+    mocks.LoadDatasetPage
+      .mockImplementationOnce(() => firstPage.promise)
+      .mockImplementationOnce(() => secondPage.promise)
+    const { result } = renderViewerHook()
+
+    let firstSelection!: Promise<void>
+    let secondSelection!: Promise<void>
+    act(() => {
+      firstSelection = result.current.selectFeature('LayerA', 1)
+    })
+    await act(flushPromises)
+    act(() => {
+      secondSelection = result.current.selectFeature('LayerB', 2)
+    })
+    await act(flushPromises)
+    expect(mocks.LoadDatasetPage).toHaveBeenCalledTimes(2)
+
+    firstPage.resolve({ columns: ['SmID'], rows: [['1']], currentPage: 1, totalPages: 1 })
+    await act(async () => firstSelection)
+    expect(result.current.loading).toBe(true)
+    expect(result.current.activeTableDataset).toBeNull()
+
+    const bPage = { columns: ['SmID'], rows: [['2']], currentPage: 1, totalPages: 1 }
+    secondPage.resolve(bPage)
+    await act(async () => secondSelection)
+    expect(result.current.activeTableDataset).toBe('LayerB')
+    expect(result.current.pageData).toEqual(bPage)
+    expect(result.current.loading).toBe(false)
+  })
+
   it('属性表加载失败时设置错误状态并保留当前表格状态', async () => {
     mocks.LoadDatasetPage.mockRejectedValue(new Error("dataset kind 'unknown' is not supported"))
     const { result } = renderViewerHook()

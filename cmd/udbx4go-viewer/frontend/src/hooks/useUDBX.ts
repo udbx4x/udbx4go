@@ -51,6 +51,8 @@ export function useUDBX(options: UseUDBXOptions) {
   const mapLayersRef = useRef<MapLayerState[]>([])
   const selectedMapFeatureRef = useRef<SelectedMapFeature | null>(null)
   const selectionRequestTokenRef = useRef(0)
+  const tableRequestIDRef = useRef(0)
+  const activeTableRequestIDRef = useRef<number | null>(null)
   const fileGenerationRef = useRef(0)
   const lastViewportRef = useRef<BoundingBox | null>(null)
   const optionsRef = useRef(options)
@@ -178,24 +180,30 @@ export function useUDBX(options: UseUDBXOptions) {
     page = 1,
     shouldCommit: TableDatasetCommitGuard = () => true,
   ) => {
+    const requestID = tableRequestIDRef.current + 1
+    tableRequestIDRef.current = requestID
+    activeTableRequestIDRef.current = requestID
     try {
       setLoading(true)
       setError(null)
       const data: PageData = await LoadDatasetPage(datasetName, page)
-      if (!shouldCommit()) {
+      if (!shouldCommit() || activeTableRequestIDRef.current !== requestID) {
         return
       }
       setSelectedDataset(datasetName)
       setActiveTableDataset(datasetName)
       setPageData(data)
-      setLoading(false)
     } catch (err) {
-      if (!shouldCommit()) {
+      if (!shouldCommit() || activeTableRequestIDRef.current !== requestID) {
         return
       }
       setError(errorMessage(err, '加载属性表失败'))
-      setLoading(false)
       throw err
+    } finally {
+      if (activeTableRequestIDRef.current === requestID) {
+        activeTableRequestIDRef.current = null
+        setLoading(false)
+      }
     }
   }, [])
 
