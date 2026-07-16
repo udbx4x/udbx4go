@@ -291,6 +291,36 @@ func TestDataSourceSpatialQueryEntryPointsMapCanceledMetadataLookupToTimeout(t *
 	assertPublicSpatialTimeout(t, err)
 }
 
+func TestDataSourceCloseClearsEnvelopeCacheManager(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spatial-cache.udbx")
+	ds, err := Create(path)
+	require.NoError(t, err)
+
+	points, err := ds.CreatePointDataset("cities", 4326, nil)
+	require.NoError(t, err)
+	require.NoError(t, points.Insert(&types.Feature{
+		ID: 1,
+		Geometry: &types.PointGeometry{
+			Type:        "Point",
+			Coordinates: []float64{116.4, 39.9},
+		},
+	}))
+
+	result, err := ds.QuerySpatial(context.Background(), "cities", types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 116, MinY: 39, MaxX: 117, MaxY: 40},
+		Limit:  10,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, types.SpatialQueryStrategyEnvelopeCache, result.Strategy)
+	assert.Positive(t, ds.envelopeCacheManager.TotalBytes())
+	assert.Equal(t, 1, ds.envelopeCacheManager.EntryCount())
+
+	require.NoError(t, ds.Close())
+	assert.Zero(t, ds.envelopeCacheManager.TotalBytes())
+	assert.Zero(t, ds.envelopeCacheManager.ReservedBytes())
+	assert.Zero(t, ds.envelopeCacheManager.EntryCount())
+}
+
 func assertPublicSpatialTimeout(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)

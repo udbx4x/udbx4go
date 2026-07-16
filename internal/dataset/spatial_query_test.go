@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -206,15 +207,128 @@ func TestSpatialQueryMalformedFeatureIDIsFormatErrorWithoutSpatialReason(t *test
 	assert.False(t, hasReason)
 }
 
-func TestSpatialQueryReturnsUnavailableWithoutRTree(t *testing.T) {
+func TestSpatialQueryEnvelopeCacheFiltersWithoutDecodingUnmatchedGeometry(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
+	defer db.Close()
+	insertSpatialPoint(t, db, querier, 3, 10, 10, "edge-max", nil)
+	insertSpatialPoint(t, db, querier, 1, 0, 0, "edge-min", nil)
+	insertSpatialPoint(t, db, querier, 2, 5, 5, "center", nil)
+	insertSpatialPoint(t, db, querier, 99, 50, 50, "required", nil)
+	insertSpatialPoint(t, db, querier, 50, 60, 60, "second-required", nil)
+	insertSpatialPoint(t, db, querier, 88, 70, 70, "unmatched-corrupt-body", codec.WriteGaiaHeader(4326, [4]float64{70, 70, 70, 70}, codec.GeoTypePoint))
+	removeSpatialRTree(t, db, querier)
+	setSpatialObjectCount(querier, 6)
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*10, envelopeEntryBytes*20)
+
+	result, err := querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
+		Bounds:      types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
+		Limit:       2,
+		RequiredIDs: []int{99, 50, 2, 99},
+	}, manager)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2, 99, 50}, spatialFeatureIDs(result.Features))
+	assert.Equal(t, types.SpatialQueryStrategyEnvelopeCache, result.Strategy)
+	assert.True(t, result.HasMore)
+	assert.Empty(t, result.DegradedReason)
+	assert.Equal(t, 1, manager.EntryCount())
+
+	again, err := querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
+		Limit:  10,
+	}, manager)
+	require.NoError(t, err)
+	assert.Equal(t, []int{1, 2, 3}, spatialFeatureIDs(again.Features))
+	assert.Equal(t, 1, manager.EntryCount(), "subsequent queries must reuse the complete cache")
+}
+
+func TestSpatialQueryBoundedSampleOnlyOnEnvelopeBudgetRejection(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
+	defer db.Close()
+	insertSpatialPoint(t, db, querier, 30, 30, 30, "thirty", nil)
+	insertSpatialPoint(t, db, querier, 10, 10, 10, "ten", nil)
+	insertSpatialPoint(t, db, querier, 20, 20, 20, "twenty", nil)
+	insertSpatialPoint(t, db, querier, 99, 99, 99, "required", nil)
+	removeSpatialRTree(t, db, querier)
+	setSpatialObjectCount(querier, 4)
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*3, envelopeEntryBytes*6)
+
+	result, err := querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
+		Bounds:      types.BoundingBox{MinX: -100, MinY: -100, MaxX: -50, MaxY: -50},
+		Limit:       2,
+		RequiredIDs: []int{99, 30, 99},
+	}, manager)
+
+	require.NoError(t, err)
+	assert.Equal(t, []int{10, 20, 99, 30}, spatialFeatureIDs(result.Features))
+	assert.Equal(t, types.SpatialQueryStrategyBoundedSample, result.Strategy)
+	assert.Equal(t, types.SpatialQueryReasonEnvelopeCacheBudgetExceeded, result.DegradedReason)
+	assert.True(t, result.HasMore, "hasMore describes the ordinary objectCount/limit sample only")
+	assert.Zero(t, manager.EntryCount())
+}
+
+func TestSpatialQueryEnvelopeCorruptHeaderReturnsCorruptGeometry(t *testing.T) {
 	db, info, record := createSpatialCapabilityFixture(t, types.DatasetKindPoint, "points", "SmGeometry")
 	defer db.Close()
+	_, err := db.Exec(`INSERT INTO "points" (SmID, SmGeometry) VALUES (?, ?)`, 1, []byte{0x00, 0x01})
+	require.NoError(t, err)
+	info.ObjectCount = 1
+	record.SmObjectCount = 1
 
-	_, err := NewSpatialQuerier(db, info, record).Query(context.Background(), types.SpatialQueryOptions{
+	_, err = NewSpatialQuerier(db, info, record).Query(context.Background(), types.SpatialQueryOptions{
 		Bounds: types.BoundingBox{},
 		Limit:  1,
 	})
-	assertSpatialQueryError(t, err, types.SpatialQueryReasonSpatialIndexUnavailable, udbxerrors.CodeUnsupported)
+	assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+}
+
+func TestSpatialQueryEnvelopeCorruptFullGeometryReturnsCorruptGeometry(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
+	defer db.Close()
+	insertSpatialPoint(t, db, querier, 1, 1, 1, "broken-body", codec.WriteGaiaHeader(4326, [4]float64{1, 1, 1, 1}, codec.GeoTypePoint))
+	removeSpatialRTree(t, db, querier)
+	setSpatialObjectCount(querier, 1)
+
+	_, err := querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 2, MaxY: 2},
+		Limit:  1,
+	})
+	assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+}
+
+func TestSpatialQueryEnvelopeBuildTimeoutDoesNotSample(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
+	defer db.Close()
+	insertSpatialPoint(t, db, querier, 1, 1, 1, "point", nil)
+	removeSpatialRTree(t, db, querier)
+	setSpatialObjectCount(querier, 1)
+	manager, err := NewEnvelopeCacheManager(types.SpatialQueryPolicy{
+		MaxDatasetCacheBytes: envelopeEntryBytes * 2,
+		MaxTotalCacheBytes:   envelopeEntryBytes * 4,
+		BuildTimeout:         time.Nanosecond,
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+
+	_, err = querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{},
+		Limit:  1,
+	}, manager)
+	assertSpatialQueryError(t, err, types.SpatialQueryReasonQueryTimeout, udbxerrors.CodeUdbxError)
+}
+
+func TestSpatialQueryTypedNilCacheManagerUsesDefaultPolicy(t *testing.T) {
+	db, info, record := createSpatialCapabilityFixture(t, types.DatasetKindPoint, "points", "SmGeometry")
+	defer db.Close()
+	var manager *EnvelopeCacheManager
+
+	result, err := NewSpatialQuerier(db, info, record).QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{},
+		Limit:  1,
+	}, manager)
+
+	require.NoError(t, err)
+	assert.Equal(t, types.SpatialQueryStrategyEnvelopeCache, result.Strategy)
+	assert.Empty(t, result.Features)
 }
 
 func TestSpatialQueryRejectsUnsupportedDatasetKinds(t *testing.T) {
@@ -386,4 +500,17 @@ func mustQuoteSpatialIdentifier(t *testing.T, name string) string {
 	quoted, err := sqliteutil.QuoteIdentifier(name)
 	require.NoError(t, err)
 	return quoted
+}
+
+func removeSpatialRTree(t *testing.T, db *sql.DB, querier *SpatialQuerier) {
+	t.Helper()
+	_, err := db.Exec("DROP TABLE " + mustQuoteSpatialIdentifier(t, spatialRTreeName(querier.info.TableName, registeredGeometryColumn(querier.record))))
+	require.NoError(t, err)
+	_, err = db.Exec(`UPDATE geometry_columns SET spatial_index_enabled = 0 WHERE f_table_name = ?`, querier.info.TableName)
+	require.NoError(t, err)
+}
+
+func setSpatialObjectCount(querier *SpatialQuerier, count int) {
+	querier.info.ObjectCount = count
+	querier.record.SmObjectCount = count
 }

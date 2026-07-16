@@ -18,10 +18,11 @@ import (
 
 // DataSource represents a UDBX data source.
 type DataSource struct {
-	db           *sql.DB
-	registerDao  *system.SmRegisterDao
-	fieldInfoDao *system.SmFieldInfoDao
-	geoColsDao   *system.GeometryColumnsDao
+	db                   *sql.DB
+	registerDao          *system.SmRegisterDao
+	fieldInfoDao         *system.SmFieldInfoDao
+	geoColsDao           *system.GeometryColumnsDao
+	envelopeCacheManager *dataset.EnvelopeCacheManager
 }
 
 // Open opens an existing UDBX file.
@@ -65,16 +66,24 @@ func Create(path string) (*DataSource, error) {
 
 // newDataSource creates a new DataSource instance.
 func newDataSource(db *sql.DB) *DataSource {
+	cacheManager, err := dataset.NewEnvelopeCacheManager(types.DefaultSpatialQueryPolicy())
+	if err != nil {
+		panic(fmt.Sprintf("invalid default spatial query policy: %v", err))
+	}
 	return &DataSource{
-		db:           db,
-		registerDao:  system.NewSmRegisterDao(db),
-		fieldInfoDao: system.NewSmFieldInfoDao(db),
-		geoColsDao:   system.NewGeometryColumnsDao(db),
+		db:                   db,
+		registerDao:          system.NewSmRegisterDao(db),
+		fieldInfoDao:         system.NewSmFieldInfoDao(db),
+		geoColsDao:           system.NewGeometryColumnsDao(db),
+		envelopeCacheManager: cacheManager,
 	}
 }
 
 // Close closes the data source.
 func (ds *DataSource) Close() error {
+	if ds.envelopeCacheManager != nil {
+		ds.envelopeCacheManager.Close()
+	}
 	if ds.db != nil {
 		return ds.db.Close()
 	}
@@ -134,7 +143,8 @@ func (ds *DataSource) QuerySpatial(
 		}
 		return nil, err
 	}
-	return dataset.NewSpatialQuerier(ds.db, record.ToDatasetInfo(), record).Query(ctx, options)
+	return dataset.NewSpatialQuerier(ds.db, record.ToDatasetInfo(), record).
+		QueryWithEnvelopeCache(ctx, options, ds.envelopeCacheManager)
 }
 
 func dataSourceSpatialTimeout(cause error) error {
