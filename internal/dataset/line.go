@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -31,15 +32,12 @@ func (d *LineDataset) GetByID(id int) (*types.Feature, error) {
 
 // List returns a list of features.
 func (d *LineDataset) List(opts *types.QueryOptions) ([]*types.Feature, error) {
-	query, args := d.buildQuery(opts)
+	return d.ListContext(context.Background(), opts)
+}
 
-	rows, err := d.DB().Query(query, args...)
-	if err != nil {
-		return nil, errors.IOError("failed to query features", err)
-	}
-	defer rows.Close()
-
-	return d.scanFeatures(rows, "MultiLineString")
+// ListContext returns line features and honors cancellation while querying and decoding.
+func (d *LineDataset) ListContext(ctx context.Context, opts *types.QueryOptions) ([]*types.Feature, error) {
+	return d.listContext(ctx, opts, "MultiLineString")
 }
 
 // Insert inserts a new line feature.

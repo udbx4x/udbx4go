@@ -85,6 +85,14 @@ func (d *VectorDataset) scanFeature(row *sql.Row, geometryType string, id int) (
 
 // scanFeatures scans multiple rows into Features.
 func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*types.Feature, error) {
+	return d.scanFeaturesContext(context.Background(), rows, geometryType)
+}
+
+func (d *VectorDataset) scanFeaturesContext(
+	ctx context.Context,
+	rows *sql.Rows,
+	geometryType string,
+) ([]*types.Feature, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, errors.IOError("failed to get columns", err)
@@ -92,7 +100,13 @@ func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*ty
 
 	var features []*types.Feature
 
-	for rows.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !rows.Next() {
+			break
+		}
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
 		for i := range values {
@@ -108,6 +122,9 @@ func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*ty
 		if err != nil {
 			return nil, err
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 
 		features = append(features, feature)
 	}
@@ -116,6 +133,28 @@ func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*ty
 		return nil, errors.IOError("error iterating features", err)
 	}
 
+	return features, nil
+}
+
+func (d *VectorDataset) listContext(
+	ctx context.Context,
+	opts *types.QueryOptions,
+	geometryType string,
+) ([]*types.Feature, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
+	query, args := d.buildQuery(opts)
+	rows, err := d.DB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, mapSpatialListError(ctx, errors.IOError("failed to query features", err))
+	}
+	defer rows.Close()
+
+	features, err := d.scanFeaturesContext(ctx, rows, geometryType)
+	if err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
 	return features, nil
 }
 

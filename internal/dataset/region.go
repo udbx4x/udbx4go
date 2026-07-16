@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -31,15 +32,12 @@ func (d *RegionDataset) GetByID(id int) (*types.Feature, error) {
 
 // List returns a list of features.
 func (d *RegionDataset) List(opts *types.QueryOptions) ([]*types.Feature, error) {
-	query, args := d.buildQuery(opts)
+	return d.ListContext(context.Background(), opts)
+}
 
-	rows, err := d.DB().Query(query, args...)
-	if err != nil {
-		return nil, errors.IOError("failed to query features", err)
-	}
-	defer rows.Close()
-
-	return d.scanFeatures(rows, "MultiPolygon")
+// ListContext returns region features and honors cancellation while querying and decoding.
+func (d *RegionDataset) ListContext(ctx context.Context, opts *types.QueryOptions) ([]*types.Feature, error) {
+	return d.listContext(ctx, opts, "MultiPolygon")
 }
 
 // Insert inserts a new region feature.

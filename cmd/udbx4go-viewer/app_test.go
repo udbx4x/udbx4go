@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	stderrors "errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -742,86 +744,355 @@ func TestViewerSpatialRequiredIDVertexBudgetDoesNotChangeSDKHasMore(t *testing.T
 	}
 }
 
-func TestViewerSpatialLifecycleCloseWaitsForActiveQueryLease(t *testing.T) {
-	path, _ := createViewerPointFixture(t, false, 0)
+func TestViewerSpatialRequiredIDsAllowOneNormalizedSelectionAndRejectMultiple(t *testing.T) {
+	path, _ := createViewerPointFixture(t, true, 0)
 	app := NewApp()
 	if _, err := app.OpenUDBXFile(path); err != nil {
 		t.Fatalf("OpenUDBXFile() error = %v", err)
 	}
+	viewport := &BoundingBoxDTO{MinX: 0, MinY: 0, MaxX: 5, MaxY: 5}
 
-	_, generation, release, err := app.acquireDataSource()
+	preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+		Viewport:    viewport,
+		RequiredIDs: []int{2, 2},
+	})
 	if err != nil {
-		t.Fatalf("acquireDataSource() error = %v", err)
+		t.Fatalf("LoadSpatialPreview(duplicate required ID) error = %v", err)
 	}
-	closed := make(chan error, 1)
-	go func() { closed <- app.CloseUDBXFile() }()
-
-	select {
-	case err := <-closed:
-		t.Fatalf("CloseUDBXFile() returned before query release: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	if ids := previewFeatureIDs(preview.Features); !containsPreviewFeatureID(ids, 2) {
+		t.Fatalf("preview feature IDs = %v, want required ID 2", ids)
 	}
 
-	release()
-	if err := <-closed; err != nil {
-		t.Fatalf("CloseUDBXFile() error = %v", err)
+	_, err = app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+		Viewport:    viewport,
+		RequiredIDs: []int{2, 3, 2},
+	})
+	if err == nil {
+		t.Fatal("LoadSpatialPreview(multiple required IDs) error = nil")
 	}
-	if _, err := app.OpenUDBXFile(path); err != nil {
-		t.Fatalf("OpenUDBXFile(reopen) error = %v", err)
+	reason, ok := udbx4go.SpatialQueryReasonOf(err)
+	if !ok || reason != types.SpatialQueryReasonInvalidViewport {
+		t.Fatalf("spatial query reason = %q, present %v, want invalid_viewport", reason, ok)
 	}
-	preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{})
-	if err != nil {
-		t.Fatalf("LoadSpatialPreview() error = %v", err)
-	}
-	if preview.FileGeneration <= generation {
-		t.Fatalf("FileGeneration = %d, want greater than previous %d", preview.FileGeneration, generation)
+	if !udbx4go.IsConstraintViolation(err) {
+		t.Fatalf("error = %v, want constraint classification", err)
 	}
 }
 
-func TestViewerSpatialLifecycleSerializesConcurrentOpenAndClose(t *testing.T) {
+func TestViewerSpatialLifecycleFileSwitchCancelsAndWaitsForRealPreview(t *testing.T) {
+	pointPath, _ := createViewerPointFixture(t, false, 0)
+	samplePath := sampleDataPath(t)
+	tests := []struct {
+		name        string
+		path        string
+		datasetName string
+		request     SpatialPreviewRequestDTO
+	}{
+		{name: "point bounded preview", path: pointPath, datasetName: "viewer_points"},
+		{
+			name:        "point viewport preview",
+			path:        pointPath,
+			datasetName: "viewer_points",
+			request: SpatialPreviewRequestDTO{
+				Viewport: &BoundingBoxDTO{MinX: 0, MinY: 0, MaxX: 5, MaxY: 5},
+			},
+		},
+		{name: "text bounded preview", path: samplePath, datasetName: "County_T"},
+		{
+			name:        "cad bounded preview",
+			path:        samplePath,
+			datasetName: "CADDT",
+			request: SpatialPreviewRequestDTO{
+				Viewport: &BoundingBoxDTO{MinX: 10, MinY: 10, MaxX: -10, MaxY: -10},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			app := NewApp()
+			if _, err := app.OpenUDBXFile(test.path); err != nil {
+				t.Fatalf("OpenUDBXFile() error = %v", err)
+			}
+			initial, err := app.LoadSpatialPreview(test.datasetName, test.request)
+			if err != nil {
+				t.Fatalf("initial LoadSpatialPreview() error = %v", err)
+			}
+
+			entered := make(chan struct{})
+			canceled := make(chan error, 1)
+			forceRelease := make(chan struct{})
+			app.previewQueryHook = func(ctx context.Context) error {
+				close(entered)
+				select {
+				case <-ctx.Done():
+					canceled <- ctx.Err()
+					return ctx.Err()
+				case <-forceRelease:
+					return fmt.Errorf("forced preview release")
+				}
+			}
+
+			type previewResult struct {
+				preview *SpatialPreviewDTO
+				err     error
+			}
+			previewDone := make(chan previewResult, 1)
+			go func() {
+				preview, loadErr := app.LoadSpatialPreview(test.datasetName, test.request)
+				previewDone <- previewResult{preview: preview, err: loadErr}
+			}()
+			<-entered
+
+			openDone := make(chan error, 1)
+			go func() {
+				_, openErr := app.OpenUDBXFile(test.path)
+				openDone <- openErr
+			}()
+
+			select {
+			case cancelErr := <-canceled:
+				if !stderrors.Is(cancelErr, context.Canceled) {
+					close(forceRelease)
+					t.Fatalf("preview lifecycle cancellation = %v, want context.Canceled", cancelErr)
+				}
+			case <-time.After(time.Second):
+				close(forceRelease)
+				<-openDone
+				t.Fatal("file switch did not cancel active LoadSpatialPreview")
+			}
+
+			old := <-previewDone
+			if old.preview != nil {
+				t.Fatalf("old preview = %+v, want nil after file switch", old.preview)
+			}
+			assertViewerSpatialReason(t, old.err, types.SpatialQueryReasonQueryTimeout)
+			if !stderrors.Is(old.err, context.Canceled) {
+				t.Fatalf("old preview error = %v, want context.Canceled", old.err)
+			}
+			if err := <-openDone; err != nil {
+				t.Fatalf("OpenUDBXFile(switch) error = %v", err)
+			}
+
+			app.previewQueryHook = nil
+			current, err := app.LoadSpatialPreview(test.datasetName, test.request)
+			if err != nil {
+				t.Fatalf("current LoadSpatialPreview() error = %v", err)
+			}
+			if current.FileGeneration <= initial.FileGeneration {
+				t.Fatalf("current generation = %d, want greater than old %d", current.FileGeneration, initial.FileGeneration)
+			}
+		})
+	}
+}
+
+func TestViewerSpatialLifecycleDropsCompletedQueryWhenFileSwitchStartsBeforeReturn(t *testing.T) {
 	path, _ := createViewerPointFixture(t, false, 0)
 	app := NewApp()
 	if _, err := app.OpenUDBXFile(path); err != nil {
 		t.Fatalf("OpenUDBXFile() error = %v", err)
 	}
 
-	_, _, release, err := app.acquireDataSource()
-	if err != nil {
-		t.Fatalf("acquireDataSource() error = %v", err)
+	resultReady := make(chan struct{})
+	app.previewResultHook = func(ctx context.Context) {
+		close(resultReady)
+		<-ctx.Done()
 	}
-	opened := make(chan error, 1)
+	type previewResult struct {
+		preview *SpatialPreviewDTO
+		err     error
+	}
+	previewDone := make(chan previewResult, 1)
 	go func() {
-		_, openErr := app.OpenUDBXFile(path)
-		opened <- openErr
+		preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{})
+		previewDone <- previewResult{preview: preview, err: err}
+	}()
+	<-resultReady
+
+	openDone := make(chan error, 1)
+	go func() {
+		_, err := app.OpenUDBXFile(path)
+		openDone <- err
 	}()
 
-	deadline := time.Now().Add(time.Second)
-	for app.GetCurrentFile() != "" && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
+	old := <-previewDone
+	if old.preview != nil {
+		t.Fatalf("old preview = %+v, want nil after switch starts", old.preview)
 	}
-	if app.GetCurrentFile() != "" {
-		release()
-		t.Fatal("OpenUDBXFile() did not detach the old data source")
+	assertViewerSpatialReason(t, old.err, types.SpatialQueryReasonQueryTimeout)
+	if !stderrors.Is(old.err, context.Canceled) {
+		t.Fatalf("old preview error = %v, want context.Canceled", old.err)
+	}
+	if err := <-openDone; err != nil {
+		t.Fatalf("OpenUDBXFile(switch) error = %v", err)
+	}
+}
+
+func TestViewerSpatialLifecycleCloseCancelsAndWaitsForRealPreview(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+	entered := make(chan struct{})
+	app.previewQueryHook = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
 	}
 
-	closed := make(chan error, 1)
-	go func() { closed <- app.CloseUDBXFile() }()
-	select {
-	case err := <-closed:
-		release()
-		t.Fatalf("concurrent CloseUDBXFile() bypassed in-progress open: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
+	previewDone := make(chan error, 1)
+	go func() {
+		_, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{})
+		previewDone <- err
+	}()
+	<-entered
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- app.CloseUDBXFile() }()
 
-	release()
-	if err := <-opened; err != nil {
-		t.Fatalf("OpenUDBXFile(reopen) error = %v", err)
+	err := <-previewDone
+	assertViewerSpatialReason(t, err, types.SpatialQueryReasonQueryTimeout)
+	if !stderrors.Is(err, context.Canceled) {
+		t.Fatalf("preview error = %v, want context.Canceled", err)
 	}
-	if err := <-closed; err != nil {
+	if err := <-closeDone; err != nil {
 		t.Fatalf("CloseUDBXFile() error = %v", err)
 	}
 	if current := app.GetCurrentFile(); current != "" {
-		t.Fatalf("GetCurrentFile() = %q, want closed after later close", current)
+		t.Fatalf("GetCurrentFile() = %q, want closed", current)
+	}
+}
+
+func TestViewerSpatialPreviewAllPathsUseTask1Timeout(t *testing.T) {
+	pointPath, _ := createViewerPointFixture(t, false, 0)
+	samplePath := sampleDataPath(t)
+	tests := []struct {
+		name        string
+		path        string
+		datasetName string
+		request     SpatialPreviewRequestDTO
+	}{
+		{name: "point bounded preview", path: pointPath, datasetName: "viewer_points"},
+		{name: "line bounded preview", path: samplePath, datasetName: "BaseMap_L"},
+		{name: "region bounded preview", path: samplePath, datasetName: "BaseMap_R"},
+		{name: "point-z bounded preview", path: samplePath, datasetName: "BaseMap_PZ"},
+		{name: "line-z bounded preview", path: samplePath, datasetName: "BaseMap_LZ"},
+		{name: "region-z bounded preview", path: samplePath, datasetName: "BaseMap_RZ"},
+		{
+			name:        "point viewport preview",
+			path:        pointPath,
+			datasetName: "viewer_points",
+			request: SpatialPreviewRequestDTO{
+				Viewport: &BoundingBoxDTO{MinX: 0, MinY: 0, MaxX: 5, MaxY: 5},
+			},
+		},
+		{name: "text bounded preview", path: samplePath, datasetName: "County_T"},
+		{name: "cad bounded preview", path: samplePath, datasetName: "CADDT"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			app := NewApp()
+			if _, err := app.OpenUDBXFile(test.path); err != nil {
+				t.Fatalf("OpenUDBXFile() error = %v", err)
+			}
+			app.previewQueryHook = func(ctx context.Context) error {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					return fmt.Errorf("preview query context has no deadline")
+				}
+				remaining := time.Until(deadline)
+				if remaining <= 0 || remaining > spatialQueryPolicy().BuildTimeout {
+					return fmt.Errorf("preview query deadline remaining %s is outside Task1 timeout", remaining)
+				}
+				return nil
+			}
+
+			if _, err := app.LoadSpatialPreview(test.datasetName, test.request); err != nil {
+				t.Fatalf("LoadSpatialPreview() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestViewerSpatialBoundedPreviewMapsMissingGeometryToCorruptGeometry(t *testing.T) {
+	tests := []struct {
+		name        string
+		fixture     func(*testing.T) string
+		datasetName string
+	}{
+		{
+			name: "point",
+			fixture: func(t *testing.T) string {
+				path, _ := createViewerPointFixture(t, false, 0)
+				return path
+			},
+			datasetName: "viewer_points",
+		},
+		{name: "text", fixture: copySampleDataFixture, datasetName: "County_T"},
+		{name: "cad", fixture: copySampleDataFixture, datasetName: "CADDT"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := test.fixture(t)
+			clearViewerDatasetGeometry(t, path, test.datasetName)
+			app := NewApp()
+			if _, err := app.OpenUDBXFile(path); err != nil {
+				t.Fatalf("OpenUDBXFile() error = %v", err)
+			}
+
+			_, err := app.LoadSpatialPreview(test.datasetName, SpatialPreviewRequestDTO{})
+
+			assertViewerSpatialReason(t, err, types.SpatialQueryReasonCorruptGeometry)
+			if !udbx4go.IsFormatError(err) {
+				t.Fatalf("error = %v, want format classification", err)
+			}
+		})
+	}
+}
+
+func TestViewerSpatialBoundedPreviewUsesListContext(t *testing.T) {
+	lister := &contextOnlyPreviewLister{}
+	app := NewApp()
+
+	features, err := app.listPreviewFeatures(context.Background(), lister, &types.QueryOptions{Limit: 1})
+
+	if err != nil {
+		t.Fatalf("listPreviewFeatures() error = %v", err)
+	}
+	if len(features) != 1 || features[0].ID != 1 {
+		t.Fatalf("features = %+v, want context-aware result", features)
+	}
+	if !lister.contextCalled || lister.legacyCalled {
+		t.Fatalf("ListContext called = %v, List called = %v", lister.contextCalled, lister.legacyCalled)
+	}
+}
+
+type contextOnlyPreviewLister struct {
+	contextCalled bool
+	legacyCalled  bool
+}
+
+func (l *contextOnlyPreviewLister) List(*types.QueryOptions) ([]*types.Feature, error) {
+	l.legacyCalled = true
+	return nil, fmt.Errorf("legacy List must not be called")
+}
+
+func (l *contextOnlyPreviewLister) ListContext(context.Context, *types.QueryOptions) ([]*types.Feature, error) {
+	l.contextCalled = true
+	return []*types.Feature{{ID: 1}}, nil
+}
+
+func assertViewerSpatialReason(t *testing.T, err error, want types.SpatialQueryReason) {
+	t.Helper()
+	requireError := err != nil
+	if !requireError {
+		t.Fatal("spatial preview error = nil")
+	}
+	reason, ok := udbx4go.SpatialQueryReasonOf(err)
+	if !ok || reason != want {
+		t.Fatalf("spatial query reason = %q, present %v, want %q", reason, ok, want)
 	}
 }
 
@@ -894,12 +1165,52 @@ func openViewerFixtureDB(t *testing.T, path string) *sql.DB {
 	return db
 }
 
+func copySampleDataFixture(t *testing.T) string {
+	t.Helper()
+	content, err := os.ReadFile(sampleDataPath(t))
+	if err != nil {
+		t.Fatalf("read sample fixture: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "SampleData.udbx")
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("copy sample fixture: %v", err)
+	}
+	return path
+}
+
+func clearViewerDatasetGeometry(t *testing.T, path string, datasetName string) {
+	t.Helper()
+	db := openViewerFixtureDB(t, path)
+	defer db.Close()
+	var tableName string
+	if err := db.QueryRow(`SELECT SmTableName FROM SmRegister WHERE SmDatasetName = ?`, datasetName).Scan(&tableName); err != nil {
+		t.Fatalf("find dataset table: %v", err)
+	}
+	query := fmt.Sprintf(
+		`UPDATE %q SET SmGeometry = NULL WHERE SmID = (SELECT MIN(SmID) FROM %q)`,
+		tableName,
+		tableName,
+	)
+	if _, err := db.Exec(query); err != nil {
+		t.Fatalf("clear dataset geometry: %v", err)
+	}
+}
+
 func previewFeatureIDs(features []PreviewFeatureDTO) []int {
 	ids := make([]int, len(features))
 	for i, feature := range features {
 		ids[i] = feature.ID
 	}
 	return ids
+}
+
+func containsPreviewFeatureID(ids []int, want int) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestViewerSpatialPreviewLoadsAllHenanCountyRegionsForTableSelection(t *testing.T) {
