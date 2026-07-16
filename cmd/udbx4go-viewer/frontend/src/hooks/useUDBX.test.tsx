@@ -144,6 +144,108 @@ describe('useUDBX viewport spatial previews', () => {
     expect(result.current.mapLayers[0].preview).toBe(oldPreview)
   })
 
+  it('当前单选生成唯一 requiredIds，并在响应后保留选择供地图高亮', async () => {
+    mocks.GetFeatureAttributes.mockResolvedValue({
+      datasetName: 'BaseMap_P',
+      id: 7,
+      geometryType: 'Point',
+      bbox: { minX: 7, minY: 8, maxX: 7, maxY: 8 },
+      properties: {},
+    })
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+      await result.current.selectFeature('BaseMap_P', 7)
+    })
+
+    act(() => result.current.queryViewport(viewport))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledWith(
+      'BaseMap_P',
+      expect.objectContaining({ requiredIds: [7] }),
+    )
+    expect(result.current.selectedMapFeature).toEqual({ datasetName: 'BaseMap_P', featureID: 7 })
+    expect(result.current.mapLayers[0].preview).not.toBeNull()
+  })
+
+  it('迟到的其他对象属性不会替换当前选择或触发定位', async () => {
+    mocks.GetFeatureAttributes.mockResolvedValue({
+      datasetName: 'BaseMap_P',
+      id: 6,
+      geometryType: 'Point',
+      bbox: { minX: 6, minY: 6, maxX: 6, maxY: 6 },
+      properties: {},
+    })
+    const { result } = renderViewerHook()
+
+    await act(async () => {
+      await result.current.selectFeature('BaseMap_P', 7)
+    })
+
+    expect(result.current.selectedMapFeature).toEqual({ datasetName: 'BaseMap_P', featureID: 7 })
+    expect(result.current.selectedFeatureAttributes).toBeNull()
+    expect(result.current.selectionLocationError).toBe('定位失败')
+  })
+
+  it('前一次选择的合法属性迟到时不能覆盖当前选择', async () => {
+    const first = createDeferred<ReturnType<typeof featureAttributes>>()
+    const second = createDeferred<ReturnType<typeof featureAttributes>>()
+    mocks.GetFeatureAttributes
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    const { result } = renderViewerHook()
+
+    let firstSelection!: Promise<void>
+    let secondSelection!: Promise<void>
+    act(() => {
+      firstSelection = result.current.selectFeature('BaseMap_P', 7)
+      secondSelection = result.current.selectFeature('BaseMap_P', 8)
+    })
+    second.resolve(featureAttributes(8))
+    await act(async () => secondSelection)
+    first.resolve(featureAttributes(7))
+    await act(async () => firstSelection)
+
+    expect(result.current.selectedMapFeature).toEqual({ datasetName: 'BaseMap_P', featureID: 8 })
+    expect(result.current.selectedFeatureAttributes).toEqual(featureAttributes(8))
+  })
+
+  it.each([
+    ['缺失对象', undefined, new Error('not found')],
+    ['损坏几何', undefined, new Error('corrupt geometry')],
+    ['缺少 BBox', { datasetName: 'BaseMap_P', id: 7, geometryType: 'Point', properties: {} }, undefined],
+    ['无效 BBox', {
+      datasetName: 'BaseMap_P',
+      id: 7,
+      geometryType: 'Point',
+      bbox: { minX: 10, minY: 0, maxX: 0, maxY: 10 },
+      properties: {},
+    }, undefined],
+    ['无效 geometryType', {
+      datasetName: 'BaseMap_P',
+      id: 7,
+      geometryType: 'BrokenGeometry',
+      bbox: { minX: 0, minY: 0, maxX: 10, maxY: 10 },
+      properties: {},
+    }, undefined],
+  ] as const)('%s 时保留表格选择并报告定位失败', async (_name, attributes, failure) => {
+    if (failure) {
+      mocks.GetFeatureAttributes.mockRejectedValue(failure)
+    } else {
+      mocks.GetFeatureAttributes.mockResolvedValue(attributes)
+    }
+    const { result } = renderViewerHook()
+
+    await act(async () => {
+      await result.current.selectFeature('BaseMap_P', 7)
+    })
+
+    expect(result.current.selectedMapFeature).toEqual({ datasetName: 'BaseMap_P', featureID: 7 })
+    expect(result.current.selectionLocationError).toBe('定位失败')
+  })
+
   it.each(['hide', 'remove', 'switch file'] as const)('%s 后迟到结果不能回写', async (action) => {
     const deferred = createDeferred<SpatialPreview>()
     mocks.LoadSpatialPreview.mockImplementation(() => deferred.promise)
@@ -222,6 +324,16 @@ function preview(overrides: Partial<SpatialPreview> = {}): SpatialPreview {
     queryDurationMs: 1,
     fileGeneration: 0,
     ...overrides,
+  }
+}
+
+function featureAttributes(id: number) {
+  return {
+    datasetName: 'BaseMap_P',
+    id,
+    geometryType: 'Point',
+    bbox: { minX: id, minY: id, maxX: id, maxY: id },
+    properties: {},
   }
 }
 

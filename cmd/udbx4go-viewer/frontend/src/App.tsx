@@ -43,6 +43,7 @@ export function ViewerApp() {
     mapLayers,
     selectedMapFeature,
     selectedFeatureAttributes,
+    selectionLocationError,
     loading,
     error,
     openFileDialog,
@@ -53,6 +54,7 @@ export function ViewerApp() {
     removeMapLayer,
     selectFeature,
     queryViewport,
+    loadCurrentFile,
   } = udbx
 
   const [errorOpen, setErrorOpen] = React.useState(false)
@@ -61,6 +63,10 @@ export function ViewerApp() {
   const [settingsSaving, setSettingsSaving] = React.useState(false)
   const settingsDefaultAppliedRef = React.useRef(false)
   const displayError = error || settingsError
+
+  useEffect(() => {
+    void loadCurrentFile()
+  }, [loadCurrentFile])
 
   useEffect(() => {
     if (displayError) {
@@ -135,6 +141,8 @@ export function ViewerApp() {
           <MapWorkspace
             layers={mapLayers}
             selectedFeature={selectedMapFeature}
+            selectedFeatureAttributes={selectedFeatureAttributes}
+            selectionLocationError={selectionLocationError}
             autoFitOnLayerChange={settings.spatialPreview.autoFitOnLayerChange}
             zoomToSelectedFeature={settings.mapInteraction.zoomToSelectedFeature}
             onViewportChange={queryViewport}

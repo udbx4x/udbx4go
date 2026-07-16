@@ -3,12 +3,15 @@ import { Box, IconButton, Paper, Tooltip, Typography } from '@mui/material'
 import { CenterFocusStrong as FitIcon } from '@mui/icons-material'
 import { viewerColors } from '../theme/viewerTheme'
 import { OpenLayersSpatialRendererAdapter } from '../spatial/OpenLayersSpatialRendererAdapter'
-import type { BoundingBox, MapLayerState, SelectedMapFeature } from '../types'
+import { featureGeometryKind, isValidBounds } from '../spatial/featureLocation'
+import type { BoundingBox, FeatureAttributes, MapLayerState, SelectedMapFeature } from '../types'
 import { EmptyState } from './EmptyState'
 
 interface MapWorkspaceProps {
   layers: MapLayerState[]
   selectedFeature: SelectedMapFeature | null
+  selectedFeatureAttributes?: FeatureAttributes | null
+  selectionLocationError?: string | null
   autoFitOnLayerChange: boolean
   zoomToSelectedFeature: boolean
   onViewportChange: (viewport: BoundingBox) => void
@@ -18,6 +21,8 @@ interface MapWorkspaceProps {
 export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   layers,
   selectedFeature,
+  selectedFeatureAttributes,
+  selectionLocationError,
   autoFitOnLayerChange,
   zoomToSelectedFeature,
   onViewportChange,
@@ -131,10 +136,13 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     ) {
       adapter.fitAllVisibleLayers()
     }
-    if (shouldFitSelectedAfterLayerSync && currentSelectedFeature) {
+    if (shouldFitSelectedAfterLayerSync && currentSelectedFeature && selectedFeatureAttributes === undefined) {
       adapter.fitFeature(currentSelectedFeature.datasetName, currentSelectedFeature.featureID)
     }
-  }, [autoFitOnLayerChange, layers])
+    if (currentSelectedFeature) {
+      adapter.setSelection(currentSelectedFeature)
+    }
+  }, [autoFitOnLayerChange, layers, selectedFeatureAttributes])
 
   useEffect(() => {
     selectedFeatureRef.current = selectedFeature
@@ -146,10 +154,28 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     }
 
     adapter.setSelection(selectedFeature)
-    if (selectedFeature && zoomToSelectedFeature) {
+    if (selectedFeature && zoomToSelectedFeature && selectedFeatureAttributes === undefined) {
       adapter.fitFeature(selectedFeature.datasetName, selectedFeature.featureID)
     }
-  }, [selectedFeature, zoomToSelectedFeature])
+  }, [selectedFeature, selectedFeatureAttributes, zoomToSelectedFeature])
+
+  useEffect(() => {
+    const adapter = adapterRef.current
+    if (!adapter || !selectedFeature || !selectedFeatureAttributes || !zoomToSelectedFeature) {
+      return
+    }
+    if (
+      selectedFeature.datasetName !== selectedFeatureAttributes.datasetName ||
+      selectedFeature.featureID !== selectedFeatureAttributes.id
+    ) {
+      return
+    }
+    const geometryKind = featureGeometryKind(selectedFeatureAttributes.geometryType)
+    if (!geometryKind || !isValidBounds(selectedFeatureAttributes.bbox)) {
+      return
+    }
+    adapter.fitBounds(selectedFeatureAttributes.bbox, geometryKind)
+  }, [selectedFeature, selectedFeatureAttributes, zoomToSelectedFeature])
 
   return (
     <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -178,6 +204,27 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
           >
             <Typography variant="caption" color="warning.dark">
               部分图层为采样预览
+            </Typography>
+          </Box>
+        )}
+        {selectionLocationError && (
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 12,
+              top: 12,
+              px: 1.25,
+              py: 0.75,
+              bgcolor: 'background.paper',
+              border: 1,
+              borderColor: 'error.light',
+              boxShadow: 1,
+              borderRadius: 1,
+              pointerEvents: 'none',
+            }}
+          >
+            <Typography variant="caption" color="error.main">
+              {selectionLocationError}
             </Typography>
           </Box>
         )}

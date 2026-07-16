@@ -37,6 +37,19 @@ describe('ViewportQueryCoordinator', () => {
     })
   })
 
+  it('requiredIds 去重后进入请求', async () => {
+    const harness = createHarness()
+
+    harness.coordinator.scheduleViewport(
+      viewportA,
+      [{ datasetName: 'points', visible: true, requiredIds: [7, 7, 7] }],
+      1,
+    )
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(harness.loadPreview.mock.calls[0][0].requiredIds).toEqual([7])
+  })
+
   it('同图层只保留一个执行中请求和一个最新 pending，并覆盖中间视口', async () => {
     const harness = createHarness()
 

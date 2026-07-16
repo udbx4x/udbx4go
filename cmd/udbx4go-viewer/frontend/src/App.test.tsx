@@ -33,6 +33,8 @@ type CapturedSettingsDialogProps = {
 type CapturedMapWorkspaceProps = {
   autoFitOnLayerChange: boolean
   zoomToSelectedFeature: boolean
+  selectedFeatureAttributes: FeatureAttributes | null
+  selectionLocationError: string | null
   onViewportChange: (viewport: { minX: number; minY: number; maxX: number; maxY: number }) => void
 }
 type CapturedInspectorPanelProps = {
@@ -173,6 +175,7 @@ const baseUdbxState = {
   mapLayers: [],
   selectedMapFeature: null,
   selectedFeatureAttributes: null,
+  selectionLocationError: null,
   loading: false,
   error: null,
   openFileDialog: vi.fn(),
@@ -183,6 +186,7 @@ const baseUdbxState = {
   removeMapLayer: vi.fn(),
   selectFeature: vi.fn(),
   queryViewport: vi.fn(),
+  loadCurrentFile: vi.fn(),
 }
 
 const loadedSettings: ViewerSettings = {
@@ -223,6 +227,12 @@ describe('App settings integration', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument())
     expect(mockGetBenchmarkConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('普通 Viewer 启动时恢复当前文件生命周期', () => {
+    render(<App />)
+
+    expect(baseUdbxState.loadCurrentFile).toHaveBeenCalledOnce()
   })
 
   it('默认入口在有基准配置时只进入基准模式', async () => {
@@ -397,6 +407,8 @@ describe('App settings integration', () => {
     expect(capturedInspectorPanelProps?.layers).toBe(mapLayerFixtures)
     expect(capturedInspectorPanelProps?.showPreviewStats).toBe(true)
     expect(capturedInspectorPanelProps?.selectedFeatureAttributes).toBe(featureAttributesFixture)
+    expect(capturedMapWorkspaceProps?.selectedFeatureAttributes).toBe(featureAttributesFixture)
+    expect(capturedMapWorkspaceProps?.selectionLocationError).toBeNull()
     expect(capturedAttributeTableDrawerProps?.pageData).toBe(pageDataFixture)
     expect(capturedAttributeTableDrawerProps?.datasetName).toBe('BaseMap_P')
     expect(capturedAttributeTableDrawerProps?.selectedFeature).toBe(selectedFeatureFixture)

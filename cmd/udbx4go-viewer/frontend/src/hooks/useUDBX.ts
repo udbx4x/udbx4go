@@ -12,6 +12,7 @@ import {
 } from '../../wailsjs/go/main/App'
 import { main } from '../../wailsjs/go/models'
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
+import { isLocatableFeature } from '../spatial/featureLocation'
 import {
   ViewportQueryCoordinator,
   type ViewportQueryJob,
@@ -42,6 +43,7 @@ export function useUDBX(options: UseUDBXOptions) {
   const [mapLayers, setMapLayersState] = useState<MapLayerState[]>([])
   const [selectedMapFeature, setSelectedMapFeatureState] = useState<SelectedMapFeature | null>(null)
   const [selectedFeatureAttributes, setSelectedFeatureAttributes] = useState<FeatureAttributes | null>(null)
+  const [selectionLocationError, setSelectionLocationError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const mapLayersRef = useRef<MapLayerState[]>([])
@@ -111,6 +113,7 @@ export function useUDBX(options: UseUDBXOptions) {
     setMapLayers(() => [])
     setSelectedMapFeature(null)
     setSelectedFeatureAttributes(null)
+    setSelectionLocationError(null)
   }, [setMapLayers, setSelectedMapFeature])
 
   const openFileDialog = useCallback(async (): Promise<boolean> => {
@@ -227,6 +230,7 @@ export function useUDBX(options: UseUDBXOptions) {
       setError(null)
       setSelectedMapFeature(null)
       setSelectedFeatureAttributes(null)
+      setSelectionLocationError(null)
       await loadTableDataset(datasetName, page)
       await addDatasetToMap(datasetName)
       setLoading(false)
@@ -264,6 +268,7 @@ export function useUDBX(options: UseUDBXOptions) {
     if (selectedMapFeatureRef.current?.datasetName === datasetName) {
       setSelectedMapFeature(null)
       setSelectedFeatureAttributes(null)
+      setSelectionLocationError(null)
     }
   }, [setMapLayers, setSelectedMapFeature])
 
@@ -271,12 +276,28 @@ export function useUDBX(options: UseUDBXOptions) {
     try {
       setError(null)
       setSelectedMapFeature({ datasetName, featureID })
+      setSelectionLocationError(null)
       const attributes: FeatureAttributes = await GetFeatureAttributes(datasetName, featureID)
+      if (!selectionMatches(selectedMapFeatureRef.current, datasetName, featureID)) {
+        return
+      }
+      if (attributes.datasetName !== datasetName || attributes.id !== featureID) {
+        setSelectionLocationError('定位失败')
+        return
+      }
       setSelectedFeatureAttributes(attributes)
+      if (!isLocatableFeature(attributes)) {
+        setSelectionLocationError('定位失败')
+      }
       if (activeTableDataset !== datasetName) {
         await loadTableDataset(datasetName, 1)
       }
     } catch (err) {
+      if (!selectionMatches(selectedMapFeatureRef.current, datasetName, featureID)) {
+        return
+      }
+      setSelectedFeatureAttributes(null)
+      setSelectionLocationError('定位失败')
       setError(errorMessage(err, '查询要素属性失败'))
     }
   }, [activeTableDataset, loadTableDataset, setSelectedMapFeature])
@@ -303,6 +324,7 @@ export function useUDBX(options: UseUDBXOptions) {
     mapLayers,
     selectedMapFeature,
     selectedFeatureAttributes,
+    selectionLocationError,
     loading,
     error,
     openFileDialog,
@@ -354,4 +376,12 @@ async function loadBoundedPreview(datasetName: string, options: UseUDBXOptions):
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback
+}
+
+function selectionMatches(
+  selection: SelectedMapFeature | null,
+  datasetName: string,
+  featureID: number,
+): boolean {
+  return selection?.datasetName === datasetName && selection.featureID === featureID
 }

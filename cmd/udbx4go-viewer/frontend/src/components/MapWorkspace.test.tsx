@@ -384,4 +384,92 @@ describe('MapWorkspace settings behavior', () => {
     expect(adapter.fitBounds).not.toHaveBeenCalled()
     expect(adapter.fitAllVisibleLayers).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['Point', 'point'],
+    ['MultiLineString', 'line'],
+    ['MultiPolygon', 'polygon'],
+  ] as const)('视口外 %s 选择使用真实 BBox 按 %s 定位', (geometryType, geometryKind) => {
+    const bbox = { minX: 10, minY: 20, maxX: 40, maxY: 50 }
+
+    render(
+      <MapWorkspace
+        layers={mapLayerFixtures}
+        selectedFeature={selectedFeatureFixture}
+        selectedFeatureAttributes={{
+          datasetName: 'BaseMap_P',
+          id: 1,
+          geometryType,
+          bbox,
+          properties: {},
+        }}
+        selectionLocationError={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(latestAdapter().fitBounds).toHaveBeenCalledWith(bbox, geometryKind)
+    expect(latestAdapter().fitFeature).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    undefined,
+    { minX: Number.NaN, minY: 0, maxX: 10, maxY: 10 },
+    { minX: 10, minY: 0, maxX: 0, maxY: 10 },
+  ])('无效或缺失 BBox 不定位到虚构点并显示定位失败', (bbox) => {
+    render(
+      <MapWorkspace
+        layers={mapLayerFixtures}
+        selectedFeature={selectedFeatureFixture}
+        selectedFeatureAttributes={{
+          datasetName: 'BaseMap_P',
+          id: 1,
+          geometryType: 'Point',
+          bbox,
+          properties: {},
+        }}
+        selectionLocationError="定位失败"
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onViewportChange={vi.fn()}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(latestAdapter().fitBounds).not.toHaveBeenCalled()
+    expect(latestAdapter().fitFeature).not.toHaveBeenCalled()
+    expect(screen.getByText('定位失败')).toBeInTheDocument()
+  })
+
+  it('视口响应替换 Source 后重新应用选择以高亮 required feature', () => {
+    const { rerender } = render(
+      <MapWorkspace
+        layers={[{ ...mapLayerFixtures[0], preview: null }]}
+        selectedFeature={selectedFeatureFixture}
+        autoFitOnLayerChange={false}
+        zoomToSelectedFeature={false}
+        onViewportChange={vi.fn()}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+    const adapter = latestAdapter()
+    adapter.setSelection.mockClear()
+
+    rerender(
+      <MapWorkspace
+        layers={mapLayerFixtures}
+        selectedFeature={selectedFeatureFixture}
+        autoFitOnLayerChange={false}
+        zoomToSelectedFeature={false}
+        onViewportChange={vi.fn()}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(adapter.setLayer).toHaveBeenCalledWith(mapLayerFixtures[0])
+    expect(adapter.setSelection).toHaveBeenCalledWith(selectedFeatureFixture)
+  })
 })
