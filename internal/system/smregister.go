@@ -2,6 +2,7 @@
 package system
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/udbx4x/udbx4go/pkg/errors"
@@ -135,6 +136,11 @@ func (dao *SmRegisterDao) GetByID(id int) (*SmRegisterRecord, error) {
 
 // GetByName returns a record by dataset name.
 func (dao *SmRegisterDao) GetByName(name string) (*SmRegisterRecord, error) {
+	return dao.GetByNameContext(context.Background(), name)
+}
+
+// GetByNameContext returns a record by dataset name and honors context cancellation.
+func (dao *SmRegisterDao) GetByNameContext(ctx context.Context, name string) (*SmRegisterRecord, error) {
 	query := `
 		SELECT SmDatasetID, SmDatasetName, SmTableName, SmOption, SmEncType,
 		       SmParentDTID, SmDatasetType, SmObjectCount, SmLeft, SmRight,
@@ -147,7 +153,7 @@ func (dao *SmRegisterDao) GetByName(name string) (*SmRegisterRecord, error) {
 		WHERE SmDatasetName = ?
 	`
 
-	row := dao.db.QueryRow(query, name)
+	row := dao.db.QueryRowContext(ctx, query, name)
 	record, err := dao.scanRecord(row)
 	if err != nil {
 		if errors.IsNotFound(err) {

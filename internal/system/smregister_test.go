@@ -1,7 +1,9 @@
 package system
 
 import (
+	"context"
 	"database/sql"
+	stderrors "errors"
 	"math"
 	"path/filepath"
 	"testing"
@@ -77,6 +79,18 @@ func TestSmRegisterDao_GetByName_NotFound(t *testing.T) {
 	_, err := dao.GetByName("nonexistent")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestSmRegisterDao_GetByNameContextHonorsCancellation(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := NewSmRegisterDao(db).GetByNameContext(ctx, "cities")
+	require.Error(t, err)
+	assert.True(t, stderrors.Is(err, context.Canceled))
 }
 
 func TestSmRegisterDao_ListAll(t *testing.T) {

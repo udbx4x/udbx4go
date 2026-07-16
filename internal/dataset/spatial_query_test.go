@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	stderrors "errors"
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,15 +61,71 @@ func TestSpatialQueryRequiredIDsAppendInNormalizedInputOrder(t *testing.T) {
 	insertSpatialPoint(t, db, querier, 1, 1, 1, "first", nil)
 	insertSpatialPoint(t, db, querier, 2, 2, 2, "second", nil)
 	insertSpatialPoint(t, db, querier, 99, 50, 50, "required", nil)
+	insertSpatialPoint(t, db, querier, 50, 60, 60, "second-required", nil)
 
 	result, err := querier.Query(context.Background(), types.SpatialQueryOptions{
 		Bounds:      types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
 		Limit:       2,
-		RequiredIDs: []int{99, 2, 99},
+		RequiredIDs: []int{99, 50, 2, 99},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, []int{1, 2, 99}, spatialFeatureIDs(result.Features))
+	assert.Equal(t, []int{1, 2, 99, 50}, spatialFeatureIDs(result.Features))
 	assert.True(t, result.HasMore)
+}
+
+func TestInitialCandidateCapacityIsBounded(t *testing.T) {
+	assert.Equal(t, 1, initialCandidateCapacity(0))
+	assert.Equal(t, 11, initialCandidateCapacity(10))
+	assert.Equal(t, 1024, initialCandidateCapacity(math.MaxInt-1))
+}
+
+func TestSpatialQueryHugeLimitDoesNotPreallocateRequestedCapacity(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "empty_points", "FeatureID", "Geometry")
+	defer db.Close()
+
+	result, err := querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{},
+		Limit:  math.MaxInt - 1,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Features)
+	assert.False(t, result.HasMore)
+}
+
+func TestSpatialQueryEmptyCandidatesReturnsEmptyResult(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "empty_points", "FeatureID", "Geometry")
+	defer db.Close()
+
+	result, err := querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 1, MinY: 1, MaxX: 2, MaxY: 2},
+		Limit:  10,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, result.Features)
+	assert.False(t, result.HasMore)
+}
+
+func TestSpatialQueryLoadsMoreThanOneFeatureBatchInRequiredOrder(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "batch_points", "FeatureID", "Geometry")
+	defer db.Close()
+
+	requiredIDs := make([]int, 0, 600)
+	for id := 600; id >= 1; id-- {
+		insertSpatialPoint(t, db, querier, id, float64(1000+id), float64(1000+id), fmt.Sprintf("feature-%d", id), nil)
+		requiredIDs = append(requiredIDs, id)
+	}
+
+	result, err := querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds:      types.BoundingBox{},
+		Limit:       1,
+		RequiredIDs: requiredIDs,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Features, 600)
+	assert.Equal(t, requiredIDs, spatialFeatureIDs(result.Features))
+	assert.Equal(t, "feature-600", result.Features[0].Attributes["label"])
+	assert.Equal(t, "feature-1", result.Features[599].Attributes["label"])
+	assert.False(t, result.HasMore)
 }
 
 func TestSpatialQueryRequiredIDsIgnoreMissingFeatures(t *testing.T) {
@@ -102,6 +159,51 @@ func TestSpatialQueryCorruptGeometryReturnsFormatError(t *testing.T) {
 	var udbxErr udbxerrors.UdbxError
 	require.True(t, stderrors.As(err, &udbxErr))
 	assert.Equal(t, udbxerrors.CodeFormatError, udbxErr.Code())
+}
+
+func TestSpatialQueryMalformedGeometryColumnReturnsCorruptGeometry(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
+	defer db.Close()
+	insertSpatialPoint(t, db, querier, 1, 1, 1, "wrong-type", nil)
+	_, err := db.Exec(`UPDATE "points" SET "Geometry" = ? WHERE "FeatureID" = ?`, "not-a-blob", 1)
+	require.NoError(t, err)
+
+	_, err = querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
+		Limit:  10,
+	})
+	assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+}
+
+func TestSpatialQueryMalformedCandidateIDIsFormatErrorWithoutSpatialReason(t *testing.T) {
+	db, querier := createSpatialQueryFixtureWithIDType(t, "points", "FeatureID", "TEXT", "Geometry")
+	defer db.Close()
+	insertSpatialRow(t, db, querier, 1001, "not-an-integer", 1, 1, "bad-candidate", nil)
+
+	_, err := querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
+		Limit:  10,
+	})
+	require.Error(t, err)
+	assert.True(t, udbxerrors.IsFormatError(err))
+	_, hasReason := udbxerrors.SpatialQueryReasonOf(err)
+	assert.False(t, hasReason)
+}
+
+func TestSpatialQueryMalformedFeatureIDIsFormatErrorWithoutSpatialReason(t *testing.T) {
+	db, querier := createSpatialQueryFixtureWithIDType(t, "points", "FeatureID", "TEXT", "Geometry")
+	defer db.Close()
+	insertSpatialRow(t, db, querier, 1001, "1", 50, 50, "bad-feature", nil)
+
+	_, err := querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds:      types.BoundingBox{},
+		Limit:       10,
+		RequiredIDs: []int{1},
+	})
+	require.Error(t, err)
+	assert.True(t, udbxerrors.IsFormatError(err))
+	_, hasReason := udbxerrors.SpatialQueryReasonOf(err)
+	assert.False(t, hasReason)
 }
 
 func TestSpatialQueryReturnsUnavailableWithoutRTree(t *testing.T) {
@@ -149,12 +251,22 @@ func TestSpatialQueryContextCancellationReturnsTimeoutReason(t *testing.T) {
 
 	_, err := querier.Query(ctx, types.SpatialQueryOptions{
 		Bounds: types.BoundingBox{},
-		Limit:  1,
+		Limit:  math.MaxInt - 1,
 	})
 	assertSpatialQueryError(t, err, types.SpatialQueryReasonQueryTimeout, udbxerrors.CodeUdbxError)
 }
 
 func createSpatialQueryFixture(t *testing.T, tableName, idColumn, geometryColumn string) (*sql.DB, *SpatialQuerier) {
+	return createSpatialQueryFixtureWithIDType(t, tableName, idColumn, "INTEGER", geometryColumn)
+}
+
+func createSpatialQueryFixtureWithIDType(
+	t *testing.T,
+	tableName string,
+	idColumn string,
+	idType string,
+	geometryColumn string,
+) (*sql.DB, *SpatialQuerier) {
 	t.Helper()
 	db := setupTestDB(t)
 
@@ -162,9 +274,10 @@ func createSpatialQueryFixture(t *testing.T, tableName, idColumn, geometryColumn
 	quotedID := mustQuoteSpatialIdentifier(t, idColumn)
 	quotedGeometry := mustQuoteSpatialIdentifier(t, geometryColumn)
 	_, err := db.Exec(fmt.Sprintf(
-		"CREATE TABLE %s (%s INTEGER NOT NULL UNIQUE, %s BLOB, %s TEXT)",
+		"CREATE TABLE %s (%s %s NOT NULL UNIQUE, %s BLOB, %s TEXT)",
 		quotedTable,
 		quotedID,
+		idType,
 		quotedGeometry,
 		mustQuoteSpatialIdentifier(t, "label"),
 	))
@@ -203,6 +316,21 @@ func insertSpatialPoint(
 	geometryOverride []byte,
 ) {
 	t.Helper()
+	insertSpatialRow(t, db, querier, int64(1000+id), id, x, y, label, geometryOverride)
+}
+
+func insertSpatialRow(
+	t *testing.T,
+	db *sql.DB,
+	querier *SpatialQuerier,
+	rowID int64,
+	id interface{},
+	x float64,
+	y float64,
+	label string,
+	geometryOverride []byte,
+) {
+	t.Helper()
 	geometry := geometryOverride
 	if geometry == nil {
 		var err error
@@ -213,7 +341,6 @@ func insertSpatialPoint(
 		require.NoError(t, err)
 	}
 
-	rowID := int64(1000 + id)
 	_, err := db.Exec(fmt.Sprintf(
 		"INSERT INTO %s (rowid, %s, %s, %s) VALUES (?, ?, ?, ?)",
 		mustQuoteSpatialIdentifier(t, querier.info.TableName),
@@ -222,7 +349,6 @@ func insertSpatialPoint(
 		mustQuoteSpatialIdentifier(t, "label"),
 	), rowID, id, geometry, label)
 	require.NoError(t, err)
-	require.NotEqual(t, int64(id), rowID, "fixture must not rely on pkid equaling the feature ID")
 
 	_, err = db.Exec(fmt.Sprintf(
 		"INSERT INTO %s (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",

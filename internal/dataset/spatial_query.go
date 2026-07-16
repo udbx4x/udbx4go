@@ -2,6 +2,7 @@ package dataset
 
 import (
 	"context"
+	stderrors "errors"
 	"fmt"
 
 	"github.com/udbx4x/udbx4go/internal/sqliteutil"
@@ -54,7 +55,8 @@ func (q *SpatialQuerier) Query(ctx context.Context, options types.SpatialQueryOp
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, spatialQueryFailure(types.SpatialQueryReasonQueryTimeout, ctxErr)
 		}
-		if udbxerrors.IsFormatError(err) {
+		var geometryErr *spatialGeometryError
+		if stderrors.As(err, &geometryErr) {
 			return nil, spatialQueryFailure(types.SpatialQueryReasonCorruptGeometry, err)
 		}
 		return nil, err
@@ -141,11 +143,11 @@ func (q *SpatialQuerier) queryRTreeCandidateIDs(
 	}
 	defer rows.Close()
 
-	ids := make([]int, 0, options.Limit+1)
+	ids := make([]int, 0, initialCandidateCapacity(options.Limit))
 	for rows.Next() {
 		var id int
 		if err := rows.Scan(&id); err != nil {
-			return nil, false, udbxerrors.IOError("failed to scan spatial index candidate", err)
+			return nil, false, udbxerrors.FormatError("spatial index candidate ID is not an integer", err)
 		}
 		ids = append(ids, id)
 	}
@@ -161,6 +163,15 @@ func (q *SpatialQuerier) queryRTreeCandidateIDs(
 		ids = ids[:options.Limit]
 	}
 	return ids, hasMore, nil
+}
+
+func initialCandidateCapacity(limit int) int {
+	const maxInitialCapacity = 1024
+	capacity := limit + 1
+	if capacity > maxInitialCapacity {
+		return maxInitialCapacity
+	}
+	return capacity
 }
 
 func appendRequiredSpatialIDs(candidateIDs, requiredIDs []int) []int {

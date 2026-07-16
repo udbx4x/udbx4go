@@ -98,11 +98,24 @@ func (ds *DataSource) ListDatasets() ([]*types.DatasetInfo, error) {
 
 // GetSpatialQueryCapability reports the available spatial-query path for a dataset.
 func (ds *DataSource) GetSpatialQueryCapability(ctx context.Context, datasetName string) (*types.SpatialQueryCapability, error) {
-	record, err := ds.registerDao.GetByName(datasetName)
+	if err := ctx.Err(); err != nil {
+		return nil, dataSourceSpatialTimeout(err)
+	}
+	record, err := ds.registerDao.GetByNameContext(ctx, datasetName)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, dataSourceSpatialTimeout(ctxErr)
+		}
 		return nil, err
 	}
-	return dataset.NewSpatialQuerier(ds.db, record.ToDatasetInfo(), record).Capability(ctx)
+	capability, err := dataset.NewSpatialQuerier(ds.db, record.ToDatasetInfo(), record).Capability(ctx)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, dataSourceSpatialTimeout(ctxErr)
+		}
+		return nil, err
+	}
+	return capability, nil
 }
 
 // QuerySpatial queries features intersecting a viewport through the dataset RTree.
@@ -111,11 +124,25 @@ func (ds *DataSource) QuerySpatial(
 	datasetName string,
 	options types.SpatialQueryOptions,
 ) (*types.SpatialQueryResult, error) {
-	record, err := ds.registerDao.GetByName(datasetName)
+	if err := ctx.Err(); err != nil {
+		return nil, dataSourceSpatialTimeout(err)
+	}
+	record, err := ds.registerDao.GetByNameContext(ctx, datasetName)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, dataSourceSpatialTimeout(ctxErr)
+		}
 		return nil, err
 	}
 	return dataset.NewSpatialQuerier(ds.db, record.ToDatasetInfo(), record).Query(ctx, options)
+}
+
+func dataSourceSpatialTimeout(cause error) error {
+	spatialErr, err := errors.NewSpatialQueryError(types.SpatialQueryReasonQueryTimeout, cause)
+	if err != nil {
+		return err
+	}
+	return spatialErr
 }
 
 // GetDataset returns a dataset by name (generic interface).

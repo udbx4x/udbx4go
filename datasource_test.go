@@ -1,7 +1,10 @@
 package udbx4go
 
 import (
+	"context"
 	"database/sql"
+	stderrors "errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
@@ -210,4 +214,88 @@ func TestDataSource_GetDataset_NotFound(t *testing.T) {
 	_, err = ds.GetDataset("nonexistent")
 	assert.Error(t, err)
 	assert.True(t, IsNotFound(err))
+}
+
+func TestDataSourceSpatialQueryPublicEntryPoints(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spatial.udbx")
+	ds, err := Create(path)
+	require.NoError(t, err)
+	defer ds.Close()
+
+	pointDataset, err := ds.CreatePointDataset("cities", 4326, []*types.FieldInfo{
+		{Name: "name", FieldType: types.FieldTypeText, Nullable: true},
+	})
+	require.NoError(t, err)
+	require.NoError(t, pointDataset.Insert(&types.Feature{
+		ID: 7,
+		Geometry: &types.PointGeometry{
+			Type:        "Point",
+			Coordinates: []float64{116.4, 39.9},
+		},
+		Attributes: map[string]interface{}{"name": "Beijing"},
+	}))
+
+	tableName := pointDataset.Info().TableName
+	_, err = ds.db.Exec(
+		"UPDATE SmRegister SET SmIDColName = ?, SmGeoColName = ? WHERE SmDatasetName = ?",
+		"SmID", "SmGeometry", "cities",
+	)
+	require.NoError(t, err)
+	_, err = ds.db.Exec(
+		"UPDATE geometry_columns SET spatial_index_enabled = 1 WHERE f_table_name = ?",
+		tableName,
+	)
+	require.NoError(t, err)
+	quotedRTree, err := sqliteutil.QuoteIdentifier("idx_" + tableName + "_SmGeometry")
+	require.NoError(t, err)
+	_, err = ds.db.Exec(fmt.Sprintf(
+		"CREATE VIRTUAL TABLE %s USING rtree(pkid, xmin, xmax, ymin, ymax)",
+		quotedRTree,
+	))
+	require.NoError(t, err)
+	_, err = ds.db.Exec(fmt.Sprintf(
+		"INSERT INTO %s (pkid, xmin, xmax, ymin, ymax) VALUES (?, ?, ?, ?, ?)",
+		quotedRTree,
+	), 7, 116.4, 116.4, 39.9, 39.9)
+	require.NoError(t, err)
+
+	capability, err := ds.GetSpatialQueryCapability(context.Background(), "cities")
+	require.NoError(t, err)
+	assert.True(t, capability.RTreeAvailable)
+
+	result, err := ds.QuerySpatial(context.Background(), "cities", types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 116, MinY: 39, MaxX: 117, MaxY: 40},
+		Limit:  10,
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Features, 1)
+	assert.Equal(t, 7, result.Features[0].ID)
+	assert.Equal(t, "Beijing", result.Features[0].Attributes["name"])
+}
+
+func TestDataSourceSpatialQueryEntryPointsMapCanceledMetadataLookupToTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spatial.udbx")
+	ds, err := Create(path)
+	require.NoError(t, err)
+	defer ds.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = ds.GetSpatialQueryCapability(ctx, "cities")
+	assertPublicSpatialTimeout(t, err)
+	_, err = ds.QuerySpatial(ctx, "cities", types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{},
+		Limit:  1,
+	})
+	assertPublicSpatialTimeout(t, err)
+}
+
+func assertPublicSpatialTimeout(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	reason, ok := SpatialQueryReasonOf(err)
+	require.True(t, ok)
+	assert.Equal(t, SpatialQueryReasonQueryTimeout, reason)
+	assert.True(t, stderrors.Is(err, context.Canceled))
 }

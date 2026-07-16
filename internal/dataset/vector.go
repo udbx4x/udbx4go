@@ -19,6 +19,18 @@ type VectorDataset struct {
 	srid     int
 }
 
+type spatialGeometryError struct {
+	cause error
+}
+
+func (e *spatialGeometryError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *spatialGeometryError) Unwrap() error {
+	return e.cause
+}
+
 // NewVectorDataset creates a new vector dataset.
 func NewVectorDataset(db *sql.DB, info *types.DatasetInfo) *VectorDataset {
 	srid := 0
@@ -123,6 +135,7 @@ func (d *VectorDataset) buildFeatureWithMetadata(
 	}
 
 	var geometryBlob []byte
+	geometryColumnFound := false
 
 	for i, col := range columns {
 		val := values[i]
@@ -138,24 +151,32 @@ func (d *VectorDataset) buildFeatureWithMetadata(
 				return nil, errors.FormatError("feature ID column is not an integer")
 			}
 		case strings.EqualFold(col, geometryColumn):
-			if blob, ok := val.([]byte); ok {
-				geometryBlob = blob
+			geometryColumnFound = true
+			blob, ok := val.([]byte)
+			if !ok || len(blob) == 0 {
+				return nil, newSpatialGeometryError("feature geometry column is not a non-empty BLOB")
 			}
+			geometryBlob = blob
 		default:
 			feature.Attributes[col] = val
 		}
 	}
 
-	// Decode geometry if present
-	if geometryBlob != nil {
-		geometry, err := d.geoCodec.Decode(geometryBlob)
-		if err != nil {
-			return nil, errors.FormatError("failed to decode geometry", err)
-		}
-		feature.Geometry = geometry
+	if !geometryColumnFound {
+		return nil, newSpatialGeometryError("feature geometry column is missing")
 	}
 
+	geometry, err := d.geoCodec.Decode(geometryBlob)
+	if err != nil {
+		return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode geometry", err)}
+	}
+	feature.Geometry = geometry
+
 	return feature, nil
+}
+
+func newSpatialGeometryError(message string) error {
+	return &spatialGeometryError{cause: errors.FormatError(message)}
 }
 
 const spatialFeatureIDBatchSize = 500
@@ -235,9 +256,6 @@ func (d *VectorDataset) loadFeatureBatch(
 		feature, err := d.buildFeatureWithMetadata(columns, values, idColumn, geometryColumn)
 		if err != nil {
 			return nil, err
-		}
-		if feature.Geometry == nil {
-			return nil, errors.FormatError("spatial query feature geometry is missing")
 		}
 		features[feature.ID] = feature
 	}
