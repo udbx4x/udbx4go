@@ -34,6 +34,8 @@ interface UseUDBXOptions {
   spatialPreviewVertexBudget: number
 }
 
+type TableDatasetCommitGuard = () => boolean
+
 export function useUDBX(options: UseUDBXOptions) {
   const [currentFile, setCurrentFile] = useState<string | null>(null)
   const [datasets, setDatasets] = useState<DatasetInfo[]>([])
@@ -171,16 +173,26 @@ export function useUDBX(options: UseUDBXOptions) {
     }
   }, [resetFileState])
 
-  const loadTableDataset = useCallback(async (datasetName: string, page = 1) => {
+  const loadTableDataset = useCallback(async (
+    datasetName: string,
+    page = 1,
+    shouldCommit: TableDatasetCommitGuard = () => true,
+  ) => {
     try {
       setLoading(true)
       setError(null)
       const data: PageData = await LoadDatasetPage(datasetName, page)
+      if (!shouldCommit()) {
+        return
+      }
       setSelectedDataset(datasetName)
       setActiveTableDataset(datasetName)
       setPageData(data)
       setLoading(false)
     } catch (err) {
+      if (!shouldCommit()) {
+        return
+      }
       setError(errorMessage(err, '加载属性表失败'))
       setLoading(false)
       throw err
@@ -317,7 +329,13 @@ export function useUDBX(options: UseUDBXOptions) {
         setSelectionLocationError('定位失败')
       }
       if (activeTableDataset !== datasetName) {
-        await loadTableDataset(datasetName, 1)
+        await loadTableDataset(datasetName, 1, () => selectionRequestMatches(
+          requestToken,
+          selectionRequestTokenRef.current,
+          selectedMapFeatureRef.current,
+          datasetName,
+          featureID,
+        ))
       }
     } catch (err) {
       if (!selectionRequestMatches(requestToken, selectionRequestTokenRef.current, selectedMapFeatureRef.current, datasetName, featureID)) {

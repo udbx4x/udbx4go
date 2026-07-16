@@ -7,7 +7,6 @@ import (
 	"math"
 	"sort"
 	"sync"
-	"unsafe"
 
 	udbxerrors "github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
@@ -24,7 +23,15 @@ type envelopeEntry struct {
 	MaxX, MaxY float64
 }
 
-const envelopeEntryBytes = int64(unsafe.Sizeof(envelopeEntry{}))
+const (
+	// The 250k-to-500k PoC P95 slope is about 80.3 resident bytes per
+	// capacity entry. The rounded 80-byte charge plus a roughly 4 MiB fixed
+	// charge models stable RSS retained by the Go runtime and SQLite path.
+	// These are empirical resource-policy charges, not object-count limits or
+	// the in-memory size of envelopeEntry.
+	envelopeCacheFixedRSSChargeBytes       int64 = 4 * 1024 * 1024
+	envelopeCacheRSSChargePerCapacityEntry int64 = 80
+)
 
 type envelopeCache struct {
 	entries  []envelopeEntry
@@ -163,7 +170,7 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 	if build == nil {
 		return nil, fmt.Errorf("envelope cache build function is required")
 	}
-	estimatedBytes, err := estimateEnvelopeCacheBytes(objectCount)
+	estimatedBytes, err := envelopeCacheRSSChargeForCapacity(objectCount)
 	if err != nil || estimatedBytes > m.policy.MaxDatasetCacheBytes {
 		return nil, errEnvelopeCacheBudgetExceeded
 	}
@@ -320,10 +327,9 @@ func (m *EnvelopeCacheManager) reserveBuildGrowth(
 	currentCapacity int,
 	desiredCapacity int,
 ) error {
-	currentBytes, currentErr := envelopeCacheBytesForCapacity(currentCapacity)
-	desiredBytes, desiredErr := envelopeCacheBytesForCapacity(desiredCapacity)
-	peakBytes, peakErr := addEnvelopeCacheBytes(currentBytes, desiredBytes)
-	if currentErr != nil || desiredErr != nil || peakErr != nil || peakBytes > m.policy.MaxDatasetCacheBytes {
+	currentBytes, currentErr := envelopeCacheRSSChargeForCapacity(currentCapacity)
+	peakBytes, peakErr := envelopeCacheRSSPeakCharge(currentCapacity, desiredCapacity)
+	if currentErr != nil || peakErr != nil || peakBytes > m.policy.MaxDatasetCacheBytes {
 		return errEnvelopeCacheBudgetExceeded
 	}
 
@@ -352,9 +358,9 @@ func (m *EnvelopeCacheManager) commitGrowthCapacity(
 	previousCapacity int,
 	currentCapacity int,
 ) error {
-	previousBytes, previousErr := envelopeCacheBytesForCapacity(previousCapacity)
-	currentBytes, currentErr := envelopeCacheBytesForCapacity(currentCapacity)
-	peakBytes, peakErr := addEnvelopeCacheBytes(previousBytes, currentBytes)
+	previousBytes, previousErr := envelopeCacheRSSVariableChargeForCapacity(previousCapacity)
+	currentBytes, currentErr := envelopeCacheRSSChargeForCapacity(currentCapacity)
+	peakBytes, peakErr := envelopeCacheRSSPeakCharge(previousCapacity, currentCapacity)
 	if previousErr != nil || currentErr != nil || peakErr != nil {
 		return errEnvelopeCacheBudgetExceeded
 	}
@@ -431,22 +437,33 @@ func (m *EnvelopeCacheManager) Close() {
 	m.mu.Unlock()
 }
 
-func estimateEnvelopeCacheBytes(objectCount int) (int64, error) {
-	if objectCount < 0 || uint64(objectCount) > uint64(math.MaxInt64)/uint64(envelopeEntryBytes) {
-		return 0, errEnvelopeCacheBudgetExceeded
-	}
-	return int64(objectCount) * envelopeEntryBytes, nil
-}
-
 func envelopeCacheCapacityBytes(entries []envelopeEntry) (int64, error) {
-	return envelopeCacheBytesForCapacity(cap(entries))
+	return envelopeCacheRSSChargeForCapacity(cap(entries))
 }
 
-func envelopeCacheBytesForCapacity(capacity int) (int64, error) {
-	if capacity < 0 || uint64(capacity) > uint64(math.MaxInt64)/uint64(envelopeEntryBytes) {
+func envelopeCacheRSSChargeForCapacity(capacity int) (int64, error) {
+	variable, err := envelopeCacheRSSVariableChargeForCapacity(capacity)
+	if err != nil || variable > math.MaxInt64-envelopeCacheFixedRSSChargeBytes {
 		return 0, errEnvelopeCacheBudgetExceeded
 	}
-	return int64(capacity) * envelopeEntryBytes, nil
+	return envelopeCacheFixedRSSChargeBytes + variable, nil
+}
+
+func envelopeCacheRSSVariableChargeForCapacity(capacity int) (int64, error) {
+	if capacity < 0 || uint64(capacity) > uint64(math.MaxInt64)/uint64(envelopeCacheRSSChargePerCapacityEntry) {
+		return 0, errEnvelopeCacheBudgetExceeded
+	}
+	return int64(capacity) * envelopeCacheRSSChargePerCapacityEntry, nil
+}
+
+func envelopeCacheRSSPeakCharge(currentCapacity, desiredCapacity int) (int64, error) {
+	current, currentErr := envelopeCacheRSSVariableChargeForCapacity(currentCapacity)
+	desired, desiredErr := envelopeCacheRSSVariableChargeForCapacity(desiredCapacity)
+	variable, addErr := addEnvelopeCacheBytes(current, desired)
+	if currentErr != nil || desiredErr != nil || addErr != nil || variable > math.MaxInt64-envelopeCacheFixedRSSChargeBytes {
+		return 0, errEnvelopeCacheBudgetExceeded
+	}
+	return envelopeCacheFixedRSSChargeBytes + variable, nil
 }
 
 func addEnvelopeCacheBytes(left, right int64) (int64, error) {
@@ -457,10 +474,10 @@ func addEnvelopeCacheBytes(left, right int64) (int64, error) {
 }
 
 func maxEnvelopeCacheCapacity(maximumBytes int64) int {
-	if maximumBytes <= 0 {
+	if maximumBytes < envelopeCacheFixedRSSChargeBytes {
 		return 0
 	}
-	maximum := maximumBytes / envelopeEntryBytes
+	maximum := (maximumBytes - envelopeCacheFixedRSSChargeBytes) / envelopeCacheRSSChargePerCapacityEntry
 	if maximum > int64(math.MaxInt) {
 		return math.MaxInt
 	}

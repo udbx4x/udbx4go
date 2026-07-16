@@ -218,7 +218,7 @@ func TestSpatialQueryEnvelopeCacheFiltersWithoutDecodingUnmatchedGeometry(t *tes
 	insertSpatialPoint(t, db, querier, 88, 70, 70, "unmatched-corrupt-body", codec.WriteGaiaHeader(4326, [4]float64{70, 70, 70, 70}, codec.GeoTypePoint))
 	removeSpatialRTree(t, db, querier)
 	setSpatialObjectCount(querier, 6)
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*10, envelopeEntryBytes*20)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 10), testEnvelopeCacheRSSCharge(t, 20))
 
 	result, err := querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
 		Bounds:      types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
@@ -269,7 +269,7 @@ func TestSpatialQueryBoundedSampleOnlyOnEnvelopeBudgetRejection(t *testing.T) {
 	insertSpatialPoint(t, db, querier, 99, 99, 99, "required", nil)
 	removeSpatialRTree(t, db, querier)
 	setSpatialObjectCount(querier, 4)
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*3, envelopeEntryBytes*6)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 3), testEnvelopeCacheRSSCharge(t, 6))
 
 	result, err := querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
 		Bounds:      types.BoundingBox{MinX: -100, MinY: -100, MaxX: -50, MaxY: -50},
@@ -294,7 +294,7 @@ func TestEnvelopeCacheSQLiteBuildStopsBeforeUnderreportedObjectCountExceedsBudge
 	insertSpatialPoint(t, db, querier, 6, 6, 6, "corrupt-after-budget", []byte{0x00, 0x01})
 	removeSpatialRTree(t, db, querier)
 	setSpatialObjectCount(querier, 1)
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*4)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 4), testEnvelopeCacheRSSCharge(t, 4))
 	idColumn, geometryColumn, err := querier.detectEnvelopeColumns(context.Background())
 	require.NoError(t, err)
 	detected := &detectedSpatialCapability{IDColumn: idColumn, GeometryColumn: geometryColumn}
@@ -349,8 +349,8 @@ func TestSpatialQueryEnvelopeBuildTimeoutDoesNotSample(t *testing.T) {
 	removeSpatialRTree(t, db, querier)
 	setSpatialObjectCount(querier, 1)
 	manager, err := NewEnvelopeCacheManager(types.SpatialQueryPolicy{
-		MaxDatasetCacheBytes: envelopeEntryBytes * 2,
-		MaxTotalCacheBytes:   envelopeEntryBytes * 4,
+		MaxDatasetCacheBytes: testEnvelopeCacheRSSCharge(t, 2),
+		MaxTotalCacheBytes:   testEnvelopeCacheRSSCharge(t, 4),
 		BuildTimeout:         10 * time.Millisecond,
 	})
 	require.NoError(t, err)

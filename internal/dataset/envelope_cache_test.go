@@ -15,8 +15,57 @@ import (
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
+func TestEnvelopeCacheEstimatedRSSChargeMatchesPOCModel(t *testing.T) {
+	assert.Equal(t, int64(4*1024*1024), envelopeCacheFixedRSSChargeBytes)
+	assert.Equal(t, int64(80), envelopeCacheRSSChargePerCapacityEntry)
+
+	measuredP95MiB := map[int]float64{
+		10_000:  3.859,
+		50_000:  7.703,
+		100_000: 11.470,
+		250_000: 23.190,
+		500_000: 42.340,
+	}
+	for capacity, measured := range measuredP95MiB {
+		charge, err := envelopeCacheRSSChargeForCapacity(capacity)
+		require.NoError(t, err)
+		expected := envelopeCacheFixedRSSChargeBytes + int64(capacity)*envelopeCacheRSSChargePerCapacityEntry
+		assert.Equal(t, expected, charge)
+		assert.InDelta(t, measured, float64(charge)/(1024*1024), 1.0, "capacity=%d", capacity)
+	}
+}
+
+func TestEnvelopeCacheDefaultRSSGateAllows250KAndRejects500KBeforeBuild(t *testing.T) {
+	policy := types.DefaultSpatialQueryPolicy()
+	buildReached := stderrors.New("build reached")
+
+	allowed, err := NewEnvelopeCacheManager(policy)
+	require.NoError(t, err)
+	t.Cleanup(allowed.Close)
+	called := false
+	cache, err := allowed.GetOrBuild(context.Background(), "250k", 250_000, func(context.Context, *envelopeCacheBuildBuffer) error {
+		called = true
+		return buildReached
+	})
+	assert.Nil(t, cache)
+	assert.ErrorIs(t, err, buildReached)
+	assert.True(t, called)
+
+	rejected, err := NewEnvelopeCacheManager(policy)
+	require.NoError(t, err)
+	t.Cleanup(rejected.Close)
+	called = false
+	cache, err = rejected.GetOrBuild(context.Background(), "500k", 500_000, func(context.Context, *envelopeCacheBuildBuffer) error {
+		called = true
+		return nil
+	})
+	assert.Nil(t, cache)
+	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
+	assert.False(t, called)
+}
+
 func TestEnvelopeCacheConcurrentBuildPublishesOnce(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, 1024, 2048)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 3), testEnvelopeCacheRSSCharge(t, 3))
 	start := make(chan struct{})
 	release := make(chan struct{})
 	waiterJoined := make(chan struct{})
@@ -71,7 +120,7 @@ func TestEnvelopeCacheConcurrentBuildPublishesOnce(t *testing.T) {
 	assert.Same(t, first.cache, second.cache)
 	assert.Equal(t, int32(1), builds.Load())
 	assert.True(t, first.cache.Complete())
-	assert.Equal(t, int64(3)*envelopeEntryBytes, manager.TotalBytes())
+	assert.Equal(t, testEnvelopeCacheRSSCharge(t, 3), manager.TotalBytes())
 
 	ids, hasMore, err := first.cache.CandidateIDs(types.BoundingBox{MinX: 10, MinY: 5, MaxX: 10, MaxY: 5}, 10)
 	require.NoError(t, err)
@@ -80,7 +129,7 @@ func TestEnvelopeCacheConcurrentBuildPublishesOnce(t *testing.T) {
 }
 
 func TestEnvelopeCacheRejectsEstimatedBudgetWithoutScanning(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes, envelopeEntryBytes*10)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 1), testEnvelopeCacheRSSCharge(t, 10))
 	called := false
 
 	cache, err := manager.GetOrBuild(context.Background(), "too-large", 2, func(context.Context, *envelopeCacheBuildBuffer) error {
@@ -96,7 +145,7 @@ func TestEnvelopeCacheRejectsEstimatedBudgetWithoutScanning(t *testing.T) {
 }
 
 func TestEnvelopeCacheTotalBudgetDoesNotEvictPublishedCache(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*2)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 2))
 	first, err := manager.GetOrBuild(context.Background(), "first", 2, fixedEnvelopeBuild(1, 2))
 	require.NoError(t, err)
 
@@ -109,14 +158,14 @@ func TestEnvelopeCacheTotalBudgetDoesNotEvictPublishedCache(t *testing.T) {
 	assert.Nil(t, second)
 	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
 	assert.False(t, called)
-	assert.Equal(t, envelopeEntryBytes*2, manager.TotalBytes())
+	assert.Equal(t, testEnvelopeCacheRSSCharge(t, 2), manager.TotalBytes())
 	again, err := manager.GetOrBuild(context.Background(), "first", 2, fixedEnvelopeBuild(99))
 	require.NoError(t, err)
 	assert.Same(t, first, again)
 }
 
 func TestEnvelopeCacheGrowthRespectsTotalBudgetWithoutEviction(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*4)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 8), testEnvelopeCacheTotalRSSCharge(t, 1, 1))
 	first, err := manager.GetOrBuild(context.Background(), "first", 1, fixedEnvelopeBuild(1))
 	require.NoError(t, err)
 
@@ -124,7 +173,7 @@ func TestEnvelopeCacheGrowthRespectsTotalBudgetWithoutEviction(t *testing.T) {
 
 	assert.Nil(t, second)
 	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
-	assert.Equal(t, envelopeEntryBytes, manager.TotalBytes())
+	assert.Equal(t, testEnvelopeCacheRSSCharge(t, 1), manager.TotalBytes())
 	assert.Zero(t, manager.ReservedBytes())
 	assert.Equal(t, 1, manager.EntryCount())
 	again, err := manager.GetOrBuild(context.Background(), "first", 1, fixedEnvelopeBuild(99))
@@ -133,7 +182,7 @@ func TestEnvelopeCacheGrowthRespectsTotalBudgetWithoutEviction(t *testing.T) {
 }
 
 func TestEnvelopeCacheGrowthRejectsDatasetBackingPeakBeforeAllocation(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*10)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 10))
 	buildCalls := 0
 	capacityAfterRejection := -1
 
@@ -158,7 +207,7 @@ func TestEnvelopeCacheGrowthRejectsDatasetBackingPeakBeforeAllocation(t *testing
 }
 
 func TestEnvelopeCacheGrowthRejectsTotalBackingPeakBeforeAllocation(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*3, envelopeEntryBytes*3)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 3), testEnvelopeCacheTotalRSSCharge(t, 1, 1))
 	blockerCtx, cancelBlocker := context.WithCancel(context.Background())
 	blockerStarted := make(chan struct{})
 	blockerFinished := make(chan error, 1)
@@ -190,7 +239,7 @@ func TestEnvelopeCacheGrowthRejectsTotalBackingPeakBeforeAllocation(t *testing.T
 	assert.Equal(t, 1, buildCalls)
 	assert.Equal(t, 1, capacityAfterRejection, "growth must be rejected before allocating the new backing array")
 	assert.Zero(t, manager.TotalBytes())
-	assert.Equal(t, envelopeEntryBytes, manager.ReservedBytes())
+	assert.Equal(t, testEnvelopeCacheRSSCharge(t, 1), manager.ReservedBytes())
 	assert.Zero(t, manager.EntryCount())
 
 	cancelBlocker()
@@ -200,7 +249,7 @@ func TestEnvelopeCacheGrowthRejectsTotalBackingPeakBeforeAllocation(t *testing.T
 }
 
 func TestEnvelopeCacheGrowthReleasesPreviousBackingReservationAfterCopy(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*3, envelopeEntryBytes*3)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 3), testEnvelopeCacheRSSCharge(t, 3))
 	reservedAfterGrowth := int64(-1)
 
 	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(
@@ -215,7 +264,7 @@ func TestEnvelopeCacheGrowthReleasesPreviousBackingReservationAfterCopy(t *testi
 
 	assert.Nil(t, cache)
 	assert.True(t, udbxerrors.IsFormatError(err))
-	assert.Equal(t, envelopeEntryBytes*2, reservedAfterGrowth)
+	assert.Equal(t, testEnvelopeCacheRSSCharge(t, 2), reservedAfterGrowth)
 	assert.Zero(t, manager.TotalBytes())
 	assert.Zero(t, manager.ReservedBytes())
 }
@@ -264,7 +313,7 @@ func TestEnvelopeCacheFailureNeverPublishesOrLeaksReservation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
+			manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
 			ctx := context.Background()
 			if tt.name == "canceled" {
 				var cancel context.CancelFunc
@@ -285,8 +334,8 @@ func TestEnvelopeCacheFailureNeverPublishesOrLeaksReservation(t *testing.T) {
 
 func TestEnvelopeCacheBuildTimeoutReleasesReservation(t *testing.T) {
 	manager, err := NewEnvelopeCacheManager(types.SpatialQueryPolicy{
-		MaxDatasetCacheBytes: envelopeEntryBytes * 2,
-		MaxTotalCacheBytes:   envelopeEntryBytes * 4,
+		MaxDatasetCacheBytes: testEnvelopeCacheRSSCharge(t, 2),
+		MaxTotalCacheBytes:   testEnvelopeCacheRSSCharge(t, 4),
 		BuildTimeout:         10 * time.Millisecond,
 	})
 	require.NoError(t, err)
@@ -303,7 +352,7 @@ func TestEnvelopeCacheBuildTimeoutReleasesReservation(t *testing.T) {
 }
 
 func TestEnvelopeCacheCancellationDuringBuildReleasesReservation(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
 	ctx, cancel := context.WithCancel(context.Background())
 	started := make(chan struct{})
 	type buildResult struct {
@@ -320,7 +369,7 @@ func TestEnvelopeCacheCancellationDuringBuildReleasesReservation(t *testing.T) {
 		result <- buildResult{cache: cache, err: err}
 	}()
 	<-started
-	require.Equal(t, envelopeEntryBytes, manager.ReservedBytes())
+	require.Equal(t, testEnvelopeCacheRSSCharge(t, 1), manager.ReservedBytes())
 
 	cancel()
 
@@ -333,7 +382,7 @@ func TestEnvelopeCacheCancellationDuringBuildReleasesReservation(t *testing.T) {
 }
 
 func TestEnvelopeCacheCancellationAfterBuildWakesWaiterWithoutPublishing(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*8)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 4), testEnvelopeCacheRSSCharge(t, 8))
 	beforePublish := make(chan struct{})
 	waiterJoined := make(chan struct{})
 	var beforePublishOnce sync.Once
@@ -385,7 +434,7 @@ func TestEnvelopeCacheCancellationAfterBuildWakesWaiterWithoutPublishing(t *test
 }
 
 func TestEnvelopeCacheCloseCancelsAndJoinsPublishedAndBuildingState(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*8)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 4), testEnvelopeCacheTotalRSSCharge(t, 4, 4))
 	_, err := manager.GetOrBuild(context.Background(), "published", 1, fixedEnvelopeBuild(1))
 	require.NoError(t, err)
 
@@ -468,7 +517,7 @@ func TestEnvelopeCacheCloseCancelsAndJoinsPublishedAndBuildingState(t *testing.T
 }
 
 func TestEnvelopeCacheObjectCountMismatchIsFormatError(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
 
 	cache, err := manager.GetOrBuild(context.Background(), "points", 2, fixedEnvelopeBuild(1))
 
@@ -505,6 +554,24 @@ func newTestEnvelopeCacheManager(t *testing.T, datasetBytes, totalBytes int64) *
 	return manager
 }
 
+func testEnvelopeCacheRSSCharge(t *testing.T, capacity int) int64 {
+	t.Helper()
+	charge, err := envelopeCacheRSSChargeForCapacity(capacity)
+	require.NoError(t, err)
+	return charge
+}
+
+func testEnvelopeCacheTotalRSSCharge(t *testing.T, capacities ...int) int64 {
+	t.Helper()
+	var total int64
+	for _, capacity := range capacities {
+		charge := testEnvelopeCacheRSSCharge(t, capacity)
+		require.LessOrEqual(t, charge, math.MaxInt64-total)
+		total += charge
+	}
+	return total
+}
+
 func fixedEnvelopeBuild(ids ...int64) envelopeCacheBuildFunc {
 	return func(_ context.Context, buffer *envelopeCacheBuildBuffer) error {
 		for _, id := range ids {
@@ -526,7 +593,7 @@ func TestEnvelopeCacheCandidateIDsRejectsInvalidLimitAndID(t *testing.T) {
 }
 
 func TestEnvelopeCacheConcurrentWaiterCanCancelWithoutCancelingBuilder(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
 	started := make(chan struct{})
 	release := make(chan struct{})
 	build := func(ctx context.Context, buffer *envelopeCacheBuildBuffer) error {
@@ -556,7 +623,7 @@ func TestEnvelopeCacheConcurrentWaiterCanCancelWithoutCancelingBuilder(t *testin
 }
 
 func TestEnvelopeCacheConcurrentWaitersReceiveSameBuildError(t *testing.T) {
-	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
 	started := make(chan struct{})
 	release := make(chan struct{})
 	waiterJoined := make(chan struct{})

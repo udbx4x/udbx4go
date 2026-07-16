@@ -332,7 +332,7 @@ function buildReport(records) {
 - 夹具表为 \`poc_points\`，不创建 \`idx_poc_points_SmGeometry\` 或任何 RTree。每条 \`SmGeometry\` 使用真实 GAIA Point 编码。
 - 每个 benchmark 进程只测量一个规模。\`build cold\` 前执行 GC/释放空闲页并采集三次当前 RSS 中位数；构建后保持 cache 存活，再以相同方式采集稳定态 RSS。
 - \`stableRssDeltaMiB\` 是构建后稳定态 RSS 减构建前基线，不是进程绝对 RSS；负抖动按 0 计。\`externalMaxRssMiB\` 是 macOS \`/usr/bin/time -l\` 记录的该隔离进程绝对峰值，单独报告且不作为增量。
-- 缓存容量按 \`cap(slice) * unsafe.Sizeof(pocEnvelopeEntry{})\` 计算。对象数只用于预估容量，不作为准入阈值。
+- 缓存容量按 \`cap(slice) * unsafe.Sizeof(pocEnvelopeEntry{})\` 单独报告。正式预算按经验稳定 RSS charge 计费：每数据集固定约 4 MiB，加每个 capacity entry 约 80 bytes；80 bytes 来自 250k/500k 稳定 RSS P95 斜率拟合。对象数只用于预估 capacity，不作为准入阈值。
 - \`filter\` 复用完整连续缓存，固定视口命中正好 1%。\`candidate load\` 按 500 个 ID 一批读取完整 geometry，并通过真实 \`GaiaGeometryCodec\` 解码。
 - \`cancel\` 在扫描达到约 10% 时取消 context，要求返回 \`context.Canceled\`、不发布残缺缓存，并可继续复用同一单连接数据库。
 
@@ -346,7 +346,7 @@ ${decisionRows.join('\n')}
 
 ${conclusion}
 
-候选 geometry 读取保留 500 ID 分批策略。默认资源策略保持单数据集 32 MiB、当前文件全部包络缓存 64 MiB。即使 500,000 档通过，也必须按缓存实际容量经过预算门。
+候选 geometry 读取保留 500 ID 分批策略。默认资源策略保持单数据集 32 MiB、当前文件全部包络缓存 64 MiB，并按经验稳定 RSS charge 计费。500,000 档若只看 19.070 MiB raw capacity 可能通过，但约 42.15 MiB 的 RSS charge 与 42.340 MiB 实测 P95 都不能通过 32 MiB 门；拒绝来自资源公式，不是硬编码对象数。
 
 ## 4. 机器判定 JSON
 

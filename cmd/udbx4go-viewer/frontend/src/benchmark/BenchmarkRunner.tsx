@@ -116,6 +116,8 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
       reject: (error: Error) => void
       timeoutID: number
       viewportObserved: boolean
+      requiredLayerNames: string[]
+      requestedBounds: BoundingBox | null
     } | null = null
 
     const publishLayer = (layer: MapLayerState) => {
@@ -130,16 +132,22 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
       if (!measurement) {
         return
       }
-      const queriedLayers = [...layerStates.values()].filter((layer) =>
-        layer.visible && layer.summary?.viewportQuerySupported,
-      )
-      if (queriedLayers.length === 0 || queriedLayers.some((layer) => layer.queryStatus === 'loading' || layer.queryStatus === 'idle')) {
+      const queriedLayers = measurement.requiredLayerNames
+        .map((datasetName) => layerStates.get(datasetName))
+        .filter((layer): layer is MapLayerState => Boolean(layer))
+      if (!measurement.requestedBounds || queriedLayers.length !== measurement.requiredLayerNames.length) {
         return
       }
       if (queriedLayers.some((layer) => layer.queryStatus === 'error')) {
         measurement.reject(new Error(queriedLayers.find((layer) => layer.queryStatus === 'error')?.queryError || 'viewport query failed'))
         window.clearTimeout(measurement.timeoutID)
         stepMeasurement = null
+        return
+      }
+      if (queriedLayers.some((layer) =>
+        (layer.queryStatus !== 'ready' && layer.queryStatus !== 'degraded') ||
+        !boundsEqual(layer.lastQueriedBounds, measurement.requestedBounds!),
+      )) {
         return
       }
       await adapter.waitForRenderComplete()
@@ -208,7 +216,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         stepMeasurement.startedAt = performance.now()
         stepMeasurement.viewportObserved = true
       }
-      coordinator.scheduleViewport(
+      const requestedBounds = coordinator.scheduleViewport(
         viewport,
         [...layerStates.values()].map((layer) => ({
           datasetName: layer.datasetName,
@@ -219,6 +227,9 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         })),
         fileGeneration,
       )
+      if (stepMeasurement) {
+        stepMeasurement.requestedBounds = requestedBounds
+      }
     }
     const unsubscribeViewport = adapter.onViewportChange(handleViewport)
     let currentRequiredIDs: number[] = []
@@ -275,6 +286,9 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         if (!fitLayer) {
           return Promise.reject(new Error('viewport step has no queryable visible layer'))
         }
+        const requiredLayerNames = [...layerStates.values()]
+          .filter((layer) => layer.visible && layer.summary?.viewportQuerySupported)
+          .map((layer) => layer.datasetName)
         return new Promise<BenchmarkViewportResult>((resolve, reject) => {
           const timeoutID = window.setTimeout(() => {
             const statuses = [...layerStates.values()]
@@ -292,6 +306,8 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
             reject,
             timeoutID,
             viewportObserved: false,
+            requiredLayerNames,
+            requestedBounds: null,
           }
           adapter.fitBounds(step.bounds, step.geometryKind ?? geometryKind(fitLayer.kind))
           if (!stepMeasurement.viewportObserved) {
@@ -369,4 +385,14 @@ function geometryKind(kind: string): 'point' | 'line' | 'polygon' {
     return 'polygon'
   }
   return 'point'
+}
+
+function boundsEqual(actual: BoundingBox | undefined, expected: BoundingBox): boolean {
+  return Boolean(
+    actual &&
+      actual.minX === expected.minX &&
+      actual.minY === expected.minY &&
+      actual.maxX === expected.maxX &&
+      actual.maxY === expected.maxY,
+  )
 }

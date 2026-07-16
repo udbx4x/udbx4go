@@ -94,7 +94,7 @@ result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
 
 MBR intersection uses closed intervals. `HasMore` applies only to ordinary viewport matches; required IDs are deduplicated, do not consume `Limit`, and can keep an offscreen selection in the result. The returned strategy is `rtree`, `envelope_cache`, or `bounded_sample`. Envelope caches live only for the open `DataSource` and are released by `Close`.
 
-The current defaults of 32 MiB per dataset and 64 MiB per `DataSource` are measured cache resource policies, not UDBX format limits. Viewport queries currently cover Point, Line, Region, PointZ, LineZ, and RegionZ. Text and CAD retain bounded preview/list behavior. See [API.md](./API.md#viewport-spatial-queries) for the runnable program, all six reason codes, and `ListContext` cancellation semantics.
+The current defaults of 32 MiB per dataset and 64 MiB per `DataSource` are measured cache resource policies. They charge a stable-RSS model of roughly 4 MiB fixed per dataset plus 80 bytes per capacity entry, not an object-count or UDBX format limit. Viewport queries currently cover Point, Line, Region, PointZ, LineZ, and RegionZ. Text and CAD retain bounded preview/list behavior. See [API.md](./API.md#viewport-spatial-queries) for the runnable program, all six reason codes, and `ListContext` cancellation semantics.
 
 ## GUI Viewer
 

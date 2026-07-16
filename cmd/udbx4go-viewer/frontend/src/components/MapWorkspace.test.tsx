@@ -535,6 +535,40 @@ describe('MapWorkspace settings behavior', () => {
     expect(latestAdapter().fitAllVisibleLayers).not.toHaveBeenCalled()
   })
 
+  it('AutoFit 开启但声明范围缺失时用 adapter 当前有限视口立即首查', () => {
+    const currentViewport = { minX: 100, minY: 200, maxX: 300, maxY: 400 }
+    adapterState.viewport = currentViewport
+    const onViewportChange = vi.fn()
+    const pendingLayer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      preview: null,
+      summary: {
+        datasetName: 'BaseMap_P',
+        kind: 'point',
+        objectCount: 10,
+        estimatedVertexCount: 10,
+        previewSupported: true,
+        viewportQuerySupported: true,
+        rtreeAvailable: true,
+      },
+    }
+
+    render(
+      <MapWorkspace
+        layers={[pendingLayer]}
+        selectedFeature={null}
+        autoFitOnLayerChange={true}
+        zoomToSelectedFeature={true}
+        onViewportChange={onViewportChange}
+        onFeatureSelect={vi.fn()}
+      />,
+    )
+
+    expect(latestAdapter().fitBounds).not.toHaveBeenCalled()
+    expect(onViewportChange).toHaveBeenCalledOnce()
+    expect(onViewportChange).toHaveBeenCalledWith(currentViewport)
+  })
+
   it('可查询图层状态和结果更新后不重复自动 fit', () => {
     const summary = {
       datasetName: 'BaseMap_P',

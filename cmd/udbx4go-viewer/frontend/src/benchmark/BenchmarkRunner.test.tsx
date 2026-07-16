@@ -219,6 +219,72 @@ describe('BenchmarkRunner', () => {
     expect(adapter.waitForRenderComplete).toHaveBeenCalledTimes(1)
   })
 
+  it('并发为 1 时等待所有可查询空间层完成本轮请求范围', async () => {
+    const adapter = createAdapter()
+    const first = createDeferred<main.SpatialPreviewDTO>()
+    const second = createDeferred<main.SpatialPreviewDTO>()
+    vi.mocked(LoadSpatialPreview).mockClear()
+    vi.mocked(LoadSpatialPreview).mockImplementation((datasetName) => {
+      if (datasetName === 'BaseMap_P') {
+        return first.promise
+      }
+      if (datasetName === 'BaseMap_L') {
+        return second.promise
+      }
+      throw new Error(`unexpected dataset ${datasetName}`)
+    })
+    let viewportResolved = false
+    const oldBounds = { minX: -1, minY: -1, maxX: 1, maxY: 1 }
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      for (const [datasetName, kind] of [['BaseMap_P', 'point'], ['BaseMap_L', 'line']] as const) {
+        dependencies.setLayer({
+          datasetName, kind, visible: true, style: {} as never,
+          loading: false, error: null,
+          summary: { datasetName, kind, objectCount: 1, estimatedVertexCount: 1, previewSupported: true, viewportQuerySupported: true, rtreeAvailable: true },
+          preview: {
+            datasetName, kind, features: [], estimatedVertexCount: 0, sampled: false,
+            queriedBounds: oldBounds, strategy: 'rtree', hasMore: false, queryDurationMs: 1, fileGeneration: 1,
+          },
+          queryStatus: 'ready', queryError: null, lastQueriedBounds: oldBounds,
+        })
+      }
+      await dependencies.runViewportStep(config.scenario.viewportSteps[0], [])
+      viewportResolved = true
+      return passedResult
+    })
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={() => adapter}
+        runScenario={runScenario}
+        saveResult={saveResult}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledTimes(1))
+    const firstRequest = vi.mocked(LoadSpatialPreview).mock.calls[0][1]
+    first.resolve(new main.SpatialPreviewDTO({
+      datasetName: 'BaseMap_P', kind: 'point', features: [], estimatedVertexCount: 0, sampled: false,
+      queriedBounds: firstRequest.viewport, strategy: 'rtree', hasMore: false, queryDurationMs: 5, fileGeneration: 1,
+    }))
+    await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledTimes(2))
+    expect(viewportResolved).toBe(false)
+    expect(saveResult).not.toHaveBeenCalled()
+
+    const secondRequest = vi.mocked(LoadSpatialPreview).mock.calls[1][1]
+    second.resolve(new main.SpatialPreviewDTO({
+      datasetName: 'BaseMap_L', kind: 'line', features: [], estimatedVertexCount: 0, sampled: false,
+      queriedBounds: secondRequest.viewport, strategy: 'rtree', hasMore: false, queryDurationMs: 6, fileGeneration: 1,
+    }))
+
+    await waitFor(() => expect(saveResult).toHaveBeenCalledWith(passedResult))
+    expect(viewportResolved).toBe(true)
+  })
+
   it('视口步骤超时报告 moveend 和图层查询阶段', async () => {
     const adapter = createAdapter()
     vi.mocked(LoadSpatialPreview).mockImplementationOnce(() => new Promise<main.SpatialPreviewDTO>(() => undefined))
@@ -252,6 +318,40 @@ describe('BenchmarkRunner', () => {
     })), { timeout: 1000 })
   })
 
+  it('视口查询错误立即结束步骤而不是等待超时', async () => {
+    const adapter = createAdapter()
+    vi.mocked(LoadSpatialPreview).mockClear()
+    vi.mocked(LoadSpatialPreview).mockRejectedValueOnce(new Error('query failed'))
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      dependencies.setLayer({
+        datasetName: 'BaseMap_P', kind: 'point', visible: true, style: {} as never,
+        loading: false, error: null,
+        summary: { datasetName: 'BaseMap_P', kind: 'point', objectCount: 1, estimatedVertexCount: 1, previewSupported: true, viewportQuerySupported: true, rtreeAvailable: true },
+        preview: null, queryStatus: 'idle', queryError: null,
+      })
+      await dependencies.runViewportStep(config.scenario.viewportSteps[0], [])
+      return passedResult
+    })
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={() => adapter}
+        runScenario={runScenario}
+        saveResult={saveResult}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+        viewportStepTimeoutMs={400}
+      />,
+    )
+
+    await waitFor(() => expect(saveResult).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      error: 'query failed',
+    })), { timeout: 1000 })
+  })
+
   it('fit 未触发 moveend 时使用 adapter 当前视口启动查询', async () => {
     const adapter = createAdapter()
     adapter.fitBounds.mockImplementation(() => undefined)
@@ -277,3 +377,13 @@ describe('BenchmarkRunner', () => {
     expect(viewportResult).toMatchObject({ strategies: ['rtree'], finalFeatureCount: 1 })
   })
 })
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}

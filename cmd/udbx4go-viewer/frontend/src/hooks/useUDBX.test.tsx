@@ -479,6 +479,56 @@ describe('useUDBX viewport spatial previews', () => {
     expect(layer?.preview ?? null).toBeNull()
   })
 
+  it('跨图层选择时 A 的迟到表页不能覆盖已完成的 B', async () => {
+    const firstPage = createDeferred<{ columns: string[]; rows: string[][]; currentPage: number; totalPages: number }>()
+    const secondPage = {
+      columns: ['SmID', 'name'],
+      rows: [['2', 'B']],
+      currentPage: 1,
+      totalPages: 1,
+    }
+    mocks.GetFeatureAttributes.mockImplementation((datasetName: string, featureID: number) => Promise.resolve({
+      datasetName,
+      id: featureID,
+      geometryType: 'Point',
+      bbox: { minX: featureID, minY: featureID, maxX: featureID, maxY: featureID },
+      properties: {},
+    }))
+    mocks.LoadDatasetPage
+      .mockImplementationOnce(() => firstPage.promise)
+      .mockResolvedValueOnce(secondPage)
+    const { result } = renderViewerHook()
+
+    let firstSelection!: Promise<void>
+    act(() => {
+      firstSelection = result.current.selectFeature('LayerA', 1)
+    })
+    await act(flushPromises)
+    expect(mocks.LoadDatasetPage).toHaveBeenCalledWith('LayerA', 1)
+
+    await act(async () => {
+      await result.current.selectFeature('LayerB', 2)
+    })
+    expect(result.current.activeTableDataset).toBe('LayerB')
+    expect(result.current.pageData).toEqual(secondPage)
+
+    firstPage.resolve({
+      columns: ['SmID', 'name'],
+      rows: [['1', 'A']],
+      currentPage: 1,
+      totalPages: 1,
+    })
+    await act(async () => firstSelection)
+
+    expect(result.current.selectedMapFeature).toEqual({ datasetName: 'LayerB', featureID: 2 })
+    expect(result.current.selectedFeatureAttributes?.datasetName).toBe('LayerB')
+    expect(result.current.selectedDataset).toBe('LayerB')
+    expect(result.current.activeTableDataset).toBe('LayerB')
+    expect(result.current.pageData).toEqual(secondPage)
+    expect(result.current.loading).toBe(false)
+    expect(result.current.error).toBeNull()
+  })
+
   it('属性表加载失败时设置错误状态并保留当前表格状态', async () => {
     mocks.LoadDatasetPage.mockRejectedValue(new Error("dataset kind 'unknown' is not supported"))
     const { result } = renderViewerHook()

@@ -121,11 +121,12 @@ type SpatialQueryResult struct {
 // SpatialQueryPolicy limits spatial-query fallback resource usage. Its zero
 // value is invalid; use DefaultSpatialQueryPolicy for standard limits.
 type SpatialQueryPolicy struct {
-	// MaxDatasetCacheBytes is the estimated resident cache budget for one
-	// dataset within a DataSource, not a hard threshold on object counts.
+	// MaxDatasetCacheBytes is the empirical stable-RSS charge budget for one
+	// dataset within a DataSource, not a hard threshold on object counts or
+	// the unsafe.Sizeof footprint of the cache slice.
 	MaxDatasetCacheBytes int64
-	// MaxTotalCacheBytes is the estimated resident budget for all envelope
-	// caches within the same DataSource, not a hard threshold on object counts.
+	// MaxTotalCacheBytes is the empirical stable-RSS charge budget for all
+	// envelope caches within the same DataSource, not a hard object-count limit.
 	MaxTotalCacheBytes int64
 	// BuildTimeout is the additional limit for the first envelope-cache build.
 	// The earlier deadline between this limit and the call context applies.

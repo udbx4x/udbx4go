@@ -64,7 +64,7 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     adapter.mount(containerRef.current)
     if (!autoFitOnLayerChange) {
       const currentViewport = adapter.getViewport()
-      if (currentViewport) {
+      if (currentViewport && isValidBounds(currentViewport)) {
         currentViewportRef.current = currentViewport
         viewportChangeHandlerRef.current(currentViewport)
       }
@@ -153,22 +153,21 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       !viewportBootstrapLayersRef.current.has(layer.datasetName),
     )
     newViewportLayers.forEach((layer) => viewportBootstrapLayersRef.current.add(layer.datasetName))
-    if (!autoFitOnLayerChange && newViewportLayers.length > 0 && !currentViewportRef.current) {
-      const currentViewport = adapter.getViewport()
-      if (currentViewport) {
-        currentViewportRef.current = currentViewport
-        viewportChangeHandlerRef.current(currentViewport)
-      }
-    }
     const layerToFit = layers.find((layer) =>
       layer.visible &&
       layer.summary?.viewportQuerySupported &&
-      layer.summary.extent &&
+      isValidBounds(layer.summary.extent) &&
       !fittedSummaryLayersRef.current.has(layer.datasetName),
     )
-    if (autoFitOnLayerChange && layerToFit?.summary?.extent) {
+    if (autoFitOnLayerChange && layerToFit && isValidBounds(layerToFit.summary?.extent)) {
       fittedSummaryLayersRef.current.add(layerToFit.datasetName)
       adapter.fitBounds(layerToFit.summary.extent, geometryKindFromDatasetKind(layerToFit.kind))
+    } else if (newViewportLayers.length > 0 && !currentViewportRef.current) {
+      const currentViewport = adapter.getViewport()
+      if (currentViewport && isValidBounds(currentViewport)) {
+        currentViewportRef.current = currentViewport
+        viewportChangeHandlerRef.current(currentViewport)
+      }
     } else if (
       autoFitOnLayerChange &&
       layers.some((layer) =>

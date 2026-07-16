@@ -93,7 +93,7 @@ result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
 
 MBR 相交采用闭区间。`HasMore` 只描述普通视口命中对象；必含 ID 会去重，不占用 `Limit`，并可让视口外的当前选中对象保留在结果中。返回策略为 `rtree`、`envelope_cache` 或 `bounded_sample`。包络缓存只在当前 `DataSource` 生命周期存在，调用 `Close` 时释放。
 
-当前单数据集 32 MiB、单个 `DataSource` 合计 64 MiB 是经过测量的缓存资源默认策略，不是 UDBX 格式限制。视口查询当前覆盖 Point、Line、Region、PointZ、LineZ 和 RegionZ；Text 与 CAD 保持有上界的预览/列表行为。可运行完整程序、六个原因码和 `ListContext` 取消语义见 [API.zh.md](./API.zh.md#视口空间查询)。
+当前单数据集 32 MiB、单个 `DataSource` 合计 64 MiB 是经过测量的缓存资源默认策略，按“每数据集约 4 MiB 固定 charge + 每 capacity entry 约 80 bytes”的稳定 RSS 模型计费，不是对象数或 UDBX 格式限制。视口查询当前覆盖 Point、Line、Region、PointZ、LineZ 和 RegionZ；Text 与 CAD 保持有上界的预览/列表行为。可运行完整程序、六个原因码和 `ListContext` 取消语义见 [API.zh.md](./API.zh.md#视口空间查询)。
 
 ### 创建新的 UDBX 文件
 

@@ -326,7 +326,7 @@ func main() {
 | `corrupt_geometry` | A GAIA header or full geometry is malformed. |
 | `unsupported_dataset_kind` | The dataset kind is outside the viewport-query scope. |
 
-The envelope cache belongs to one open `DataSource`. It is never written to the UDBX file or shared across processes, and `Close` releases it. The current default policy allows 32 MiB for one dataset and 64 MiB across one `DataSource`, with a 500 ms build timeout. These values are measured SDK resource defaults and may evolve; they are not UDBX format limits. Text, CAD, and Tabular datasets do not support `QuerySpatial` in this release. Text and CAD remain available through their bounded `List`/`ListContext` preview paths.
+The envelope cache belongs to one open `DataSource`. It is never written to the UDBX file or shared across processes, and `Close` releases it. The current default policy allows 32 MiB for one dataset and 64 MiB across one `DataSource`, with a 500 ms build timeout. Budgets charge an empirical stable-RSS model fitted from the PoC: roughly 4 MiB fixed per dataset plus 80 bytes per cache-capacity entry. This is neither the slice's `unsafe.Sizeof` footprint nor a hard object-count threshold. These values are measured SDK resource defaults and may evolve; they are not UDBX format limits. Text, CAD, and Tabular datasets do not support `QuerySpatial` in this release. Text and CAD remain available through their bounded `List`/`ListContext` preview paths.
 
 ## Dataset Types
 

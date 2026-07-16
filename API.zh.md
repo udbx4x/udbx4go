@@ -326,7 +326,7 @@ func main() {
 | `corrupt_geometry` | GAIA 头部或完整几何损坏。 |
 | `unsupported_dataset_kind` | 数据集类型不在视口查询范围内。 |
 
-包络缓存只属于当前打开的一个 `DataSource`，不会写入 UDBX 文件，也不会跨进程共享；`Close` 会释放缓存。当前默认策略为单数据集 32 MiB、单个 `DataSource` 合计 64 MiB，构建超时 500 ms。这些数值是基于测量的 SDK 当前资源默认值，可以随实测调整，不是 UDBX 格式限制。本版本的 Text、CAD 和 Tabular 数据集不支持 `QuerySpatial`；Text 和 CAD 继续通过有上界的 `List`/`ListContext` 预览路径读取。
+包络缓存只属于当前打开的一个 `DataSource`，不会写入 UDBX 文件，也不会跨进程共享；`Close` 会释放缓存。当前默认策略为单数据集 32 MiB、单个 `DataSource` 合计 64 MiB，构建超时 500 ms。预算按 PoC 拟合的稳定 RSS charge 计费：每个数据集固定约 4 MiB，再按 cache capacity 的每个 entry 约 80 bytes 计费；它不是 `unsafe.Sizeof` slice 大小，也不是对象数硬阈值。这些数值是基于测量的 SDK 当前资源默认值，可以随实测调整，不是 UDBX 格式限制。本版本的 Text、CAD 和 Tabular 数据集不支持 `QuerySpatial`；Text 和 CAD 继续通过有上界的 `List`/`ListContext` 预览路径读取。
 
 ## 数据集类型
 

@@ -91,7 +91,7 @@ export class ViewportQueryCoordinator {
     viewport: BoundingBox,
     layers: ViewportQueryLayer[],
     fileGeneration: number,
-  ): void {
+  ): BoundingBox {
     const bounds = bufferBounds(viewport, this.bufferRatio)
     const scheduledLayers = layers
       .filter((layer) => layer.visible)
@@ -113,6 +113,7 @@ export class ViewportQueryCoordinator {
       this.debounceTimer = null
       this.publishDebouncedViewport()
     }, this.debounceMs)
+    return bounds
   }
 
   invalidateLayer(datasetName: string): void {
