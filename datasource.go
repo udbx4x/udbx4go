@@ -1,6 +1,7 @@
 package udbx4go
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -93,6 +94,28 @@ func (ds *DataSource) ListDatasets() ([]*types.DatasetInfo, error) {
 	}
 
 	return infos, nil
+}
+
+// GetSpatialQueryCapability reports the available spatial-query path for a dataset.
+func (ds *DataSource) GetSpatialQueryCapability(ctx context.Context, datasetName string) (*types.SpatialQueryCapability, error) {
+	record, err := ds.registerDao.GetByName(datasetName)
+	if err != nil {
+		return nil, err
+	}
+	return dataset.NewSpatialQuerier(ds.db, record.ToDatasetInfo(), record).Capability(ctx)
+}
+
+// QuerySpatial queries features intersecting a viewport through the dataset RTree.
+func (ds *DataSource) QuerySpatial(
+	ctx context.Context,
+	datasetName string,
+	options types.SpatialQueryOptions,
+) (*types.SpatialQueryResult, error) {
+	record, err := ds.registerDao.GetByName(datasetName)
+	if err != nil {
+		return nil, err
+	}
+	return dataset.NewSpatialQuerier(ds.db, record.ToDatasetInfo(), record).Query(ctx, options)
 }
 
 // GetDataset returns a dataset by name (generic interface).
