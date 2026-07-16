@@ -321,6 +321,27 @@ func TestDataSourceCloseClearsEnvelopeCacheManager(t *testing.T) {
 	assert.Zero(t, ds.envelopeCacheManager.EntryCount())
 }
 
+func TestDataSourceQuerySpatialMapsClosedEnvelopeCacheToLifecycleError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "spatial-cache-closed.udbx")
+	ds, err := Create(path)
+	require.NoError(t, err)
+	defer ds.db.Close()
+
+	_, err = ds.CreatePointDataset("cities", 4326, nil)
+	require.NoError(t, err)
+	ds.envelopeCacheManager.Close()
+
+	_, err = ds.QuerySpatial(context.Background(), "cities", types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{},
+		Limit:  10,
+	})
+	require.Error(t, err)
+	assert.True(t, IsIOError(err))
+	assert.True(t, IsUdbxError(err))
+	_, hasReason := SpatialQueryReasonOf(err)
+	assert.False(t, hasReason)
+}
+
 func assertPublicSpatialTimeout(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)

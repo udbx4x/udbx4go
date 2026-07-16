@@ -9,6 +9,7 @@ import (
 	"sync"
 	"unsafe"
 
+	udbxerrors "github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
@@ -85,7 +86,8 @@ func (b *envelopeCacheBuildBuffer) Append(entry envelopeEntry) error {
 	}
 	requiredCapacity := len(b.entries) + 1
 	if requiredCapacity > cap(b.entries) {
-		newCapacity, err := b.manager.reserveGrowthCapacity(b.pending, cap(b.entries), requiredCapacity)
+		oldCapacity := cap(b.entries)
+		newCapacity, err := b.manager.reserveGrowthCapacity(b.pending, oldCapacity, requiredCapacity)
 		if err != nil {
 			return err
 		}
@@ -95,6 +97,9 @@ func (b *envelopeCacheBuildBuffer) Append(entry envelopeEntry) error {
 		grown := make([]envelopeEntry, len(b.entries), newCapacity)
 		copy(grown, b.entries)
 		b.entries = grown
+		if err := b.manager.commitGrowthCapacity(b.pending, oldCapacity, newCapacity); err != nil {
+			return err
+		}
 	}
 	b.entries = append(b.entries, entry)
 	return nil
@@ -123,6 +128,7 @@ type EnvelopeCacheManager struct {
 	reservedBytes int64
 	closeCtx      context.Context
 	cancel        context.CancelFunc
+	closeDone     chan struct{}
 	closed        bool
 	testHooks     *envelopeCacheManagerTestHooks
 }
@@ -133,11 +139,12 @@ func NewEnvelopeCacheManager(policy types.SpatialQueryPolicy) (*EnvelopeCacheMan
 	}
 	closeCtx, cancel := context.WithCancel(context.Background())
 	return &EnvelopeCacheManager{
-		policy:   policy,
-		caches:   make(map[string]*envelopeCache),
-		builds:   make(map[string]*envelopeCacheBuild),
-		closeCtx: closeCtx,
-		cancel:   cancel,
+		policy:    policy,
+		caches:    make(map[string]*envelopeCache),
+		builds:    make(map[string]*envelopeCacheBuild),
+		closeCtx:  closeCtx,
+		cancel:    cancel,
+		closeDone: make(chan struct{}),
 	}, nil
 }
 
@@ -216,7 +223,10 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 	}
 
 	if buildErr == nil && len(buffer.entries) != objectCount {
-		buildErr = fmt.Errorf("envelope cache row count mismatch: got %d, want %d", len(buffer.entries), objectCount)
+		buildErr = udbxerrors.FormatError(
+			"envelope cache row count does not match dataset metadata",
+			fmt.Errorf("got %d rows, metadata declares %d", len(buffer.entries), objectCount),
+		)
 	}
 	if buildErr == nil {
 		if buildErr = buildCtx.Err(); buildErr == nil {
@@ -242,14 +252,11 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 	pending.active = false
 	delete(m.builds, key)
 	m.reservedBytes -= pending.reservedBytes
-	if m.reservedBytes < 0 {
-		m.reservedBytes = 0
-	}
-	if buildErr == nil {
-		buildErr = buildCtx.Err()
-	}
-	if buildErr == nil && m.closed {
+	pending.reservedBytes = 0
+	if m.closed {
 		buildErr = errEnvelopeCacheClosed
+	} else if buildErr == nil {
+		buildErr = buildCtx.Err()
 	}
 	if buildErr == nil && exceedsEnvelopeBudget(m.totalBytes, m.reservedBytes, actualBytes, m.policy.MaxTotalCacheBytes) {
 		buildErr = errEnvelopeCacheBudgetExceeded
@@ -262,6 +269,7 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 		m.caches[key] = pending.cache
 		m.totalBytes += actualBytes
 	}
+	buffer.entries = nil
 	pending.err = buildErr
 	close(pending.done)
 	m.mu.Unlock()
@@ -296,20 +304,26 @@ func (m *EnvelopeCacheManager) reserveGrowthCapacity(
 		desiredCapacity = maximumCapacity
 	}
 
-	if err := m.reserveBuildCapacity(pending, desiredCapacity); err == nil {
+	if err := m.reserveBuildGrowth(pending, currentCapacity, desiredCapacity); err == nil {
 		return desiredCapacity, nil
 	} else if !stderrors.Is(err, errEnvelopeCacheBudgetExceeded) || desiredCapacity == requiredCapacity {
 		return 0, err
 	}
-	if err := m.reserveBuildCapacity(pending, requiredCapacity); err != nil {
+	if err := m.reserveBuildGrowth(pending, currentCapacity, requiredCapacity); err != nil {
 		return 0, err
 	}
 	return requiredCapacity, nil
 }
 
-func (m *EnvelopeCacheManager) reserveBuildCapacity(pending *envelopeCacheBuild, capacity int) error {
-	desiredBytes, err := envelopeCacheBytesForCapacity(capacity)
-	if err != nil || desiredBytes > m.policy.MaxDatasetCacheBytes {
+func (m *EnvelopeCacheManager) reserveBuildGrowth(
+	pending *envelopeCacheBuild,
+	currentCapacity int,
+	desiredCapacity int,
+) error {
+	currentBytes, currentErr := envelopeCacheBytesForCapacity(currentCapacity)
+	desiredBytes, desiredErr := envelopeCacheBytesForCapacity(desiredCapacity)
+	peakBytes, peakErr := addEnvelopeCacheBytes(currentBytes, desiredBytes)
+	if currentErr != nil || desiredErr != nil || peakErr != nil || peakBytes > m.policy.MaxDatasetCacheBytes {
 		return errEnvelopeCacheBudgetExceeded
 	}
 
@@ -321,15 +335,40 @@ func (m *EnvelopeCacheManager) reserveBuildCapacity(pending *envelopeCacheBuild,
 	if pending == nil || !pending.active {
 		return fmt.Errorf("envelope cache build is no longer active")
 	}
-	if desiredBytes <= pending.reservedBytes {
-		return nil
+	if pending.reservedBytes != currentBytes {
+		return fmt.Errorf("envelope cache build reservation does not match current capacity")
 	}
-	additionalBytes := desiredBytes - pending.reservedBytes
+	additionalBytes := peakBytes - pending.reservedBytes
 	if exceedsEnvelopeBudget(m.totalBytes, m.reservedBytes, additionalBytes, m.policy.MaxTotalCacheBytes) {
 		return errEnvelopeCacheBudgetExceeded
 	}
 	m.reservedBytes += additionalBytes
-	pending.reservedBytes = desiredBytes
+	pending.reservedBytes = peakBytes
+	return nil
+}
+
+func (m *EnvelopeCacheManager) commitGrowthCapacity(
+	pending *envelopeCacheBuild,
+	previousCapacity int,
+	currentCapacity int,
+) error {
+	previousBytes, previousErr := envelopeCacheBytesForCapacity(previousCapacity)
+	currentBytes, currentErr := envelopeCacheBytesForCapacity(currentCapacity)
+	peakBytes, peakErr := addEnvelopeCacheBytes(previousBytes, currentBytes)
+	if previousErr != nil || currentErr != nil || peakErr != nil {
+		return errEnvelopeCacheBudgetExceeded
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if pending == nil || !pending.active || pending.reservedBytes != peakBytes {
+		return fmt.Errorf("envelope cache growth reservation is no longer active")
+	}
+	m.reservedBytes -= previousBytes
+	pending.reservedBytes = currentBytes
+	if m.closed {
+		return errEnvelopeCacheClosed
+	}
 	return nil
 }
 
@@ -366,14 +405,29 @@ func (m *EnvelopeCacheManager) Close() {
 	}
 	m.mu.Lock()
 	if m.closed {
+		closeDone := m.closeDone
 		m.mu.Unlock()
+		<-closeDone
 		return
 	}
 	m.closed = true
+	buildsDone := make([]<-chan struct{}, 0, len(m.builds))
+	for _, pending := range m.builds {
+		buildsDone = append(buildsDone, pending.done)
+	}
+	m.mu.Unlock()
+
+	m.cancel()
+	for _, done := range buildsDone {
+		<-done
+	}
+
+	m.mu.Lock()
 	m.caches = make(map[string]*envelopeCache)
+	m.builds = make(map[string]*envelopeCacheBuild)
 	m.totalBytes = 0
 	m.reservedBytes = 0
-	m.cancel()
+	close(m.closeDone)
 	m.mu.Unlock()
 }
 
@@ -393,6 +447,13 @@ func envelopeCacheBytesForCapacity(capacity int) (int64, error) {
 		return 0, errEnvelopeCacheBudgetExceeded
 	}
 	return int64(capacity) * envelopeEntryBytes, nil
+}
+
+func addEnvelopeCacheBytes(left, right int64) (int64, error) {
+	if left < 0 || right < 0 || left > math.MaxInt64-right {
+		return 0, errEnvelopeCacheBudgetExceeded
+	}
+	return left + right, nil
 }
 
 func maxEnvelopeCacheCapacity(maximumBytes int64) int {

@@ -309,6 +309,9 @@ func mapSpatialQueryExecutionError(ctx context.Context, err error) error {
 	if stderrors.Is(err, context.Canceled) || stderrors.Is(err, context.DeadlineExceeded) {
 		return spatialQueryFailure(types.SpatialQueryReasonQueryTimeout, err)
 	}
+	if stderrors.Is(err, errEnvelopeCacheClosed) {
+		return udbxerrors.IOError("spatial query cache manager is closed", err)
+	}
 	var geometryErr *spatialGeometryError
 	if stderrors.As(err, &geometryErr) {
 		return spatialQueryFailure(types.SpatialQueryReasonCorruptGeometry, err)

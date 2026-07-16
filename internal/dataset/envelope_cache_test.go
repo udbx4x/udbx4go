@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	udbxerrors "github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
@@ -18,6 +19,13 @@ func TestEnvelopeCacheConcurrentBuildPublishesOnce(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, 1024, 2048)
 	start := make(chan struct{})
 	release := make(chan struct{})
+	waiterJoined := make(chan struct{})
+	var waiterOnce sync.Once
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		waiterJoined: func() {
+			waiterOnce.Do(func() { close(waiterJoined) })
+		},
+	}
 	var builds atomic.Int32
 	build := func(ctx context.Context, buffer *envelopeCacheBuildBuffer) error {
 		builds.Add(1)
@@ -53,6 +61,7 @@ func TestEnvelopeCacheConcurrentBuildPublishesOnce(t *testing.T) {
 		cache, err := manager.GetOrBuild(context.Background(), "points", 3, build)
 		results <- result{cache: cache, err: err}
 	}()
+	<-waiterJoined
 	close(release)
 
 	first := <-results
@@ -121,6 +130,101 @@ func TestEnvelopeCacheGrowthRespectsTotalBudgetWithoutEviction(t *testing.T) {
 	again, err := manager.GetOrBuild(context.Background(), "first", 1, fixedEnvelopeBuild(99))
 	require.NoError(t, err)
 	assert.Same(t, first, again)
+}
+
+func TestEnvelopeCacheGrowthRejectsDatasetBackingPeakBeforeAllocation(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*10)
+	buildCalls := 0
+	capacityAfterRejection := -1
+
+	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(
+		_ context.Context,
+		buffer *envelopeCacheBuildBuffer,
+	) error {
+		buildCalls++
+		require.NoError(t, buffer.Append(envelopeEntry{ID: 1}))
+		appendErr := buffer.Append(envelopeEntry{ID: 2})
+		capacityAfterRejection = cap(buffer.entries)
+		return appendErr
+	})
+
+	assert.Nil(t, cache)
+	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
+	assert.Equal(t, 1, buildCalls)
+	assert.Equal(t, 1, capacityAfterRejection, "growth must be rejected before allocating the new backing array")
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Zero(t, manager.EntryCount())
+}
+
+func TestEnvelopeCacheGrowthRejectsTotalBackingPeakBeforeAllocation(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*3, envelopeEntryBytes*3)
+	blockerCtx, cancelBlocker := context.WithCancel(context.Background())
+	blockerStarted := make(chan struct{})
+	blockerFinished := make(chan error, 1)
+	go func() {
+		_, err := manager.GetOrBuild(blockerCtx, "blocker", 1, func(ctx context.Context, _ *envelopeCacheBuildBuffer) error {
+			close(blockerStarted)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+		blockerFinished <- err
+	}()
+	<-blockerStarted
+
+	buildCalls := 0
+	capacityAfterRejection := -1
+	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(
+		_ context.Context,
+		buffer *envelopeCacheBuildBuffer,
+	) error {
+		buildCalls++
+		require.NoError(t, buffer.Append(envelopeEntry{ID: 1}))
+		appendErr := buffer.Append(envelopeEntry{ID: 2})
+		capacityAfterRejection = cap(buffer.entries)
+		return appendErr
+	})
+
+	assert.Nil(t, cache)
+	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
+	assert.Equal(t, 1, buildCalls)
+	assert.Equal(t, 1, capacityAfterRejection, "growth must be rejected before allocating the new backing array")
+	assert.Zero(t, manager.TotalBytes())
+	assert.Equal(t, envelopeEntryBytes, manager.ReservedBytes())
+	assert.Zero(t, manager.EntryCount())
+
+	cancelBlocker()
+	assert.ErrorIs(t, <-blockerFinished, context.Canceled)
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+}
+
+func TestEnvelopeCacheGrowthReleasesPreviousBackingReservationAfterCopy(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*3, envelopeEntryBytes*3)
+	reservedAfterGrowth := int64(-1)
+
+	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(
+		_ context.Context,
+		buffer *envelopeCacheBuildBuffer,
+	) error {
+		require.NoError(t, buffer.Append(envelopeEntry{ID: 1}))
+		require.NoError(t, buffer.Append(envelopeEntry{ID: 2}))
+		reservedAfterGrowth = manager.ReservedBytes()
+		return udbxerrors.FormatError("stop after observing growth reservation")
+	})
+
+	assert.Nil(t, cache)
+	assert.True(t, udbxerrors.IsFormatError(err))
+	assert.Equal(t, envelopeEntryBytes*2, reservedAfterGrowth)
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+}
+
+func TestEnvelopeCacheBackingPeakByteOverflowIsRejected(t *testing.T) {
+	bytes, err := addEnvelopeCacheBytes(math.MaxInt64, 1)
+
+	assert.Zero(t, bytes)
+	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
 }
 
 func TestEnvelopeCacheFailureNeverPublishesOrLeaksReservation(t *testing.T) {
@@ -280,33 +384,99 @@ func TestEnvelopeCacheCancellationAfterBuildWakesWaiterWithoutPublishing(t *test
 	assert.Zero(t, manager.EntryCount())
 }
 
-func TestEnvelopeCacheCloseClearsPublishedAndBuildingState(t *testing.T) {
+func TestEnvelopeCacheCloseCancelsAndJoinsPublishedAndBuildingState(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*4, envelopeEntryBytes*8)
 	_, err := manager.GetOrBuild(context.Background(), "published", 1, fixedEnvelopeBuild(1))
 	require.NoError(t, err)
 
-	started := make(chan struct{})
-	finished := make(chan error, 1)
+	started := make(chan *envelopeCacheBuildBuffer, 1)
+	buildCanceled := make(chan struct{})
+	releaseBuilder := make(chan struct{})
+	waiterJoined := make(chan struct{})
+	var waiterOnce sync.Once
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		waiterJoined: func() {
+			waiterOnce.Do(func() { close(waiterJoined) })
+		},
+	}
+	type buildResult struct {
+		cache *envelopeCache
+		err   error
+	}
+	results := make(chan buildResult, 2)
+	var builds atomic.Int32
 	go func() {
-		_, buildErr := manager.GetOrBuild(context.Background(), "building", 1, func(ctx context.Context, _ *envelopeCacheBuildBuffer) error {
-			close(started)
+		cache, buildErr := manager.GetOrBuild(context.Background(), "building", 1, func(ctx context.Context, buffer *envelopeCacheBuildBuffer) error {
+			builds.Add(1)
+			started <- buffer
 			<-ctx.Done()
+			close(buildCanceled)
+			<-releaseBuilder
 			return ctx.Err()
 		})
-		finished <- buildErr
+		results <- buildResult{cache: cache, err: buildErr}
 	}()
-	<-started
+	buffer := <-started
 	require.Positive(t, manager.ReservedBytes())
+	go func() {
+		cache, buildErr := manager.GetOrBuild(context.Background(), "building", 1, func(context.Context, *envelopeCacheBuildBuffer) error {
+			builds.Add(1)
+			return nil
+		})
+		results <- buildResult{cache: cache, err: buildErr}
+	}()
+	<-waiterJoined
 
-	manager.Close()
+	closeReturned := make(chan struct{})
+	go func() {
+		manager.Close()
+		close(closeReturned)
+	}()
+	<-buildCanceled
+	select {
+	case <-closeReturned:
+		t.Fatal("Close returned before the active builder exited")
+	default:
+	}
+	select {
+	case result := <-results:
+		t.Fatalf("waiter returned before the active builder exited: %v", result.err)
+	default:
+	}
+	close(releaseBuilder)
 
-	assert.Error(t, <-finished)
+	first := <-results
+	second := <-results
+	<-closeReturned
+	assert.Nil(t, first.cache)
+	assert.Nil(t, second.cache)
+	assert.ErrorIs(t, first.err, errEnvelopeCacheClosed)
+	assert.ErrorIs(t, second.err, errEnvelopeCacheClosed)
+	assert.Equal(t, int32(1), builds.Load())
+	assert.Nil(t, buffer.entries)
+	assert.False(t, buffer.pending.active)
+	assert.Zero(t, buffer.pending.reservedBytes)
 	assert.Zero(t, manager.TotalBytes())
 	assert.Zero(t, manager.ReservedBytes())
 	assert.Zero(t, manager.EntryCount())
+	manager.mu.Lock()
+	assert.Empty(t, manager.builds)
+	manager.mu.Unlock()
 	cache, err := manager.GetOrBuild(context.Background(), "after-close", 1, fixedEnvelopeBuild(2))
 	assert.Nil(t, cache)
 	assert.ErrorIs(t, err, errEnvelopeCacheClosed)
+}
+
+func TestEnvelopeCacheObjectCountMismatchIsFormatError(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
+
+	cache, err := manager.GetOrBuild(context.Background(), "points", 2, fixedEnvelopeBuild(1))
+
+	assert.Nil(t, cache)
+	assert.True(t, udbxerrors.IsFormatError(err))
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Zero(t, manager.EntryCount())
 }
 
 func TestEnvelopeCacheRejectsObjectCountOverflow(t *testing.T) {
@@ -389,9 +559,18 @@ func TestEnvelopeCacheConcurrentWaitersReceiveSameBuildError(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, envelopeEntryBytes*2, envelopeEntryBytes*4)
 	started := make(chan struct{})
 	release := make(chan struct{})
+	waiterJoined := make(chan struct{})
 	wantErr := stderrors.New("stable build error")
 	var once sync.Once
+	var waiterOnce sync.Once
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		waiterJoined: func() {
+			waiterOnce.Do(func() { close(waiterJoined) })
+		},
+	}
+	var builds atomic.Int32
 	build := func(context.Context, *envelopeCacheBuildBuffer) error {
+		builds.Add(1)
 		once.Do(func() { close(started) })
 		<-release
 		return wantErr
@@ -401,8 +580,10 @@ func TestEnvelopeCacheConcurrentWaitersReceiveSameBuildError(t *testing.T) {
 	go func() { _, err := manager.GetOrBuild(context.Background(), "points", 1, build); errs <- err }()
 	<-started
 	go func() { _, err := manager.GetOrBuild(context.Background(), "points", 1, build); errs <- err }()
+	<-waiterJoined
 	close(release)
 
 	assert.ErrorIs(t, <-errs, wantErr)
 	assert.ErrorIs(t, <-errs, wantErr)
+	assert.Equal(t, int32(1), builds.Load())
 }
