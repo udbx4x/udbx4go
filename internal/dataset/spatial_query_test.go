@@ -241,6 +241,25 @@ func TestSpatialQueryEnvelopeCacheFiltersWithoutDecodingUnmatchedGeometry(t *tes
 	assert.Equal(t, 1, manager.EntryCount(), "subsequent queries must reuse the complete cache")
 }
 
+func TestSpatialQueryAcceptsCaseDifferencesInSQLiteSpatialMetadata(t *testing.T) {
+	db, querier := createSpatialQueryFixture(t, "MixedCasePoints", "SmID", "SmGeometry")
+	defer db.Close()
+	insertSpatialPoint(t, db, querier, 1, 1, 1, "point", nil)
+
+	_, err := db.Exec(`UPDATE geometry_columns
+		SET f_table_name = lower(f_table_name), f_geometry_column = lower(f_geometry_column)
+		WHERE f_table_name = ?`, querier.info.TableName)
+	require.NoError(t, err)
+
+	result, err := querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 2, MaxY: 2},
+		Limit:  10,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, spatialFeatureIDs(result.Features))
+	assert.Equal(t, types.SpatialQueryStrategyRTree, result.Strategy)
+}
+
 func TestSpatialQueryBoundedSampleOnlyOnEnvelopeBudgetRejection(t *testing.T) {
 	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
 	defer db.Close()

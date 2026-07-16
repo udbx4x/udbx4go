@@ -28,17 +28,17 @@ type GeometryColumnsRecord struct {
 	SpatialIndexEnabled int
 }
 
-// ListByTableName returns all geometry column records for an exact physical table name.
+// ListByTableName returns all geometry column records for a physical table name.
 func (dao *GeometryColumnsDao) ListByTableName(tableName string) ([]*GeometryColumnsRecord, error) {
 	return dao.ListByTableNameContext(context.Background(), tableName)
 }
 
-// ListByTableNameContext returns all geometry column records for an exact physical table name.
+// ListByTableNameContext returns all geometry column records for a physical table name.
 func (dao *GeometryColumnsDao) ListByTableNameContext(ctx context.Context, tableName string) ([]*GeometryColumnsRecord, error) {
 	query := `
 		SELECT f_table_name, f_geometry_column, geometry_type, coord_dimension, srid, spatial_index_enabled
 		FROM geometry_columns
-		WHERE f_table_name = ?
+		WHERE f_table_name = ? COLLATE NOCASE
 		ORDER BY f_geometry_column
 	`
 

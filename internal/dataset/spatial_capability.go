@@ -72,7 +72,7 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 	if err != nil {
 		return nil, err
 	}
-	if len(records) != 1 || records[0].FTableName != q.info.TableName {
+	if len(records) != 1 || !strings.EqualFold(records[0].FTableName, q.info.TableName) {
 		return unavailable(), nil
 	}
 
@@ -81,7 +81,7 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 	if geometryColumn == "" {
 		return unavailable(), nil
 	}
-	if registeredGeometryColumn(q.record) != "" && registeredGeometryColumn(q.record) != geometryColumn {
+	if registeredGeometryColumn(q.record) != "" && !strings.EqualFold(registeredGeometryColumn(q.record), geometryColumn) {
 		return unavailable(), nil
 	}
 
@@ -103,8 +103,13 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 	}
 
 	rtreeName := spatialRTreeName(q.info.TableName, geometryColumn)
+	var physicalRTreeName string
 	var definition sql.NullString
-	err = q.db.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, rtreeName).Scan(&definition)
+	err = q.db.QueryRowContext(
+		ctx,
+		`SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name = ? COLLATE NOCASE`,
+		rtreeName,
+	).Scan(&physicalRTreeName, &definition)
 	if err == sql.ErrNoRows {
 		return unavailable(), nil
 	}
@@ -115,7 +120,7 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		return unavailable(), nil
 	}
 
-	rtreeColumns, err := sqliteTableInfo(ctx, q.db, rtreeName)
+	rtreeColumns, err := sqliteTableInfo(ctx, q.db, physicalRTreeName)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +134,7 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 			RTreeAvailable:    true,
 			FallbackAvailable: true,
 		},
-		RTreeName:      rtreeName,
+		RTreeName:      physicalRTreeName,
 		GeometryColumn: geometryColumn,
 		IDColumn:       idColumn,
 	}, nil

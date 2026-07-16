@@ -4,6 +4,7 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
+	"strings"
 
 	"github.com/udbx4x/udbx4go/internal/codec"
 	"github.com/udbx4x/udbx4go/internal/sqliteutil"
@@ -142,14 +143,15 @@ func (q *SpatialQuerier) detectEnvelopeColumns(ctx context.Context) (string, str
 	if err != nil {
 		return "", "", err
 	}
-	if len(records) != 1 || records[0].FTableName != q.info.TableName {
+	if len(records) != 1 || !strings.EqualFold(records[0].FTableName, q.info.TableName) {
 		return "", "", spatialQueryFailure(
 			types.SpatialQueryReasonSpatialIndexUnavailable,
 			udbxerrors.UnsupportedError("spatial query geometry metadata is unavailable"),
 		)
 	}
 	geometryColumn := records[0].FGeometryColumn
-	if geometryColumn == "" || (registeredGeometryColumn(q.record) != "" && registeredGeometryColumn(q.record) != geometryColumn) {
+	if geometryColumn == "" || (registeredGeometryColumn(q.record) != "" &&
+		!strings.EqualFold(registeredGeometryColumn(q.record), geometryColumn)) {
 		return "", "", spatialQueryFailure(
 			types.SpatialQueryReasonSpatialIndexUnavailable,
 			udbxerrors.UnsupportedError("spatial query geometry column is unavailable"),
