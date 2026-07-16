@@ -216,6 +216,7 @@ export function summarizeRuns(runs) {
       cold: summarizeTemperature(coldRuns),
       warm: summarizeTemperature(warmRuns),
       peakRssKiB: Math.max(...scenarioRuns.map((run) => Number(run.peakRssKiB))),
+      observedMaxConcurrentQueries: Math.max(...scenarioRuns.map((run) => run.metrics.maxConcurrentQueries)),
       gates: {
         allRunsPassed: scenarioRuns.every((run) => run.status === 'passed'),
         pendingDrained,
@@ -298,6 +299,9 @@ export function selectConcurrency(baseline, candidates) {
   if (candidateConcurrencies.length !== 2 || candidateConcurrencies[0] !== 2 || candidateConcurrencies[1] !== 3) {
     throw new Error('concurrency candidates must contain concurrency 2 and 3 exactly once')
   }
+  if (observedSampledataConcurrency(baseline) !== 1) {
+    throw new Error('concurrency-1 baseline must have observed concurrency 1 in sampledata multilayer runs')
+  }
   candidates.forEach((candidate) => assertSameCandidateInputs(baseline, candidate))
   const baselineP95 = concurrencyComparisonValue(baseline, (scenario) => scenario.warm.moveendToRenderMs.p95)
   const baselineRss = concurrencyComparisonValue(baseline, (scenario) => scenario.peakRssKiB)
@@ -309,11 +313,16 @@ export function selectConcurrency(baseline, candidates) {
       const peakRssKiB = concurrencyComparisonValue(candidate, (scenario) => scenario.peakRssKiB)
       const latencyRatio = moveendP95 / baselineP95
       const rssRatio = peakRssKiB / baselineRss
+      const observedConcurrencyQualified = observedSampledataConcurrency(candidate) >= candidate.maxConcurrentQueries
       return {
         concurrency: candidate.maxConcurrentQueries,
         latencyRatio,
         rssRatio,
-        qualified: candidate.status === 'passed' && latencyRatio <= 0.95 && rssRatio <= 1.10,
+        observedConcurrencyQualified,
+        qualified: candidate.status === 'passed'
+          && observedConcurrencyQualified
+          && latencyRatio <= 0.95
+          && rssRatio <= 1.10,
       }
     })
   return {
@@ -322,6 +331,11 @@ export function selectConcurrency(baseline, candidates) {
     baselineRssKiB: baselineRss,
     comparisons,
   }
+}
+
+function observedSampledataConcurrency(summary) {
+  return summary.scenarios.find((scenario) => scenario.name === 'sampledata-multilayer-viewport')
+    ?.observedMaxConcurrentQueries ?? 0
 }
 
 function formatNumber(value) {
@@ -342,9 +356,9 @@ function renderSelectionMarkdown(selection) {
     `- 自动选择：${selection.selected}`,
     `- 并发 1 热端到端 P95：${formatNumber(selection.baselineP95)} ms`,
     `- 并发 1 峰值 RSS：${formatMiB(selection.baselineRssKiB)} MiB`, '',
-    '| 并发 | 相对延迟 | 相对 RSS | 合格 |',
-    '| ---: | ---: | ---: | --- |',
-    ...selection.comparisons.map((item) => `| ${item.concurrency} | ${item.latencyRatio.toFixed(3)} | ${item.rssRatio.toFixed(3)} | ${pass(item.qualified)} |`),
+    '| 并发 | 实际观测达标 | 相对延迟 | 相对 RSS | 合格 |',
+    '| ---: | --- | ---: | ---: | --- |',
+    ...selection.comparisons.map((item) => `| ${item.concurrency} | ${pass(item.observedConcurrencyQualified)} | ${item.latencyRatio.toFixed(3)} | ${item.rssRatio.toFixed(3)} | ${pass(item.qualified)} |`),
     '',
   ]
   return `${lines.join('\n')}\n`
@@ -369,8 +383,8 @@ export function renderMarkdown(summary, workflow = null) {
     const comparisonByConcurrency = new Map(workflow.selection.comparisons.map((item) => [item.concurrency, item]))
     lines.push(
       '## 并发候选比较', '',
-      '| 并发 | 热 moveend -> render P95 ms | 峰值 RSS MiB | 相对延迟 | 相对 RSS | 结论 |',
-      '| ---: | ---: | ---: | ---: | ---: | --- |',
+      '| 并发 | sampledata 实际观测 | 热 moveend -> render P95 ms | 峰值 RSS MiB | 相对延迟 | 相对 RSS | 结论 |',
+      '| ---: | ---: | ---: | ---: | ---: | ---: | --- |',
     )
     for (const concurrency of [1, 2, 3]) {
       const candidate = candidateByConcurrency.get(concurrency)
@@ -378,7 +392,7 @@ export function renderMarkdown(summary, workflow = null) {
       const p95 = concurrencyComparisonValue(candidate, (scenario) => scenario.warm.moveendToRenderMs.p95)
       const rss = concurrencyComparisonValue(candidate, (scenario) => scenario.peakRssKiB)
       const comparison = comparisonByConcurrency.get(concurrency)
-      lines.push(`| ${concurrency} | ${formatNumber(p95)} | ${formatMiB(rss)} | ${comparison ? comparison.latencyRatio.toFixed(3) : '1.000'} | ${comparison ? comparison.rssRatio.toFixed(3) : '1.000'} | ${comparison ? pass(comparison.qualified) : 'BASELINE'} |`)
+      lines.push(`| ${concurrency} | ${observedSampledataConcurrency(candidate)} | ${formatNumber(p95)} | ${formatMiB(rss)} | ${comparison ? comparison.latencyRatio.toFixed(3) : '1.000'} | ${comparison ? comparison.rssRatio.toFixed(3) : '1.000'} | ${comparison ? pass(comparison.qualified) : 'BASELINE'} |`)
     }
     const finalRerunPassed = workflow.finalRerun === true
       && summary.status === 'passed'
@@ -497,14 +511,29 @@ async function main() {
     }
   }
   const markdown = renderMarkdown(summary, workflow)
+  const finalRerunPassed = summary.status === 'passed' && (
+    !workflow || summary.maxConcurrentQueries === workflow.selection.selected
+  )
   await fs.mkdir(path.dirname(options['json-out']), { recursive: true })
   await fs.writeFile(options['json-out'], `${JSON.stringify(summary, null, 2)}\n`, 'utf8')
   await fs.writeFile(options['markdown-out'], markdown, 'utf8')
-  if (options['acceptance-report']) {
-    await fs.mkdir(path.dirname(options['acceptance-report']), { recursive: true })
-    await fs.writeFile(options['acceptance-report'], markdown, 'utf8')
+  if (options['acceptance-report'] && finalRerunPassed) {
+    await writeFileAtomic(options['acceptance-report'], markdown)
   }
-  if (summary.status !== 'passed') process.exitCode = 1
+  if (!finalRerunPassed) process.exitCode = 1
+}
+
+async function writeFileAtomic(filePath, contents) {
+  const directory = path.dirname(filePath)
+  await fs.mkdir(directory, { recursive: true })
+  const temporaryPath = path.join(directory, `.${path.basename(filePath)}.tmp-${process.pid}-${Date.now()}`)
+  try {
+    await fs.writeFile(temporaryPath, contents, 'utf8')
+    await fs.rename(temporaryPath, filePath)
+  } catch (error) {
+    await fs.rm(temporaryPath, { force: true })
+    throw error
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

@@ -108,14 +108,17 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
         featureIDs: [101],
       }
     },
-    getCoordinatorMetrics: () => ({
-      maxConcurrentQueries: 2,
-      pendingPeak: 1,
-      activeQueries: 0,
-      pendingQueries: 0,
-      staleResultsDiscarded: 1,
-      staleResultApplied: false,
-    }),
+    getCoordinatorMetrics: () => {
+      calls.push('metrics')
+      return {
+        maxConcurrentQueries: 2,
+        pendingPeak: 1,
+        activeQueries: 0,
+        pendingQueries: 0,
+        staleResultsDiscarded: 1,
+        staleResultApplied: false,
+      }
+    },
   }
 }
 
@@ -139,6 +142,7 @@ describe('runBenchmarkScenario', () => {
       'viewport:envelope_cache:101:plain',
       'viewport:envelope_cache:101:action',
       'viewport:envelope_cache:101:plain',
+      'metrics',
     ])
     expect(result.status).toBe('passed')
     expect(result.metrics.backendQueryMs).toEqual([8, 8])
@@ -152,6 +156,30 @@ describe('runBenchmarkScenario', () => {
       finalFeatureCount: 164,
       blankRenderCount: 0,
     })
+  })
+
+  it('cold 先测正式视口序列，再做不计入 cold metrics 的 selection 验证', async () => {
+    const calls: string[] = []
+    const coldConfig = { ...config, temperature: 'cold' as const }
+
+    const result = await runBenchmarkScenario(coldConfig, createDependencies(calls))
+
+    expect(calls).toEqual([
+      'open:/data/henan.udbx',
+      'list',
+      'summary:县级行政区划',
+      'setLayer:县级行政区划',
+      'fitAll',
+      'page:县级行政区划:2',
+      'attributes:县级行政区划:101',
+      'viewport:envelope_cache::action',
+      'viewport:envelope_cache::plain',
+      'metrics',
+      'viewport:envelope_cache:101:plain:112:polygon',
+      'setSelection:县级行政区划:101',
+    ])
+    expect(result.metrics.backendQueryMs).toEqual([8, 8])
+    expect(result.metrics.moveendToRenderMs).toEqual([24, 24])
   })
 
   it('策略不匹配时拒绝通过', async () => {

@@ -210,14 +210,49 @@ test('selectConcurrency chooses the smaller qualified candidate or keeps one', (
       { path: '/data/SampleData.udbx', sha256: 'sample-sha', sizeBytes: 456 },
     ],
   }
-  const baseline = { ...identity, status: 'passed', maxConcurrentQueries: 1, scenarios: [{ warm: { moveendToRenderMs: { p95: 200 } }, peakRssKiB: 200000 }] }
-  const qualifiedTwo = { ...identity, status: 'passed', maxConcurrentQueries: 2, scenarios: [{ warm: { moveendToRenderMs: { p95: 180 } }, peakRssKiB: 210000 }] }
-  const qualifiedThree = { ...identity, status: 'passed', maxConcurrentQueries: 3, scenarios: [{ warm: { moveendToRenderMs: { p95: 170 } }, peakRssKiB: 215000 }] }
+  const scenario = (observed, p95, peakRssKiB) => ({
+    name: 'sampledata-multilayer-viewport',
+    observedMaxConcurrentQueries: observed,
+    warm: { moveendToRenderMs: { p95 } },
+    peakRssKiB,
+  })
+  const baseline = { ...identity, status: 'passed', maxConcurrentQueries: 1, scenarios: [scenario(1, 200, 200000)] }
+  const qualifiedTwo = { ...identity, status: 'passed', maxConcurrentQueries: 2, scenarios: [scenario(2, 180, 210000)] }
+  const qualifiedThree = { ...identity, status: 'passed', maxConcurrentQueries: 3, scenarios: [scenario(3, 170, 215000)] }
   const slowTwo = { ...qualifiedTwo, scenarios: [{ warm: { moveendToRenderMs: { p95: 195 } }, peakRssKiB: 210000 }] }
   const hungryThree = { ...qualifiedThree, scenarios: [{ warm: { moveendToRenderMs: { p95: 170 } }, peakRssKiB: 221000 }] }
 
   assert.equal(selectConcurrency(baseline, [qualifiedTwo, qualifiedThree]).selected, 2)
   assert.equal(selectConcurrency(baseline, [slowTwo, hungryThree]).selected, 1)
+})
+
+test('selectConcurrency rejects candidates that never observe their configured concurrency', () => {
+  const identity = {
+    appPath: '/tmp/udbx4go-viewer-wails.app',
+    environment: { gitCommit: 'abc123', appSha256: 'app-sha' },
+    samples: [{ path: '/data/SampleData.udbx', sha256: 'sample-sha', sizeBytes: 456 }],
+  }
+  const summary = (configured, observed, p95) => ({
+    ...identity,
+    status: 'passed',
+    maxConcurrentQueries: configured,
+    scenarios: [{
+      name: 'sampledata-multilayer-viewport',
+      observedMaxConcurrentQueries: observed,
+      warm: { moveendToRenderMs: { p95 } },
+      peakRssKiB: 200000,
+    }],
+  })
+
+  const selection = selectConcurrency(summary(1, 1, 200), [summary(2, 1, 170), summary(3, 1, 160)])
+
+  assert.equal(selection.selected, 1)
+  assert.deepEqual(selection.comparisons.map((item) => item.observedConcurrencyQualified), [false, false])
+  assert.deepEqual(selection.comparisons.map((item) => item.qualified), [false, false])
+  assert.throws(
+    () => selectConcurrency(summary(1, 2, 200), [summary(2, 2, 170), summary(3, 3, 160)]),
+    /concurrency-1.*observed/i,
+  )
 })
 
 test('selectConcurrency rejects candidates from a different build or sample set', () => {
@@ -230,7 +265,7 @@ test('selectConcurrency rejects candidates from a different build or sample set'
     ...identity,
     status: 'passed',
     maxConcurrentQueries: concurrency,
-    scenarios: [{ warm: { moveendToRenderMs: { p95: 100 } }, peakRssKiB: 200000 }],
+    scenarios: [{ name: 'sampledata-multilayer-viewport', observedMaxConcurrentQueries: concurrency, warm: { moveendToRenderMs: { p95: 100 } }, peakRssKiB: 200000 }],
     ...overrides,
   })
 

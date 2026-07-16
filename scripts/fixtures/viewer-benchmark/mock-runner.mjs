@@ -37,3 +37,5 @@ const result = {
 
 await fs.mkdir(new URL('.', `file://${config.outputPath}`).pathname, { recursive: true }).catch(() => undefined)
 await fs.writeFile(config.outputPath, `${JSON.stringify(result, null, 2)}\n`, 'utf8')
+const exitCode = Number(process.env.UDBX_BENCHMARK_MOCK_EXIT_CODE ?? 0)
+if (Number.isInteger(exitCode) && exitCode !== 0) process.exitCode = exitCode

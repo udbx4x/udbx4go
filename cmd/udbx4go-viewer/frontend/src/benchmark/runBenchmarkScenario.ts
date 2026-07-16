@@ -56,7 +56,7 @@ export async function runBenchmarkScenario(
   dependencies.fitAllVisibleLayers()
   const fitVisibleLayersMs = dependencies.now() - started
 
-  started = dependencies.now()
+  const selectionPreparationStarted = dependencies.now()
   const selection = config.scenario.selection
   const page = await dependencies.loadDatasetPage(selection.datasetName, selection.page)
   if (selection.rowIndex >= page.rows.length) {
@@ -81,15 +81,24 @@ export async function runBenchmarkScenario(
     expectedStrategy: config.scenario.viewportSteps[0].expectedStrategy,
     geometryKind,
   }
-  const selectionResult = await dependencies.runViewportStep(selectionStep, [featureID])
-  assertExpectedStrategies(selectionStep.expectedStrategy, selectionResult.strategies)
-  if (!selectionResult.featureIDs.includes(featureID)) {
-    throw new Error(`required 选中 ID ${featureID} 不在查询返回或地图 source 中`)
+  const selectionPreparationMs = dependencies.now() - selectionPreparationStarted
+  const validateSelection = async () => {
+    const validationStarted = dependencies.now()
+    const selectionResult = await dependencies.runViewportStep(selectionStep, [featureID])
+    assertExpectedStrategies(selectionStep.expectedStrategy, selectionResult.strategies)
+    if (!selectionResult.featureIDs.includes(featureID)) {
+      throw new Error(`required 选中 ID ${featureID} 不在查询返回或地图 source 中`)
+    }
+    if (!await dependencies.setSelection({ datasetName: selection.datasetName, featureID })) {
+      throw new Error(`选中 ID ${featureID} 未形成地图高亮状态`)
+    }
+    return dependencies.now() - validationStarted
   }
-  if (!await dependencies.setSelection({ datasetName: selection.datasetName, featureID })) {
-    throw new Error(`选中 ID ${featureID} 未形成地图高亮状态`)
+
+  let selectAndFitMs = selectionPreparationMs
+  if (config.temperature === 'warm') {
+    selectAndFitMs += await validateSelection()
   }
-  const selectAndFitMs = dependencies.now() - started
 
   if (config.temperature === 'warm') {
     for (const step of config.scenario.viewportSteps) {
@@ -104,7 +113,8 @@ export async function runBenchmarkScenario(
   let finalFeatureCount = 0
   let blankRenderCount = 0
   for (const step of config.scenario.viewportSteps) {
-    const viewportResult = await dependencies.runViewportStep(step, [featureID])
+    const requiredIDs = config.temperature === 'warm' ? [featureID] : []
+    const viewportResult = await dependencies.runViewportStep(step, requiredIDs)
     assertExpectedStrategies(step.expectedStrategy, viewportResult.strategies)
     backendQueryMs.push(...viewportResult.backendQueryMs)
     moveendToRenderMs.push(viewportResult.moveendToRenderMs)
@@ -114,6 +124,9 @@ export async function runBenchmarkScenario(
     }
   }
   const coordinatorMetrics = dependencies.getCoordinatorMetrics()
+  if (config.temperature === 'cold') {
+    selectAndFitMs += await validateSelection()
+  }
 
   return {
     runId: config.runId,

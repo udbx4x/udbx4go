@@ -5,6 +5,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 source "$script_dir/viewer-benchmark-rss.sh"
+source "$script_dir/viewer-benchmark-process.sh"
+source "$script_dir/viewer-benchmark-transaction.sh"
 sample_data="$repo_root/../data/SampleData.udbx"
 henan_data="$repo_root/../data/henan.udbx"
 output_dir="$repo_root/.benchmark-results/$(date +%Y%m%d-%H%M%S)"
@@ -41,7 +43,7 @@ if [[ -z "$max_concurrent" && "$skip_build" == true ]]; then
   exit 2
 fi
 
-for command_name in jq node shasum awk; do
+for command_name in jq node shasum awk python3; do
   command -v "$command_name" >/dev/null || { echo "Missing required command: $command_name" >&2; exit 2; }
 done
 
@@ -68,6 +70,21 @@ else
   app_path="$viewer_dir/build/bin/udbx4go-viewer-wails.app"
 fi
 executable="$app_path/Contents/MacOS/udbx4go-viewer-wails"
+policy_backup="$output_dir/.viewport-query-policy.original"
+begin_benchmark_policy_transaction "$policy_file" "$policy_backup"
+workflow_phase="setup"
+
+handle_workflow_exit() {
+  local exit_status="$1"
+  trap - EXIT
+  cleanup_benchmark_process_group
+  restore_benchmark_policy_transaction
+  exit "$exit_status"
+}
+
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'handle_workflow_exit $?' EXIT
 
 sample_data="$(cd "$(dirname "$sample_data")" && pwd)/$(basename "$sample_data")"
 henan_data="$(cd "$(dirname "$henan_data")" && pwd)/$(basename "$henan_data")"
@@ -86,6 +103,10 @@ build_viewer() {
     [[ ! -f "$build_count_file" ]] || build_count="$(<"$build_count_file")"
     build_count=$((build_count + 1))
     printf '%s\n' "$build_count" > "$build_count_file"
+    if [[ "${UDBX_BENCHMARK_MOCK_FAIL_STAGE:-}" == "build" && "$build_count" == 1 ]]; then
+      echo "mock build failure" >&2
+      return 91
+    fi
     concurrency="$(awk '/VIEWPORT_QUERY_MAX_CONCURRENCY/ { print $NF }' "$policy_file")"
     mkdir -p "$(dirname "$executable")"
     printf '#!/usr/bin/env bash\n# mock app build %s policy %s\nexit 0\n' "$build_count" "$concurrency" > "$executable"
@@ -136,14 +157,14 @@ process_tree_rss() {
 }
 
 write_failed_result() {
-  local result_path="$1" run_id="$2" scenario_name="$3" error_message="$4"
+  local result_path="$1" run_id="$2" scenario_name="$3" error_message="$4" exit_code="$5"
   jq -n --arg runId "$run_id" --arg scenario "$scenario_name" \
-    --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg error "$error_message" \
+    --arg startedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg error "$error_message" --argjson processExitCode "$exit_code" \
     '{runId:$runId,status:"failed",startedAt:$startedAt,scenario:$scenario,
       metrics:{openFileMs:0,loadLayersMs:0,fitVisibleLayersMs:0,selectAndFitMs:0,
       backendQueryMs:[],moveendToRenderMs:[],maxConcurrentQueries:0,pendingPeak:0,
       pendingFinal:0,staleResultsDiscarded:0,staleResultApplied:false,
-      finalFeatureCount:0,blankRenderCount:0},error:$error}' > "$result_path"
+      finalFeatureCount:0,blankRenderCount:0},error:$error,processExitCode:$processExitCode}' > "$result_path"
 }
 
 run_iteration() {
@@ -163,9 +184,11 @@ run_iteration() {
       layers:$layers,selection:{datasetName:$datasetName,page:$page,rowIndex:0},viewportSteps:$viewportSteps}}' \
     > "$config_path"
 
-  local peak_rss=0 rss_start=0 rss_end=0
+  local peak_rss=0 rss_start=0 rss_end=0 process_exit_code=0 timed_out=false
+  local log_path="$suite_dir/${run_id}.log"
   if [[ -n "$mock_fixtures" ]]; then
-    node "$mock_runner" "$config_path"
+    start_benchmark_process_group "$log_path" node "$mock_runner" "$config_path"
+    if wait_benchmark_process_group; then process_exit_code=0; else process_exit_code=$?; fi
     case "$concurrency" in
       1) peak_rss=200000 ;;
       2) peak_rss=205000 ;;
@@ -174,24 +197,40 @@ run_iteration() {
     rss_start=180000
     rss_end=185000
   else
-    "$executable" --benchmark-config "$config_path" > "$suite_dir/${run_id}.log" 2>&1 &
-    local app_pid=$! started_seconds=$SECONDS
-    while kill -0 "$app_pid" 2>/dev/null; do
+    start_benchmark_process_group "$log_path" "$executable" --benchmark-config "$config_path"
+    local app_pid="$active_benchmark_pid" app_pgid="$active_benchmark_pgid" started_seconds=$SECONDS
+    while benchmark_process_group_alive "$app_pgid"; do
       local current_rss elapsed
       current_rss="$(process_tree_rss "$app_pid")"
       elapsed=$((SECONDS - started_seconds))
       record_rss_sample "$current_rss" "$elapsed"
       if (( elapsed >= 120 )); then
-        kill "$app_pid" 2>/dev/null || true
-        wait "$app_pid" 2>/dev/null || true
-        write_failed_result "$result_path" "$run_id" "$scenario_name" "benchmark timed out after 120 seconds"
+        terminate_benchmark_process_group "$app_pgid" 20
+        process_exit_code=124
+        timed_out=true
         break
       fi
       sleep 0.1
     done
-    local exit_code=0
-    wait "$app_pid" 2>/dev/null || exit_code=$?
-    [[ -f "$result_path" ]] || write_failed_result "$result_path" "$run_id" "$scenario_name" "viewer exited with code $exit_code before writing a result"
+    if [[ "$timed_out" != true ]]; then
+      if wait_benchmark_process_group; then process_exit_code=0; else process_exit_code=$?; fi
+    fi
+  fi
+
+  local exit_error=""
+  if [[ "$timed_out" == true ]]; then
+    exit_error="benchmark timed out after 120 seconds"
+  elif (( process_exit_code != 0 )); then
+    exit_error="viewer exited with exit code $process_exit_code"
+  fi
+  if [[ ! -f "$result_path" ]]; then
+    [[ -n "$exit_error" ]] || exit_error="viewer exited before writing a result"
+    write_failed_result "$result_path" "$run_id" "$scenario_name" "$exit_error" "$process_exit_code"
+  elif (( process_exit_code != 0 )); then
+    jq --arg error "$exit_error" --argjson processExitCode "$process_exit_code" \
+      '.status="failed" | .error=$error | .processExitCode=$processExitCode' \
+      "$result_path" > "$result_path.exit-failed"
+    mv "$result_path.exit-failed" "$result_path"
   fi
 
   local input_sha="$sample_sha" input_size="$sample_size"
@@ -202,16 +241,18 @@ run_iteration() {
   jq --argjson iteration "$iteration" --arg temperature "$temperature" \
     --argjson peakRssKiB "$peak_rss" --argjson rssStartKiB "$rss_start" --argjson rssEndKiB "$rss_end" \
     --arg memoryCaptureError "$memory_error" --arg appPath "$app_path" \
+    --argjson processExitCode "$process_exit_code" \
     --argjson maxConcurrentQueries "$concurrency" --arg gitCommit "$git_commit" --arg appSha256 "$app_sha" \
     --arg macOSVersion "$macos_version" --arg cpu "$cpu" --argjson memoryBytes "$memory_bytes" \
     --arg samplePath "$file_path" --arg sampleSha256 "$input_sha" --argjson sampleSizeBytes "$input_size" \
     '.+{iteration:$iteration,temperature:$temperature,peakRssKiB:$peakRssKiB,
       rssStartKiB:$rssStartKiB,rssEndKiB:$rssEndKiB,memoryCaptureError:$memoryCaptureError,
-      appPath:$appPath,maxConcurrentQueries:$maxConcurrentQueries,
+      appPath:$appPath,maxConcurrentQueries:$maxConcurrentQueries,processExitCode:$processExitCode,
       environment:{gitCommit:$gitCommit,appSha256:$appSha256,macOSVersion:$macOSVersion,cpu:$cpu,memoryBytes:$memoryBytes,
       samplePath:$samplePath,sampleSha256:$sampleSha256,sampleSizeBytes:$sampleSizeBytes}}' \
     "$result_path" > "$result_path.enriched"
   mv "$result_path.enriched" "$result_path"
+  (( process_exit_code == 0 ))
 }
 
 weibo_steps='[
@@ -240,6 +281,10 @@ run_suite() {
   local concurrency="$1" suite_dir="$2"
   shift 2
   mkdir -p "$suite_dir/configs" "$suite_dir/raw"
+  if [[ "$workflow_phase" == "final" && "${UDBX_BENCHMARK_MOCK_FAIL_STAGE:-}" == "final" ]]; then
+    echo "mock final run failure" >&2
+    return 92
+  fi
   for temperature in cold warm; do
     for iteration in 1 2 3 4 5; do
       run_iteration "$suite_dir" "$concurrency" "henan-weibo-rtree-pan-zoom" "$henan_data" '["weibo"]' "weibo" 1 "$weibo_steps" "$temperature" "$iteration"
@@ -252,20 +297,25 @@ run_suite() {
 }
 
 if [[ -n "$max_concurrent" ]]; then
+  workflow_phase="single"
   if [[ "$skip_build" != true ]]; then build_viewer; fi
   refresh_app_identity
-  summary_args=()
-  [[ -z "$acceptance_report" ]] || summary_args+=(--acceptance-report "$acceptance_report")
-  run_suite "$max_concurrent" "$output_dir" "${summary_args[@]}"
+  if [[ -n "$acceptance_report" ]]; then
+    run_suite "$max_concurrent" "$output_dir" --acceptance-report "$acceptance_report"
+  else
+    run_suite "$max_concurrent" "$output_dir"
+  fi
   echo "Benchmark report: $output_dir/summary.md"
   exit 0
 fi
 
 node "$script_dir/set-viewer-concurrency.mjs" --file "$policy_file" --value 1
+workflow_phase="candidate-build"
 build_viewer
 refresh_app_identity
 mkdir -p "$output_dir/candidates"
 for concurrency in 1 2 3; do
+  workflow_phase="candidate"
   run_suite "$concurrency" "$output_dir/candidates/concurrency-$concurrency"
 done
 
@@ -277,6 +327,7 @@ node "$script_dir/summarize-viewer-benchmark.mjs" \
 selected_concurrency="$(jq -r '.selected' "$output_dir/selection.json")"
 
 node "$script_dir/set-viewer-concurrency.mjs" --file "$policy_file" --value "$selected_concurrency"
+workflow_phase="final-build"
 build_viewer
 refresh_app_identity
 final_args=(
@@ -286,5 +337,7 @@ final_args=(
   --candidate-summary-3 "$output_dir/candidates/concurrency-3/summary.json"
 )
 [[ -z "$acceptance_report" ]] || final_args+=(--acceptance-report "$acceptance_report")
+workflow_phase="final"
 run_suite "$selected_concurrency" "$output_dir/final" "${final_args[@]}"
+commit_benchmark_policy_transaction
 echo "Benchmark report: $output_dir/final/summary.md"
