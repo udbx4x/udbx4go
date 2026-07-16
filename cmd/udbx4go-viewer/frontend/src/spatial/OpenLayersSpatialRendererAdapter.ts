@@ -2,6 +2,7 @@ import 'ol/ol.css'
 
 import Feature from 'ol/Feature'
 import OlMap from 'ol/Map'
+import type MapBrowserEvent from 'ol/MapBrowserEvent'
 import View from 'ol/View'
 import MultiLineString from 'ol/geom/MultiLineString'
 import MultiPolygon from 'ol/geom/MultiPolygon'
@@ -23,9 +24,11 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   private selectedFeature: SelectedMapFeature | null = null
   private featureClickHandler: ((datasetName: string, featureID: number) => void) | null = null
   private viewportChangeHandler: ((viewport: BoundingBox) => void) | null = null
+  private singleClickListener: ((event: MapBrowserEvent) => void) | null = null
   private moveendListener: (() => void) | null = null
 
   mount(container: HTMLElement): void {
+    this.destroy()
     this.map = new OlMap({
       target: container,
       layers: [],
@@ -35,20 +38,26 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
       }),
     })
 
-    this.map.on('singleclick', (event) => {
+    this.singleClickListener = (event) => {
       const feature = this.map?.forEachFeatureAtPixel(event.pixel, (candidate) => candidate)
       const datasetName = feature?.get('datasetName')
       const featureID = feature?.get('featureID')
       if (typeof datasetName === 'string' && typeof featureID === 'number') {
         this.featureClickHandler?.(datasetName, featureID)
       }
-    })
+    }
+    this.map.on('singleclick', this.singleClickListener)
 
     this.moveendListener = () => this.emitViewport()
     this.map.on('moveend', this.moveendListener)
+    this.map.renderSync()
   }
 
   destroy(): void {
+    if (this.map && this.singleClickListener) {
+      this.map.un('singleclick', this.singleClickListener)
+    }
+    this.singleClickListener = null
     if (this.map && this.moveendListener) {
       this.map.un('moveend', this.moveendListener)
     }

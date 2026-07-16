@@ -32,8 +32,12 @@ const openLayersMocks = vi.hoisted(() => {
     static instances: MockView[] = []
 
     readonly on = vi.fn()
-    readonly fit = vi.fn()
+    readonly fit = vi.fn((extent: number[]) => {
+      this.extent = extent
+      this.onFit?.()
+    })
     extent = [0, 0, 100, 100]
+    onFit: (() => void) | null = null
 
     constructor() {
       MockView.instances.push(this)
@@ -58,13 +62,26 @@ const openLayersMocks = vi.hoisted(() => {
     readonly addLayer = vi.fn()
     readonly removeLayer = vi.fn()
     readonly updateSize = vi.fn()
-    readonly setTarget = vi.fn()
+    readonly setTarget = vi.fn((target?: HTMLElement) => {
+      this.targetActive = Boolean(target)
+    })
     readonly render = vi.fn()
+    readonly renderSync = vi.fn(() => {
+      this.hasRenderBaseline = true
+    })
     readonly view: MockView
     private readonly listeners = new Map<string, () => void>()
+    private hasRenderBaseline = false
+    private targetActive: boolean
 
-    constructor(options: { view: MockView }) {
+    constructor(options: { target: HTMLElement, view: MockView }) {
       this.view = options.view
+      this.targetActive = Boolean(options.target)
+      this.view.onFit = () => {
+        if (this.hasRenderBaseline && this.targetActive) {
+          this.emit('moveend')
+        }
+      }
       MockMap.instances.push(this)
     }
 
@@ -125,6 +142,44 @@ describe('OpenLayersSpatialRendererAdapter viewport', () => {
 
     expect(handler).toHaveBeenCalledOnce()
     expect(handler).toHaveBeenCalledWith({ minX: -10, minY: -5, maxX: 20, maxY: 30 })
+  })
+
+  it('mount 建立渲染基线后，首次 fitBounds 由 moveend 发送视口', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const handler = vi.fn()
+    adapter.onViewportChange(handler)
+
+    adapter.mount(document.createElement('div'))
+    adapter.fitBounds({ minX: 0, minY: 0, maxX: 10, maxY: 5 }, 'polygon')
+
+    const map = openLayersMocks.MockMap.instances[0]
+    expect(map.renderSync).toHaveBeenCalledOnce()
+    expect(map.renderSync.mock.invocationCallOrder[0]).toBeLessThan(
+      openLayersMocks.MockView.instances[0].fit.mock.invocationCallOrder[0],
+    )
+    expect(handler).toHaveBeenCalledOnce()
+    expect(handler).toHaveBeenCalledWith({ minX: -2, minY: -1, maxX: 12, maxY: 6 })
+  })
+
+  it('重复 mount 先停用旧 map，旧 map 不再发送视口', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const handler = vi.fn()
+    adapter.onViewportChange(handler)
+    adapter.mount(document.createElement('div'))
+    const oldMap = openLayersMocks.MockMap.instances[0]
+    const oldMoveendListener = oldMap.on.mock.calls.find(([type]) => type === 'moveend')?.[1]
+    const oldSingleClickListener = oldMap.on.mock.calls.find(([type]) => type === 'singleclick')?.[1]
+
+    adapter.mount(document.createElement('div'))
+
+    expect(oldMap.un).toHaveBeenCalledWith('moveend', oldMoveendListener)
+    expect(oldMap.un).toHaveBeenCalledWith('singleclick', oldSingleClickListener)
+    expect(oldMap.setTarget).toHaveBeenCalledWith(undefined)
+    oldMap.emit('moveend')
+    expect(handler).not.toHaveBeenCalled()
+
+    adapter.fitBounds({ minX: 0, minY: 0, maxX: 10, maxY: 5 }, 'polygon')
+    expect(handler).toHaveBeenCalledOnce()
   })
 
   it('destroy 注销 moveend 且不再发送视口', () => {
