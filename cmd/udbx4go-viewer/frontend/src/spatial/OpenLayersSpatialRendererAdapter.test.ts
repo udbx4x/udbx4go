@@ -1,5 +1,233 @@
-import { describe, expect, it } from 'vitest'
-import { calculateSelectedFeatureFitExtent } from './OpenLayersSpatialRendererAdapter'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type VectorLayer from 'ol/layer/Vector'
+import type VectorSource from 'ol/source/Vector'
+import type CircleStyle from 'ol/style/Circle'
+import type { MapLayerState, PreviewFeature } from '../types'
+
+const openLayersMocks = vi.hoisted(() => {
+  class MockView {
+    static instances: MockView[] = []
+
+    readonly on = vi.fn()
+    readonly fit = vi.fn()
+    extent = [0, 0, 100, 100]
+
+    constructor() {
+      MockView.instances.push(this)
+    }
+
+    calculateExtent(): number[] {
+      return this.extent
+    }
+  }
+
+  class MockMap {
+    static instances: MockMap[] = []
+
+    readonly on = vi.fn((type: string, listener: () => void) => {
+      this.listeners.set(type, listener)
+    })
+    readonly un = vi.fn((type: string, listener: () => void) => {
+      if (this.listeners.get(type) === listener) {
+        this.listeners.delete(type)
+      }
+    })
+    readonly addLayer = vi.fn()
+    readonly removeLayer = vi.fn()
+    readonly updateSize = vi.fn()
+    readonly setTarget = vi.fn()
+    readonly render = vi.fn()
+    readonly view: MockView
+    private readonly listeners = new Map<string, () => void>()
+
+    constructor(options: { view: MockView }) {
+      this.view = options.view
+      MockMap.instances.push(this)
+    }
+
+    getView(): MockView {
+      return this.view
+    }
+
+    getSize(): [number, number] {
+      return [800, 600]
+    }
+
+    forEachFeatureAtPixel(): undefined {
+      return undefined
+    }
+
+    emit(type: string): void {
+      this.listeners.get(type)?.()
+    }
+  }
+
+  return { MockMap, MockView }
+})
+
+vi.mock('ol/Map', () => ({ default: openLayersMocks.MockMap }))
+vi.mock('ol/View', () => ({ default: openLayersMocks.MockView }))
+
+import {
+  OpenLayersSpatialRendererAdapter,
+  calculateSelectedFeatureFitExtent,
+} from './OpenLayersSpatialRendererAdapter'
+
+describe('OpenLayersSpatialRendererAdapter viewport', () => {
+  beforeEach(() => {
+    openLayersMocks.MockMap.instances.length = 0
+    openLayersMocks.MockView.instances.length = 0
+  })
+
+  it('mount 只监听一次 moveend，并只发送有限有序视口', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const handler = vi.fn()
+
+    adapter.onViewportChange(handler)
+    adapter.mount(document.createElement('div'))
+
+    const map = openLayersMocks.MockMap.instances[0]
+    const view = openLayersMocks.MockView.instances[0]
+    expect(map.on).toHaveBeenCalledWith('moveend', expect.any(Function))
+    expect(map.on.mock.calls.filter(([type]) => type === 'moveend')).toHaveLength(1)
+    expect(view.on).not.toHaveBeenCalledWith('change:center', expect.any(Function))
+    expect(view.on).not.toHaveBeenCalledWith('change:resolution', expect.any(Function))
+
+    view.extent = [Number.NaN, 0, 10, 10]
+    map.emit('moveend')
+    view.extent = [10, 0, 0, 10]
+    map.emit('moveend')
+    view.extent = [-10, -5, 20, 30]
+    map.emit('moveend')
+
+    expect(handler).toHaveBeenCalledOnce()
+    expect(handler).toHaveBeenCalledWith({ minX: -10, minY: -5, maxX: 20, maxY: 30 })
+  })
+
+  it('destroy 注销 moveend 且不再发送视口', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const handler = vi.fn()
+    adapter.onViewportChange(handler)
+    adapter.mount(document.createElement('div'))
+    const map = openLayersMocks.MockMap.instances[0]
+    const moveendListener = map.on.mock.calls.find(([type]) => type === 'moveend')?.[1]
+
+    adapter.destroy()
+
+    expect(map.un).toHaveBeenCalledWith('moveend', moveendListener)
+    map.emit('moveend')
+    expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('取消 viewport 订阅后不再调用 handler', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const handler = vi.fn()
+    const unsubscribe = adapter.onViewportChange(handler)
+    adapter.mount(document.createElement('div'))
+
+    unsubscribe()
+    openLayersMocks.MockMap.instances[0].emit('moveend')
+
+    expect(handler).not.toHaveBeenCalled()
+  })
+})
+
+describe('OpenLayersSpatialRendererAdapter fitBounds', () => {
+  beforeEach(() => {
+    openLayersMocks.MockMap.instances.length = 0
+    openLayersMocks.MockView.instances.length = 0
+  })
+
+  it.each([
+    ['point', [10, 20, 10, 20], [9.995, 19.995, 10.005, 20.005]],
+    ['line', [0, 0, 10, 0], [-1.5, -0.05, 11.5, 0.05]],
+    ['polygon', [0, 0, 10, 5], [-2, -1, 12, 6]],
+  ] as const)('%s 按类型化 BBox 定位', (geometryKind, values, expectedExtent) => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    adapter.mount(document.createElement('div'))
+
+    adapter.fitBounds(
+      { minX: values[0], minY: values[1], maxX: values[2], maxY: values[3] },
+      geometryKind,
+    )
+
+    expect(openLayersMocks.MockView.instances[0].fit).toHaveBeenCalledWith(
+      expectedExtent,
+      { padding: [64, 64, 64, 64], duration: 0 },
+    )
+  })
+
+  it.each([
+    { minX: Number.NaN, minY: 0, maxX: 10, maxY: 10 },
+    { minX: 10, minY: 0, maxX: 0, maxY: 10 },
+    { minX: 0, minY: 10, maxX: 10, maxY: 0 },
+  ])('无效 BBox 不改变 view', (bounds) => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    adapter.mount(document.createElement('div'))
+
+    adapter.fitBounds(bounds, 'polygon')
+
+    expect(openLayersMocks.MockView.instances[0].fit).not.toHaveBeenCalled()
+  })
+})
+
+describe('OpenLayersSpatialRendererAdapter setLayer', () => {
+  beforeEach(() => {
+    openLayersMocks.MockMap.instances.length = 0
+    openLayersMocks.MockView.instances.length = 0
+  })
+
+  it('转换失败时保留旧 Source 内容', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    adapter.mount(document.createElement('div'))
+    adapter.setLayer(createLayer([pointFeature(1), pointFeature(2), pointFeature(3)]))
+    const source = getAddedSource()
+    const clear = vi.spyOn(source, 'clear')
+    const addFeatures = vi.spyOn(source, 'addFeatures')
+
+    expect(() => adapter.setLayer(createLayer([
+      pointFeature(4),
+      { id: 5, geometry: { type: 'UnsupportedGeometry', coordinates: [], hasZ: false } },
+    ]))).toThrow('UnsupportedGeometry')
+
+    expect(source.getFeatures()).toHaveLength(3)
+    expect(clear).not.toHaveBeenCalled()
+    expect(addFeatures).not.toHaveBeenCalled()
+  })
+
+  it('转换失败时保留旧图层状态', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    adapter.mount(document.createElement('div'))
+    adapter.setLayer(createLayer([pointFeature(1)], '#1971c2'))
+    const layer = getAddedLayer()
+    const source = getAddedSource()
+
+    expect(() => adapter.setLayer(createLayer([
+      { id: 2, geometry: { type: 'UnsupportedGeometry', coordinates: [], hasZ: false } },
+    ], '#ff0000'))).toThrow('UnsupportedGeometry')
+
+    const style = layer.getStyleFunction()?.(source.getFeatures()[0], 1)
+    const renderedStyle = Array.isArray(style) ? style[0] : style
+    expect((renderedStyle?.getImage() as CircleStyle | null)?.getFill()?.getColor()).toBe('#1971c2')
+  })
+
+  it('转换成功时一次清空并批量加入完整要素', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    adapter.mount(document.createElement('div'))
+    adapter.setLayer(createLayer([pointFeature(1), pointFeature(2), pointFeature(3)]))
+    const source = getAddedSource()
+    const clear = vi.spyOn(source, 'clear')
+    const addFeatures = vi.spyOn(source, 'addFeatures')
+
+    adapter.setLayer(createLayer([pointFeature(4), pointFeature(5)]))
+
+    expect(clear).toHaveBeenCalledOnce()
+    expect(clear).toHaveBeenCalledWith(true)
+    expect(addFeatures).toHaveBeenCalledOnce()
+    expect(addFeatures.mock.calls[0][0]).toHaveLength(2)
+    expect(source.getFeatures()).toHaveLength(2)
+  })
+})
 
 describe('calculateSelectedFeatureFitExtent', () => {
   it('点要素定位时使用图层范围提供上下文', () => {
@@ -32,3 +260,47 @@ describe('calculateSelectedFeatureFitExtent', () => {
     expect(extent).toEqual([5, 15, 17, 27])
   })
 })
+
+function pointFeature(id: number): PreviewFeature {
+  return {
+    id,
+    geometry: { type: 'Point', coordinates: [id, id], hasZ: false },
+  }
+}
+
+function createLayer(features: PreviewFeature[], fillColor = '#1971c2'): MapLayerState {
+  return {
+    datasetName: 'points',
+    kind: 'Point',
+    visible: true,
+    loading: false,
+    error: null,
+    summary: null,
+    preview: {
+      datasetName: 'points',
+      kind: 'Point',
+      features,
+      estimatedVertexCount: features.length,
+      sampled: false,
+    },
+    style: {
+      point: { radius: 4, fillColor, strokeColor: '#ffffff', strokeWidth: 1 },
+      line: { strokeColor: '#1971c2', strokeWidth: 1.5 },
+      polygon: { fillColor: 'rgba(25,113,194,0.16)', strokeColor: '#1971c2', strokeWidth: 1.5 },
+      selected: { color: '#d9480f', pointRadius: 6, strokeWidth: 3, fillColor: 'rgba(217,72,15,0.24)' },
+    },
+  }
+}
+
+function getAddedSource(): VectorSource {
+  const layer = getAddedLayer()
+  const source = layer.getSource()
+  if (!source) {
+    throw new Error('测试图层缺少 VectorSource')
+  }
+  return source
+}
+
+function getAddedLayer(): VectorLayer {
+  return openLayersMocks.MockMap.instances[0].addLayer.mock.calls[0][0] as VectorLayer
+}

@@ -23,6 +23,7 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   private selectedFeature: SelectedMapFeature | null = null
   private featureClickHandler: ((datasetName: string, featureID: number) => void) | null = null
   private viewportChangeHandler: ((viewport: BoundingBox) => void) | null = null
+  private moveendListener: (() => void) | null = null
 
   mount(container: HTMLElement): void {
     this.map = new OlMap({
@@ -43,11 +44,15 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
       }
     })
 
-    this.map.getView().on('change:center', () => this.emitViewport())
-    this.map.getView().on('change:resolution', () => this.emitViewport())
+    this.moveendListener = () => this.emitViewport()
+    this.map.on('moveend', this.moveendListener)
   }
 
   destroy(): void {
+    if (this.map && this.moveendListener) {
+      this.map.un('moveend', this.moveendListener)
+    }
+    this.moveendListener = null
     this.map?.setTarget(undefined)
     this.map = null
     this.sources.forEach((source) => source.clear())
@@ -57,10 +62,20 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   }
 
   setLayer(layer: MapLayerState): void {
-    this.layerStates.set(layer.datasetName, layer)
     if (!this.map || !layer.preview) {
+      this.layerStates.set(layer.datasetName, layer)
       return
     }
+
+    const features = layer.preview.features.map((feature) => {
+      const geometry = toOpenLayersGeometry(feature)
+      const olFeature = new Feature({ geometry })
+      olFeature.set('datasetName', layer.datasetName)
+      olFeature.set('featureID', feature.id)
+      olFeature.set('geometryKind', geometryKindFromPreviewType(feature.geometry.type))
+      return olFeature
+    })
+    this.layerStates.set(layer.datasetName, layer)
 
     let source = this.sources.get(layer.datasetName)
     let vectorLayer = this.layers.get(layer.datasetName)
@@ -76,18 +91,8 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
       this.map.addLayer(vectorLayer)
     }
 
-    source.clear()
-    source.addFeatures(layer.preview.features.flatMap((feature) => {
-      const geometry = toOpenLayersGeometry(feature)
-      if (!geometry) {
-        return []
-      }
-      const olFeature = new Feature({ geometry })
-      olFeature.set('datasetName', layer.datasetName)
-      olFeature.set('featureID', feature.id)
-      olFeature.set('geometryKind', geometryKindFromPreviewType(feature.geometry.type))
-      return [olFeature]
-    }))
+    source.clear(true)
+    source.addFeatures(features)
     vectorLayer.setVisible(layer.visible)
     this.map.updateSize()
   }
@@ -155,6 +160,18 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     this.map.getView().fit(extent, { padding: [64, 64, 64, 64], duration: 0 })
   }
 
+  fitBounds(bounds: BoundingBox, geometryKind: GeometryKind): void {
+    if (!this.map) {
+      return
+    }
+    const boundsExtent: ExtentTuple = [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY]
+    const extent = calculateSelectedFeatureFitExtent(boundsExtent, boundsExtent, geometryKind)
+    if (!extent) {
+      return
+    }
+    this.map.getView().fit(extent, { padding: [64, 64, 64, 64], duration: 0 })
+  }
+
   setSelection(selection: SelectedMapFeature | null): void {
     this.selectedFeature = selection
     this.sources.forEach((source) => source.changed())
@@ -165,13 +182,18 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     this.featureClickHandler = handler
   }
 
-  onViewportChange(handler: (viewport: BoundingBox) => void): void {
+  onViewportChange(handler: (viewport: BoundingBox) => void): () => void {
     this.viewportChangeHandler = handler
+    return () => {
+      if (this.viewportChangeHandler === handler) {
+        this.viewportChangeHandler = null
+      }
+    }
   }
 
   private emitViewport(): void {
     const extent = this.map?.getView().calculateExtent(this.map.getSize())
-    if (!extent) {
+    if (!extent || !isValidExtent([extent[0], extent[1], extent[2], extent[3]])) {
       return
     }
     this.viewportChangeHandler?.({
@@ -227,7 +249,7 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   }
 }
 
-function toOpenLayersGeometry(feature: PreviewFeature): Point | MultiLineString | MultiPolygon | null {
+function toOpenLayersGeometry(feature: PreviewFeature): Point | MultiLineString | MultiPolygon {
   switch (feature.geometry.type) {
     case 'Point':
     case 'Text':
@@ -237,7 +259,7 @@ function toOpenLayersGeometry(feature: PreviewFeature): Point | MultiLineString 
     case 'MultiPolygon':
       return new MultiPolygon(feature.geometry.coordinates as number[][][][])
     default:
-      return null
+      throw new Error(`不支持的预览几何类型：${feature.geometry.type}`)
   }
 }
 

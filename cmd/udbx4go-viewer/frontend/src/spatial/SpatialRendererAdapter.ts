@@ -7,9 +7,10 @@ export interface SpatialRendererAdapter {
   removeLayer(datasetName: string): void
   setLayerVisible(datasetName: string, visible: boolean): void
   fitAllVisibleLayers(): void
+  fitBounds?(bounds: BoundingBox, geometryKind: 'point' | 'line' | 'polygon'): void
   setSelection(selection: SelectedMapFeature | null): void
   onFeatureClick(handler: (datasetName: string, featureID: number) => void): void
-  onViewportChange(handler: (viewport: BoundingBox) => void): void
+  onViewportChange(handler: (viewport: BoundingBox) => void): void | (() => void)
 }
 
 export type SpatialRendererKind = 'openlayers' | 'maplibre'
