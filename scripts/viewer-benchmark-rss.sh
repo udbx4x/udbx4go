@@ -7,5 +7,7 @@ record_rss_sample() {
     rss_start="$current_rss"
   fi
   rss_end="$current_rss"
-  (( current_rss > peak_rss )) && peak_rss="$current_rss"
+  if (( current_rss > peak_rss )); then
+    peak_rss="$current_rss"
+  fi
 }

@@ -17,3 +17,8 @@ record_rss_sample 120 2
 [[ "$peak_rss" == 120 && "$rss_start" == 120 && "$rss_end" == 120 ]]
 record_rss_sample 130 3
 [[ "$peak_rss" == 130 && "$rss_start" == 120 && "$rss_end" == 130 ]]
+
+# Repeated or lower samples are valid and must not trip callers using set -e.
+record_rss_sample 130 4
+record_rss_sample 125 5
+[[ "$peak_rss" == 130 && "$rss_start" == 120 && "$rss_end" == 125 ]]
