@@ -8,7 +8,8 @@ const config = JSON.parse(await fs.readFile(configPath, 'utf8'))
 const concurrency = Number(config.maxConcurrentQueries)
 const warm = config.temperature === 'warm'
 const renderBase = ({ 1: 200, 2: 180, 3: 170 })[concurrency] + (warm ? 0 : 20)
-const backendBase = warm ? 20 : 40
+const forcedGateFailure = Number(process.env.UDBX_BENCHMARK_MOCK_GATE_FAIL_CONCURRENCY) === concurrency
+const backendBase = forcedGateFailure ? 120 : (warm ? 20 : 40)
 const stepCount = config.scenario.viewportSteps.length
 const observedConcurrency = Math.min(concurrency, config.scenario.layers.length)
 

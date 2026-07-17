@@ -8,6 +8,8 @@ export function GetBenchmarkConfig():Promise<main.BenchmarkConfigDTO>;
 
 export function GetCurrentFile():Promise<string>;
 
+export function GetCurrentFileInfo():Promise<main.FileInfo>;
+
 export function GetDatasetFields(arg1:string):Promise<Array<string>>;
 
 export function GetDatasetSpatialSummary(arg1:string):Promise<main.SpatialSummaryDTO>;

@@ -355,6 +355,10 @@ func TestOpenUDBXFileReturnsAuthoritativeFileGeneration(t *testing.T) {
 	if second.FileGeneration <= first.FileGeneration {
 		t.Fatalf("second generation = %d, want greater than first %d", second.FileGeneration, first.FileGeneration)
 	}
+	current := app.GetCurrentFileInfo()
+	if current == nil || current.Path != second.Path || current.FileGeneration != second.FileGeneration {
+		t.Fatalf("GetCurrentFileInfo() = %+v, want path %q generation %d", current, second.Path, second.FileGeneration)
+	}
 }
 
 func TestViewerSpatialPreviewReportsUnsupportedTabularDataset(t *testing.T) {

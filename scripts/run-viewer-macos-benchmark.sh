@@ -299,6 +299,14 @@ run_suite() {
     --input-dir "$suite_dir/raw" --json-out "$suite_dir/summary.json" --markdown-out "$suite_dir/summary.md" "$@"
 }
 
+candidate_suite_completed() {
+  local summary_path="$1/summary.json"
+  [[ -f "$summary_path" ]] && jq -e '
+    .completeTenRunGate == true and
+    ([.scenarios[].runs[].status] | all(. == "passed"))
+  ' "$summary_path" >/dev/null
+}
+
 if [[ -n "$max_concurrent" ]]; then
   workflow_phase="single"
   if [[ "$skip_build" != true ]]; then build_viewer; fi
@@ -319,7 +327,14 @@ refresh_app_identity
 mkdir -p "$output_dir/candidates"
 for concurrency in 1 2 3; do
   workflow_phase="candidate"
-  run_suite "$concurrency" "$output_dir/candidates/concurrency-$concurrency"
+  candidate_dir="$output_dir/candidates/concurrency-$concurrency"
+  if ! run_suite "$concurrency" "$candidate_dir"; then
+    if candidate_suite_completed "$candidate_dir"; then
+      echo "Candidate concurrency $concurrency did not meet performance gates; continuing calibration." >&2
+    else
+      exit 1
+    fi
+  fi
 done
 
 node "$script_dir/summarize-viewer-benchmark.mjs" \

@@ -250,7 +250,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
       now: () => performance.now(),
       openFile: async (path) => {
         const file = await OpenUDBXFile(path)
-        fileGeneration += 1
+        fileGeneration = file.fileGeneration
         return file
       },
       listDatasets: ListDatasets,

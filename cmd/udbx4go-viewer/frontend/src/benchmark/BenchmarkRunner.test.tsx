@@ -2,7 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { BenchmarkRunner } from './BenchmarkRunner'
 import type { BenchmarkConfig, BenchmarkResult } from './types'
-import { LoadSpatialPreview } from '../../wailsjs/go/main/App'
+import { LoadSpatialPreview, OpenUDBXFile } from '../../wailsjs/go/main/App'
 import { main } from '../../wailsjs/go/models'
 
 vi.mock('../../wailsjs/go/main/App', () => ({
@@ -10,7 +10,7 @@ vi.mock('../../wailsjs/go/main/App', () => ({
   GetFeatureAttributes: vi.fn(),
   ListDatasets: vi.fn(),
   LoadDatasetPage: vi.fn(),
-  OpenUDBXFile: vi.fn(),
+  OpenUDBXFile: vi.fn(async (path: string) => ({ path, datasetCount: 1, fileGeneration: 1 })),
   QuitBenchmark: vi.fn(),
   SaveBenchmarkResult: vi.fn(),
   LoadSpatialPreview: vi.fn(async (datasetName: string, request: { viewport?: unknown }) => ({
@@ -224,6 +224,11 @@ describe('BenchmarkRunner', () => {
     const first = createDeferred<main.SpatialPreviewDTO>()
     const second = createDeferred<main.SpatialPreviewDTO>()
     vi.mocked(LoadSpatialPreview).mockClear()
+    vi.mocked(OpenUDBXFile).mockResolvedValueOnce(new main.FileInfo({
+      path: config.scenario.filePath,
+      datasetCount: 2,
+      fileGeneration: 3,
+    }))
     vi.mocked(LoadSpatialPreview).mockImplementation((datasetName) => {
       if (datasetName === 'BaseMap_P') {
         return first.promise
@@ -244,7 +249,7 @@ describe('BenchmarkRunner', () => {
           summary: { datasetName, kind, objectCount: 1, estimatedVertexCount: 1, previewSupported: true, viewportQuerySupported: true, rtreeAvailable: true },
           preview: {
             datasetName, kind, features: [], estimatedVertexCount: 0, sampled: false,
-            queriedBounds: oldBounds, strategy: 'rtree', hasMore: false, queryDurationMs: 1, fileGeneration: 1,
+            queriedBounds: oldBounds, strategy: 'rtree', hasMore: false, queryDurationMs: 1, fileGeneration: 3,
           },
           queryStatus: 'ready', queryError: null, lastQueriedBounds: oldBounds,
         })
@@ -269,7 +274,7 @@ describe('BenchmarkRunner', () => {
     const firstRequest = vi.mocked(LoadSpatialPreview).mock.calls[0][1]
     first.resolve(new main.SpatialPreviewDTO({
       datasetName: 'BaseMap_P', kind: 'point', features: [], estimatedVertexCount: 0, sampled: false,
-      queriedBounds: firstRequest.viewport, strategy: 'rtree', hasMore: false, queryDurationMs: 5, fileGeneration: 1,
+      queriedBounds: firstRequest.viewport, strategy: 'rtree', hasMore: false, queryDurationMs: 5, fileGeneration: 3,
     }))
     await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledTimes(2))
     expect(viewportResolved).toBe(false)
@@ -278,11 +283,23 @@ describe('BenchmarkRunner', () => {
     const secondRequest = vi.mocked(LoadSpatialPreview).mock.calls[1][1]
     second.resolve(new main.SpatialPreviewDTO({
       datasetName: 'BaseMap_L', kind: 'line', features: [], estimatedVertexCount: 0, sampled: false,
-      queriedBounds: secondRequest.viewport, strategy: 'rtree', hasMore: false, queryDurationMs: 6, fileGeneration: 1,
+      queriedBounds: secondRequest.viewport, strategy: 'rtree', hasMore: false, queryDurationMs: 6, fileGeneration: 3,
     }))
 
     await waitFor(() => expect(saveResult).toHaveBeenCalledWith(passedResult))
     expect(viewportResolved).toBe(true)
+    vi.mocked(LoadSpatialPreview).mockImplementation(async (datasetName, request) => new main.SpatialPreviewDTO({
+      datasetName,
+      kind: 'point',
+      features: [{ id: 7, geometry: { type: 'Point', coordinates: [1, 2], hasZ: false } }],
+      estimatedVertexCount: 1,
+      sampled: false,
+      queriedBounds: request.viewport,
+      strategy: 'rtree',
+      hasMore: false,
+      queryDurationMs: 9,
+      fileGeneration: 1,
+    }))
   })
 
   it('视口步骤超时报告 moveend 和图层查询阶段', async () => {

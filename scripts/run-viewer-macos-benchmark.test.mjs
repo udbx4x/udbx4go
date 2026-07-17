@@ -49,6 +49,28 @@ test('mock workflow measures 1/2/3, selects, rebuilds and runs a separate final 
   assert.match(report, /最终重建后独立重跑：PASS/)
 })
 
+test('candidate performance gate failure does not abort remaining candidates', () => {
+  const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'udbx-viewer-candidate-gate-'))
+  const result = spawnSync('bash', [
+    script,
+    '--mock-fixtures', fixtures,
+    '--output-dir', outputDir,
+  ], {
+    encoding: 'utf8',
+    env: { ...process.env, UDBX_BENCHMARK_MOCK_GATE_FAIL_CONCURRENCY: '2' },
+    timeout: 30000,
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  const candidate2 = JSON.parse(fs.readFileSync(
+    path.join(outputDir, 'candidates', 'concurrency-2', 'summary.json'),
+    'utf8',
+  ))
+  assert.equal(candidate2.status, 'failed')
+  assert.ok(fs.existsSync(path.join(outputDir, 'candidates', 'concurrency-3', 'summary.json')))
+  assert.ok(fs.existsSync(path.join(outputDir, 'final', 'summary.json')))
+})
+
 test('nonzero app exit fails the run even after a passed result was written', () => {
   const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'udbx-viewer-exit-'))
   const result = spawnSync('bash', [

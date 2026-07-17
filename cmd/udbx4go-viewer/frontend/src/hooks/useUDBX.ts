@@ -5,7 +5,7 @@ import {
   CloseUDBXFile,
   ListDatasets,
   LoadDatasetPage,
-  GetCurrentFile,
+  GetCurrentFileInfo,
   GetDatasetSpatialSummary,
   LoadSpatialPreview,
   GetFeatureAttributes,
@@ -357,10 +357,10 @@ export function useUDBX(options: UseUDBXOptions) {
 
   const loadCurrentFile = useCallback(async () => {
     try {
-      const path = await GetCurrentFile()
-      if (path) {
-        resetFileState()
-        setCurrentFile(path)
+      const fileInfo: FileInfo | null = await GetCurrentFileInfo()
+      if (fileInfo) {
+        resetFileState(fileInfo.fileGeneration)
+        setCurrentFile(fileInfo.path)
         setDatasets(await ListDatasets())
       }
     } catch {
@@ -428,7 +428,13 @@ async function loadBoundedPreview(datasetName: string, options: UseUDBXOptions):
 }
 
 function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback
+  if (error instanceof Error) {
+    return error.message
+  }
+  if (typeof error === 'string' && error.trim()) {
+    return error
+  }
+  return fallback
 }
 
 function selectionMatches(

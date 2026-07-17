@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   ListDatasets: vi.fn(),
   LoadDatasetPage: vi.fn(),
   GetCurrentFile: vi.fn(),
+  GetCurrentFileInfo: vi.fn(),
   GetFeatureAttributes: vi.fn(),
 }))
 
@@ -147,6 +148,31 @@ describe('useUDBX viewport spatial previews', () => {
     })
   })
 
+  it('启动恢复使用后端权威 generation', async () => {
+    mocks.GetCurrentFileInfo.mockResolvedValue({
+      path: '/tmp/restored.udbx',
+      datasetCount: 1,
+      fileGeneration: 5,
+    })
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      queriedBounds: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
+      fileGeneration: 5,
+    }))
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.loadCurrentFile())
+    act(() => result.current.queryViewport(viewport))
+    await act(async () => result.current.addDatasetToMap('BaseMap_P'))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(result.current.currentFile).toBe('/tmp/restored.udbx')
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'ready',
+      preview: { fileGeneration: 5 },
+    })
+  })
+
   it.each(['text', 'cad'])('%s 加层时立即加载有界预览', async (kind) => {
     mocks.GetDatasetSpatialSummary.mockResolvedValue({
       ...vectorSummary(),
@@ -180,6 +206,21 @@ describe('useUDBX viewport spatial previews', () => {
       queryStatus: 'ready',
       preview: { strategy: 'bounded_sample' },
     })
+  })
+
+  it('有界预览失败时保留 Wails 字符串错误原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...vectorSummary(),
+      datasetName: 'CADDT',
+      kind: 'cad',
+      viewportQuerySupported: false,
+    })
+    mocks.LoadSpatialPreview.mockRejectedValueOnce('cad decode failed')
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0].error).toBe('cad decode failed')
   })
 
   it('空间矢量仅在包络缓存预算超限降级为 bounded sample', async () => {

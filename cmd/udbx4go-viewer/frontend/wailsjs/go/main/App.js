@@ -14,6 +14,10 @@ export function GetCurrentFile() {
   return window['go']['main']['App']['GetCurrentFile']();
 }
 
+export function GetCurrentFileInfo() {
+  return window['go']['main']['App']['GetCurrentFileInfo']();
+}
+
 export function GetDatasetFields(arg1) {
   return window['go']['main']['App']['GetDatasetFields'](arg1);
 }

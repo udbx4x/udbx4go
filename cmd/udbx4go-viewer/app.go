@@ -31,6 +31,7 @@ type App struct {
 	dataSourceCancel      context.CancelFunc
 	fileGeneration        uint64
 	currentPath           string
+	currentDatasetCount   int
 	settingsPathOverride  string
 	benchmarkConfigPath   string
 	benchmarkConfig       *BenchmarkConfigDTO
@@ -191,6 +192,7 @@ func (a *App) OpenUDBXFile(path string) (*FileInfo, error) {
 	a.dataSourceContext = dataSourceContext
 	a.dataSourceCancel = dataSourceCancel
 	a.currentPath = path
+	a.currentDatasetCount = len(datasets)
 	a.fileGeneration++
 	fileGeneration := a.fileGeneration
 	a.dataSourceMu.Unlock()
@@ -222,6 +224,7 @@ func (a *App) closeCurrentDataSource() error {
 	a.dataSourceContext = nil
 	a.dataSourceCancel = nil
 	a.currentPath = ""
+	a.currentDatasetCount = 0
 	if cancel != nil {
 		cancel()
 	}
@@ -1088,4 +1091,18 @@ func (a *App) GetCurrentFile() string {
 	a.dataSourceMu.Lock()
 	defer a.dataSourceMu.Unlock()
 	return a.currentPath
+}
+
+// GetCurrentFileInfo returns the backend-authoritative current file state.
+func (a *App) GetCurrentFileInfo() *FileInfo {
+	a.dataSourceMu.Lock()
+	defer a.dataSourceMu.Unlock()
+	if a.dataSource == nil {
+		return nil
+	}
+	return &FileInfo{
+		Path:           a.currentPath,
+		DatasetCount:   a.currentDatasetCount,
+		FileGeneration: a.fileGeneration,
+	}
 }
