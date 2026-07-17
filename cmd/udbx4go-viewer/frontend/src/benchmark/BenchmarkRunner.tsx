@@ -153,7 +153,17 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
       )) {
         return
       }
-      await adapter.waitForRenderComplete()
+      try {
+        await adapter.waitForRenderComplete()
+      } catch (error) {
+        if (stepMeasurement !== measurement) {
+          return
+        }
+        window.clearTimeout(measurement.timeoutID)
+        stepMeasurement = null
+        measurement.reject(error instanceof Error ? error : new Error(String(error)))
+        return
+      }
       if (stepMeasurement !== measurement) {
         return
       }
@@ -294,11 +304,12 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         return new Promise<BenchmarkViewportResult>((resolve, reject) => {
           const timeoutID = window.setTimeout(() => {
             const statuses = [...layerStates.values()]
-              .map((layer) => `${layer.datasetName}=${layer.queryStatus}`)
+              .map((layer) => `${layer.datasetName}=${layer.queryStatus}/${formatBounds(layer.lastQueriedBounds)}`)
               .join(',')
             const viewportObserved = stepMeasurement?.viewportObserved ?? false
+            const requestedBounds = formatBounds(stepMeasurement?.requestedBounds)
             stepMeasurement = null
-            reject(new Error(`viewport step timed out after ${viewportStepTimeoutMs}ms; viewportObserved=${viewportObserved}; layers=${statuses}`))
+            reject(new Error(`viewport step timed out after ${viewportStepTimeoutMs}ms; viewportObserved=${viewportObserved}; requested=${requestedBounds}; layers=${statuses}`))
           }, viewportStepTimeoutMs)
           stepMeasurement = {
             startedAt: performance.now(),
@@ -384,6 +395,13 @@ function geometryKind(kind: string): 'point' | 'line' | 'polygon' {
     return 'polygon'
   }
   return 'point'
+}
+
+function formatBounds(bounds: BoundingBox | null | undefined): string {
+  if (!bounds) {
+    return 'none'
+  }
+  return `${bounds.minX},${bounds.minY},${bounds.maxX},${bounds.maxY}`
 }
 
 function boundsEqual(actual: BoundingBox | undefined, expected: BoundingBox): boolean {

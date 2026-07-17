@@ -314,7 +314,7 @@ describe('BenchmarkRunner', () => {
 
     await waitFor(() => expect(saveResult).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
-      error: expect.stringMatching(/viewportObserved=true.*BaseMap_P=loading/),
+      error: expect.stringMatching(/viewportObserved=true.*requested=.*BaseMap_P=loading\//),
     })), { timeout: 1000 })
   })
 
@@ -349,6 +349,39 @@ describe('BenchmarkRunner', () => {
     await waitFor(() => expect(saveResult).toHaveBeenCalledWith(expect.objectContaining({
       status: 'failed',
       error: 'query failed',
+    })), { timeout: 1000 })
+  })
+
+  it('地图渲染失败立即结束步骤并保留原始错误', async () => {
+    const adapter = createAdapter()
+    adapter.waitForRenderComplete.mockRejectedValueOnce(new Error('render failed'))
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      dependencies.setLayer({
+        datasetName: 'BaseMap_P', kind: 'point', visible: true, style: {} as never,
+        loading: false, error: null,
+        summary: { datasetName: 'BaseMap_P', kind: 'point', objectCount: 1, estimatedVertexCount: 1, previewSupported: true, viewportQuerySupported: true, rtreeAvailable: true },
+        preview: null, queryStatus: 'idle', queryError: null,
+      })
+      await dependencies.runViewportStep(config.scenario.viewportSteps[0], [])
+      return passedResult
+    })
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={() => adapter}
+        runScenario={runScenario}
+        saveResult={saveResult}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+        viewportStepTimeoutMs={400}
+      />,
+    )
+
+    await waitFor(() => expect(saveResult).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      error: 'render failed',
     })), { timeout: 1000 })
   })
 

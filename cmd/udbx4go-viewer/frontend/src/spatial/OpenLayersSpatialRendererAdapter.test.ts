@@ -56,6 +56,9 @@ const openLayersMocks = vi.hoisted(() => {
     readonly on = vi.fn((type: string, listener: () => void) => {
       this.listeners.set(type, listener)
     })
+    readonly once = vi.fn((type: string, listener: () => void) => {
+      this.listeners.set(type, listener)
+    })
     readonly un = vi.fn((type: string, listener: () => void) => {
       if (this.listeners.get(type) === listener) {
         this.listeners.delete(type)
@@ -224,6 +227,22 @@ describe('OpenLayersSpatialRendererAdapter viewport', () => {
     openLayersMocks.MockMap.instances[0].emit('moveend')
 
     expect(handler).not.toHaveBeenCalled()
+  })
+
+  it('等待下一次 postrender 作为同步矢量图层的绘制完成信号', async () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    adapter.mount(document.createElement('div'))
+    const map = openLayersMocks.MockMap.instances[0]
+
+    const rendered = adapter.waitForRenderComplete()
+    try {
+      expect(map.once).toHaveBeenCalledWith('postrender', expect.any(Function))
+      expect(map.renderSync).toHaveBeenCalledTimes(2)
+    } finally {
+      map.emit('rendercomplete')
+      map.emit('postrender')
+    }
+    await rendered
   })
 })
 

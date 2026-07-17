@@ -220,15 +220,15 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     return new Promise((resolve, reject) => {
       const map = this.map!
       const timeoutID = window.setTimeout(() => {
-        map.un('rendercomplete', finish)
-        reject(new Error(`rendercomplete timed out after ${timeoutMS}ms`))
+        map.un('postrender', finish)
+        reject(new Error(`postrender timed out after ${timeoutMS}ms`))
       }, timeoutMS)
       const finish = () => {
         window.clearTimeout(timeoutID)
         resolve()
       }
-      map.once('rendercomplete', finish)
-      map.render()
+      map.once('postrender', finish)
+      map.renderSync()
     })
   }
 
