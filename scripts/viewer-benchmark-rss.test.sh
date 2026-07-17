@@ -32,4 +32,8 @@ rss_end=0
 record_rss_sample 90 0
 record_rss_sample 100 0
 finalize_rss_samples
-[[ "$peak_rss" == 100 && "$rss_start" == 90 && "$rss_end" == 100 ]]
+[[ "$peak_rss" == 100 && "$rss_start" == 100 && "$rss_end" == 100 ]]
+
+[[ "$(rss_elapsed_seconds 0)" == 0 ]]
+[[ "$(rss_elapsed_seconds 9)" == 0 ]]
+[[ "$(rss_elapsed_seconds 10)" == 1 ]]

@@ -198,12 +198,13 @@ run_iteration() {
     rss_end=185000
   else
     start_benchmark_process_group "$log_path" "$executable" --benchmark-config "$config_path"
-    local app_pid="$active_benchmark_pid" app_pgid="$active_benchmark_pgid" started_seconds=$SECONDS
+    local app_pid="$active_benchmark_pid" app_pgid="$active_benchmark_pgid" started_seconds=$SECONDS rss_sample_count=0
     while benchmark_process_group_alive "$app_pgid"; do
       local current_rss elapsed
       current_rss="$(process_tree_rss "$app_pid")"
-      elapsed=$((SECONDS - started_seconds))
+      elapsed="$(rss_elapsed_seconds "$rss_sample_count")"
       record_rss_sample "$current_rss" "$elapsed"
+      rss_sample_count=$((rss_sample_count + 1))
       if (( elapsed >= 120 )); then
         terminate_benchmark_process_group "$app_pgid" 20
         process_exit_code=124
