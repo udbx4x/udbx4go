@@ -375,6 +375,7 @@ describe('BenchmarkRunner', () => {
 
     await waitFor(() => expect(saveResult).toHaveBeenCalled())
     expect(viewportResult).toMatchObject({ strategies: ['rtree'], finalFeatureCount: 1 })
+    expect(adapter.onViewportChange).not.toHaveBeenCalled()
   })
 })
 

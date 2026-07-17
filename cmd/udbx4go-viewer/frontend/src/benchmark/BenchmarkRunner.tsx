@@ -234,7 +234,6 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         stepMeasurement.requestedBounds = requestedBounds
       }
     }
-    const unsubscribeViewport = adapter.onViewportChange(handleViewport)
     let currentRequiredIDs: number[] = []
 
     const dependencies: BenchmarkDependencies = {
@@ -313,9 +312,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
             requestedBounds: null,
           }
           adapter.fitBounds(step.bounds, step.geometryKind ?? geometryKind(fitLayer.kind))
-          if (!stepMeasurement.viewportObserved) {
-            handleViewport(adapter.getViewport() ?? step.bounds)
-          }
+          handleViewport(adapter.getViewport() ?? step.bounds)
         })
       },
       getCoordinatorMetrics: () => coordinator.getMetrics(),
@@ -352,7 +349,6 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
 
     return () => {
       cancelled = true
-      unsubscribeViewport()
       coordinator.invalidateAll()
       adapter.destroy()
     }
