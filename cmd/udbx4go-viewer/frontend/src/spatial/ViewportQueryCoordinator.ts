@@ -46,7 +46,7 @@ export interface ViewportQueryMetrics {
   staleResultApplied: boolean
 }
 
-const DEFAULT_DEBOUNCE_MS = 250
+export const VIEWPORT_QUERY_DEBOUNCE_MS = 100
 const DEFAULT_BUFFER_RATIO = 0.15
 export { VIEWPORT_QUERY_MAX_CONCURRENCY } from './viewportQueryPolicy'
 
@@ -64,7 +64,7 @@ export class ViewportQueryCoordinator {
 
   constructor(
     private readonly dependencies: CoordinatorDependencies,
-    private readonly debounceMs = DEFAULT_DEBOUNCE_MS,
+    private readonly debounceMs = VIEWPORT_QUERY_DEBOUNCE_MS,
     private readonly bufferRatio = DEFAULT_BUFFER_RATIO,
     private readonly maxConcurrentQueries = VIEWPORT_QUERY_MAX_CONCURRENCY,
   ) {}

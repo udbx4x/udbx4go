@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoundingBox, SpatialPreview } from '../types'
 import {
+  VIEWPORT_QUERY_DEBOUNCE_MS,
   ViewportQueryCoordinator,
   type ViewportQueryJob,
   type ViewportQueryLayer,
@@ -20,11 +21,12 @@ describe('ViewportQueryCoordinator', () => {
     vi.useRealTimers()
   })
 
-  it('等待 250ms 后使用四周 15% buffer 查询', async () => {
+  it('默认等待 100ms 后使用四周 15% buffer 查询', async () => {
+    expect(VIEWPORT_QUERY_DEBOUNCE_MS).toBe(100)
     const harness = createHarness()
 
     harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
-    await vi.advanceTimersByTimeAsync(249)
+    await vi.advanceTimersByTimeAsync(99)
     expect(harness.loadPreview).not.toHaveBeenCalled()
 
     await vi.advanceTimersByTimeAsync(1)
@@ -80,9 +82,9 @@ describe('ViewportQueryCoordinator', () => {
     const harness = createHarness()
 
     harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
-    await vi.advanceTimersByTimeAsync(200)
+    await vi.advanceTimersByTimeAsync(80)
     harness.coordinator.scheduleViewport(viewportB, [layer('points')], 1)
-    await vi.advanceTimersByTimeAsync(250)
+    await vi.advanceTimersByTimeAsync(100)
 
     expect(harness.loadPreview).toHaveBeenCalledOnce()
     expect(harness.requests[0].job.bounds).toEqual({ minX: 85, minY: 35, maxX: 215, maxY: 165 })
@@ -407,7 +409,7 @@ function createHarness(maxConcurrentQueries = 1): Harness {
     applyError: harness.applyError,
     getFileGeneration: () => result.fileGeneration,
     getLayer: (datasetName) => harness.layers.get(datasetName),
-  }, 250, 0.15, maxConcurrentQueries)
+  }, VIEWPORT_QUERY_DEBOUNCE_MS, 0.15, maxConcurrentQueries)
 
   result.coordinator = coordinator
   return result

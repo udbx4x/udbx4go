@@ -11,7 +11,10 @@ import {
 } from '../../wailsjs/go/main/App'
 import { main } from '../../wailsjs/go/models'
 import { OpenLayersSpatialRendererAdapter } from '../spatial/OpenLayersSpatialRendererAdapter'
-import { ViewportQueryCoordinator } from '../spatial/ViewportQueryCoordinator'
+import {
+  VIEWPORT_QUERY_DEBOUNCE_MS,
+  ViewportQueryCoordinator,
+} from '../spatial/ViewportQueryCoordinator'
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
 import { runBenchmarkScenario as defaultRunBenchmarkScenario } from './runBenchmarkScenario'
 import type {
@@ -209,7 +212,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
       },
       getFileGeneration: () => fileGeneration,
       getLayer: (datasetName) => layerStates.get(datasetName),
-    }, 250, 0.15, config.maxConcurrentQueries)
+    }, VIEWPORT_QUERY_DEBOUNCE_MS, 0.15, config.maxConcurrentQueries)
 
     const handleViewport = (viewport: BoundingBox) => {
       if (stepMeasurement) {

@@ -6,7 +6,7 @@ record_rss_sample() {
   if (( rss_first == 0 )); then
     rss_first="$current_rss"
   fi
-  if (( rss_start == 0 && elapsed_seconds >= 2 )); then
+  if (( rss_start == 0 && elapsed_seconds >= 1 )); then
     rss_start="$current_rss"
   fi
   rss_end="$current_rss"
