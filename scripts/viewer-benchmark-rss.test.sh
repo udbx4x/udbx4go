@@ -6,6 +6,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$script_dir/viewer-benchmark-rss.sh"
 
 peak_rss=0
+rss_first=0
 rss_start=0
 rss_end=0
 
@@ -22,3 +23,13 @@ record_rss_sample 130 3
 record_rss_sample 130 4
 record_rss_sample 125 5
 [[ "$peak_rss" == 130 && "$rss_start" == 120 && "$rss_end" == 125 ]]
+
+# Runs shorter than two seconds use the first valid sample as their baseline.
+peak_rss=0
+rss_first=0
+rss_start=0
+rss_end=0
+record_rss_sample 90 0
+record_rss_sample 100 1
+finalize_rss_samples
+[[ "$peak_rss" == 100 && "$rss_start" == 90 && "$rss_end" == 100 ]]

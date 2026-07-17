@@ -3,11 +3,20 @@
 record_rss_sample() {
   local current_rss="$1" elapsed_seconds="$2"
   [[ "$current_rss" =~ ^[0-9]+$ ]] && (( current_rss > 0 )) || return 0
+  if (( rss_first == 0 )); then
+    rss_first="$current_rss"
+  fi
   if (( rss_start == 0 && elapsed_seconds >= 2 )); then
     rss_start="$current_rss"
   fi
   rss_end="$current_rss"
   if (( current_rss > peak_rss )); then
     peak_rss="$current_rss"
+  fi
+}
+
+finalize_rss_samples() {
+  if (( rss_start == 0 )); then
+    rss_start="$rss_first"
   fi
 }

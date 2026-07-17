@@ -184,7 +184,7 @@ run_iteration() {
       layers:$layers,selection:{datasetName:$datasetName,page:$page,rowIndex:0},viewportSteps:$viewportSteps}}' \
     > "$config_path"
 
-  local peak_rss=0 rss_start=0 rss_end=0 process_exit_code=0 timed_out=false
+  local peak_rss=0 rss_first=0 rss_start=0 rss_end=0 process_exit_code=0 timed_out=false
   local log_path="$suite_dir/${run_id}.log"
   if [[ -n "$mock_fixtures" ]]; then
     start_benchmark_process_group "$log_path" node "$mock_runner" "$config_path"
@@ -232,6 +232,8 @@ run_iteration() {
       "$result_path" > "$result_path.exit-failed"
     mv "$result_path.exit-failed" "$result_path"
   fi
+
+  finalize_rss_samples
 
   local input_sha="$sample_sha" input_size="$sample_size"
   if [[ "$file_path" == "$henan_data" ]]; then input_sha="$henan_sha"; input_size="$henan_size"; fi
