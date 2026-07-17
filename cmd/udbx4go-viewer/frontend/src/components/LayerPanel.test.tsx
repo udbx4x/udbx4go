@@ -157,7 +157,7 @@ describe('LayerPanel', () => {
   })
 
   it.each([
-    ['error', '当前范围加载失败'],
+    ['error', 'backend details'],
     ['degraded', 'point · 0 个预览要素'],
     ['ready', '当前范围 0+ 个对象，请继续放大'],
     ['loading', '加载当前范围'],

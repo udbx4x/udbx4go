@@ -42,7 +42,7 @@ function getLayerColor(layer: MapLayerState): string {
 
 function getLayerStatus(layer: MapLayerState): string {
   if (layer.error || layer.queryStatus === 'error') {
-    return layer.error || '当前范围加载失败'
+    return layer.error || layer.queryError || '当前范围加载失败'
   }
   if (
     layer.queryStatus === 'degraded' &&

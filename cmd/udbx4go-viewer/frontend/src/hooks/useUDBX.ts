@@ -128,9 +128,9 @@ export function useUDBX(options: UseUDBXOptions) {
     coordinatorRef.current?.scheduleViewport(viewport, layers, fileGenerationRef.current)
   }, [])
 
-  const resetFileState = useCallback(() => {
+  const resetFileState = useCallback((fileGeneration?: number) => {
     coordinatorRef.current?.invalidateAll()
-    fileGenerationRef.current += 1
+    fileGenerationRef.current = fileGeneration ?? fileGenerationRef.current + 1
     setSelectedDataset(null)
     setActiveTableDataset(null)
     setPageData(null)
@@ -151,7 +151,7 @@ export function useUDBX(options: UseUDBXOptions) {
       }
 
       const fileInfo: FileInfo = await OpenUDBXFile(path)
-      resetFileState()
+      resetFileState(fileInfo.fileGeneration)
       setCurrentFile(fileInfo.path)
       setDatasets(await ListDatasets())
       setLoading(false)

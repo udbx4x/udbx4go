@@ -139,6 +139,7 @@ export class ViewportQueryCoordinator {
       state.pending = null
     })
     this.layerStates.clear()
+    this.activeJobs = 0
   }
 
   private publishDebouncedViewport(): void {
@@ -214,6 +215,9 @@ export class ViewportQueryCoordinator {
     } finally {
       if (state.inFlight === job) {
         state.inFlight = null
+      }
+      if (this.layerStates.get(job.datasetName) !== state) {
+        return
       }
       this.activeJobs -= 1
       if (state.pending) {

@@ -323,6 +323,29 @@ describe('ViewportQueryCoordinator', () => {
     expect(harness.applyPreview).not.toHaveBeenCalled()
   })
 
+  it('invalidateAll 后旧文件未决请求不占用新文件执行槽', async () => {
+    const harness = createHarness()
+    harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)
+    await vi.advanceTimersByTimeAsync(250)
+    const staleRequest = harness.requests[0]
+
+    harness.coordinator.invalidateAll()
+    harness.fileGeneration = 2
+    harness.coordinator.scheduleViewport(viewportB, [layer('roads')], 2)
+    await vi.advanceTimersByTimeAsync(250)
+
+    expect(harness.loadPreview).toHaveBeenCalledTimes(2)
+    expect(harness.requests[1].job).toMatchObject({
+      datasetName: 'roads',
+      fileGeneration: 2,
+    })
+    expect(harness.coordinator.getMetrics().activeQueries).toBe(1)
+
+    staleRequest.resolve(previewFor(staleRequest.job))
+    await flushPromises()
+    expect(harness.coordinator.getMetrics().activeQueries).toBe(1)
+  })
+
   it('失败不应用 preview，并在最新有效请求上报告错误', async () => {
     const harness = createHarness()
     harness.coordinator.scheduleViewport(viewportA, [layer('points')], 1)

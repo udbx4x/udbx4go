@@ -36,7 +36,7 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
     now: () => ticks.shift() ?? 90,
     openFile: async (path) => {
       calls.push(`open:${path}`)
-      return { path, datasetCount: 1 }
+      return { path, datasetCount: 1, fileGeneration: 1 }
     },
     listDatasets: async () => {
       calls.push('list')

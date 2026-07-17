@@ -129,6 +129,7 @@ export interface SelectedMapFeature {
 export interface FileInfo {
   path: string
   datasetCount: number
+  fileGeneration: number
 }
 
 // Application state

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	udbx4go "github.com/udbx4x/udbx4go"
 )
@@ -45,6 +46,9 @@ const (
 	maxSpatialPreviewFeatureLimit = 10000
 	minSpatialPreviewVertexBudget = 50000
 	maxSpatialPreviewVertexBudget = 10000000
+	// Viewer requests include RTree lookup, geometry decoding, and Wails transfer.
+	// This deadline is independent from the SDK's envelope-cache build budget.
+	viewerSpatialQueryTimeout = 2 * time.Second
 )
 
 func DefaultViewerSettings() ViewerSettingsDTO {

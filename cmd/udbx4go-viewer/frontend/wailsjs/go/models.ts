@@ -299,6 +299,7 @@ export namespace main {
 	export class FileInfo {
 	    path: string;
 	    datasetCount: number;
+	    fileGeneration: number;
 
 	    static createFrom(source: any = {}) {
 	        return new FileInfo(source);
@@ -308,6 +309,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
 	        this.datasetCount = source["datasetCount"];
+	        this.fileGeneration = source["fileGeneration"];
 	    }
 	}
 	export class MapInteractionSettingsDTO {

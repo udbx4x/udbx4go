@@ -118,9 +118,13 @@ describe('useUDBX viewport spatial previews', () => {
     )
   })
 
-  it('切换文件只失效旧查询，保留地图最后视口供新文件图层首查', async () => {
+  it('切换文件使用后端 generation，并保留地图最后视口供新文件图层首查', async () => {
     mocks.OpenFileDialog.mockResolvedValue('/tmp/next.udbx')
-    mocks.OpenUDBXFile.mockResolvedValue({ path: '/tmp/next.udbx', datasetCount: 1 })
+    mocks.OpenUDBXFile.mockResolvedValue({ path: '/tmp/next.udbx', datasetCount: 1, fileGeneration: 3 })
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      queriedBounds: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
+      fileGeneration: 3,
+    }))
     const { result } = renderViewerHook()
     act(() => result.current.queryViewport(viewport))
     await act(async () => {
@@ -137,6 +141,10 @@ describe('useUDBX viewport spatial previews', () => {
         viewport: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
       }),
     )
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'ready',
+      preview: { fileGeneration: 3 },
+    })
   })
 
   it.each(['text', 'cad'])('%s 加层时立即加载有界预览', async (kind) => {
@@ -294,6 +302,23 @@ describe('useUDBX viewport spatial previews', () => {
       queryError: 'query failed',
     })
     expect(result.current.mapLayers[0].preview).toBe(oldPreview)
+  })
+
+  it('查询失败时保留 Wails 字符串错误原因', async () => {
+    const { result } = renderViewerHook()
+    await act(async () => {
+      await result.current.addDatasetToMap('BaseMap_P')
+    })
+    mocks.LoadSpatialPreview.mockRejectedValueOnce('query timeout')
+
+    act(() => result.current.queryViewport(viewport))
+    await act(async () => vi.advanceTimersByTimeAsync(250))
+    await act(flushPromises)
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'error',
+      queryError: 'query timeout',
+    })
   })
 
   it('当前单选生成唯一 requiredIds，并在响应后保留选择供地图高亮', async () => {
@@ -464,7 +489,7 @@ describe('useUDBX viewport spatial previews', () => {
       act(() => result.current.removeMapLayer('BaseMap_P'))
     } else {
       mocks.OpenFileDialog.mockResolvedValue('/tmp/next.udbx')
-      mocks.OpenUDBXFile.mockResolvedValue({ path: '/tmp/next.udbx', datasetCount: 0 })
+      mocks.OpenUDBXFile.mockResolvedValue({ path: '/tmp/next.udbx', datasetCount: 0, fileGeneration: 3 })
       await act(async () => {
         await result.current.openFileDialog()
       })

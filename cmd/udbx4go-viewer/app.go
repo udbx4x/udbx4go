@@ -130,8 +130,9 @@ type FeatureAttributesDTO struct {
 
 // FileInfo represents information about an opened file
 type FileInfo struct {
-	Path         string `json:"path"`
-	DatasetCount int    `json:"datasetCount"`
+	Path           string `json:"path"`
+	DatasetCount   int    `json:"datasetCount"`
+	FileGeneration uint64 `json:"fileGeneration"`
 }
 
 // NewApp creates a new App application struct
@@ -191,11 +192,13 @@ func (a *App) OpenUDBXFile(path string) (*FileInfo, error) {
 	a.dataSourceCancel = dataSourceCancel
 	a.currentPath = path
 	a.fileGeneration++
+	fileGeneration := a.fileGeneration
 	a.dataSourceMu.Unlock()
 
 	return &FileInfo{
-		Path:         path,
-		DatasetCount: len(datasets),
+		Path:           path,
+		DatasetCount:   len(datasets),
+		FileGeneration: fileGeneration,
 	}, nil
 }
 
@@ -847,7 +850,7 @@ func (a *App) spatialQueryContext(base context.Context) (context.Context, contex
 	if base == nil {
 		base = a.applicationContext()
 	}
-	return context.WithTimeout(base, spatialQueryPolicy().BuildTimeout)
+	return context.WithTimeout(base, viewerSpatialQueryTimeout)
 }
 
 // formatFeatures formats feature data for display

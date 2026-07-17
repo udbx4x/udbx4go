@@ -293,6 +293,70 @@ func TestViewerSpatialSummaryAndPreviewUseRendererNeutralContract(t *testing.T) 
 	}
 }
 
+func TestViewerLoadsRealHenanWeiboDeclaredExtentForInitialViewport(t *testing.T) {
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(henanDataPath(t)); err != nil {
+		t.Fatalf("OpenUDBXFile(henan) error = %v", err)
+	}
+	defer app.CloseUDBXFile()
+
+	summary, err := app.GetDatasetSpatialSummary("weibo")
+	if err != nil {
+		t.Fatalf("GetDatasetSpatialSummary(weibo) error = %v", err)
+	}
+	if summary.Extent == nil {
+		t.Fatal("weibo extent = nil")
+	}
+
+	preview, err := app.LoadSpatialPreview("weibo", SpatialPreviewRequestDTO{
+		Viewport:    summary.Extent,
+		Limit:       maxSpatialPreviewFeatureLimit,
+		MaxVertices: DefaultViewerSettings().SpatialPreview.VertexBudget,
+	})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview(weibo declared extent) error = %v", err)
+	}
+	if preview.Strategy != string(types.SpatialQueryStrategyRTree) {
+		t.Fatalf("preview strategy = %q, want rtree", preview.Strategy)
+	}
+	if len(preview.Features) == 0 || len(preview.Features) > maxSpatialPreviewFeatureLimit {
+		t.Fatalf("preview feature count = %d, want 1..%d", len(preview.Features), maxSpatialPreviewFeatureLimit)
+	}
+}
+
+func TestOpenUDBXFileReturnsAuthoritativeFileGeneration(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+
+	first, err := app.OpenUDBXFile(path)
+	if err != nil {
+		t.Fatalf("OpenUDBXFile(first) error = %v", err)
+	}
+	firstPreview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview(first) error = %v", err)
+	}
+	if first.FileGeneration != firstPreview.FileGeneration {
+		t.Fatalf("first file generation = %d, preview generation = %d", first.FileGeneration, firstPreview.FileGeneration)
+	}
+
+	second, err := app.OpenUDBXFile(path)
+	if err != nil {
+		t.Fatalf("OpenUDBXFile(second) error = %v", err)
+	}
+	defer app.CloseUDBXFile()
+	secondPreview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview(second) error = %v", err)
+	}
+	if second.FileGeneration != secondPreview.FileGeneration {
+		t.Fatalf("second file generation = %d, preview generation = %d", second.FileGeneration, secondPreview.FileGeneration)
+	}
+	if second.FileGeneration <= first.FileGeneration {
+		t.Fatalf("second generation = %d, want greater than first %d", second.FileGeneration, first.FileGeneration)
+	}
+}
+
 func TestViewerSpatialPreviewReportsUnsupportedTabularDataset(t *testing.T) {
 	app := NewApp()
 	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
@@ -963,7 +1027,7 @@ func TestViewerSpatialLifecycleCloseCancelsAndWaitsForRealPreview(t *testing.T) 
 	}
 }
 
-func TestViewerSpatialPreviewAllPathsUseTask1Timeout(t *testing.T) {
+func TestViewerSpatialPreviewAllPathsUseViewerRequestTimeout(t *testing.T) {
 	pointPath, _ := createViewerPointFixture(t, false, 0)
 	samplePath := sampleDataPath(t)
 	tests := []struct {
@@ -1002,8 +1066,8 @@ func TestViewerSpatialPreviewAllPathsUseTask1Timeout(t *testing.T) {
 					return fmt.Errorf("preview query context has no deadline")
 				}
 				remaining := time.Until(deadline)
-				if remaining <= 0 || remaining > spatialQueryPolicy().BuildTimeout {
-					return fmt.Errorf("preview query deadline remaining %s is outside Task1 timeout", remaining)
+				if remaining <= spatialQueryPolicy().BuildTimeout || remaining > viewerSpatialQueryTimeout {
+					return fmt.Errorf("preview query deadline remaining %s does not preserve the SDK build budget plus Viewer overhead", remaining)
 				}
 				return nil
 			}
