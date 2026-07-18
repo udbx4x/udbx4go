@@ -725,7 +725,7 @@ func TestViewerSpatialReasonMapsRTreeCacheAndBoundedSampleStates(t *testing.T) {
 		viewport := &BoundingBoxDTO{MinX: 100, MinY: 100, MaxX: 101, MaxY: 101}
 		preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
 			Viewport:    viewport,
-			Limit:       2,
+			Limit:       100,
 			RequiredIDs: []int{3},
 		})
 		if err != nil {
@@ -740,13 +740,36 @@ func TestViewerSpatialReasonMapsRTreeCacheAndBoundedSampleStates(t *testing.T) {
 		if preview.DegradedReason != string(types.SpatialQueryReasonEnvelopeCacheBudgetExceeded) {
 			t.Fatalf("DegradedReason = %q, want envelope_cache_budget_exceeded", preview.DegradedReason)
 		}
-		if !preview.HasMore {
-			t.Fatal("HasMore = false, want true for three ordinary rows with limit two")
+		if preview.HasMore {
+			t.Fatal("HasMore = true, want false for three rows with limit 100")
 		}
 		if preview.QueriedBounds == nil || *preview.QueriedBounds != *viewport {
 			t.Fatalf("QueriedBounds = %+v, want %+v", preview.QueriedBounds, viewport)
 		}
 	})
+}
+
+func TestViewerSpatialBoundedPreviewPreservesMinimumFeatureLimit(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 1_000_000)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+		Viewport:    &BoundingBoxDTO{MinX: 100, MinY: 100, MaxX: 101, MaxY: 101},
+		Limit:       2,
+		RequiredIDs: []int{3},
+	})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview() error = %v", err)
+	}
+	if ids := previewFeatureIDs(preview.Features); !reflect.DeepEqual(ids, []int{1, 2, 3}) {
+		t.Fatalf("feature IDs = %v, want [1 2 3]", ids)
+	}
+	if preview.HasMore {
+		t.Fatal("HasMore = true, want false after clamping viewport limit to 100")
+	}
 }
 
 func TestViewerSpatialReasonTextAndCADIgnoreViewportQuery(t *testing.T) {
@@ -1143,6 +1166,39 @@ func TestViewerSpatialBoundedPreviewUsesListContext(t *testing.T) {
 	}
 	if !lister.contextCalled || lister.legacyCalled {
 		t.Fatalf("ListContext called = %v, List called = %v", lister.contextCalled, lister.legacyCalled)
+	}
+}
+
+func TestViewerSpatialBoundedPreviewLoadsLimitPlusOneAndRequiredIDs(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	dataSource, _, dataSourceContext, release, err := app.acquireDataSource()
+	if err != nil {
+		t.Fatalf("acquireDataSource() error = %v", err)
+	}
+	defer release()
+	_, ds, err := app.getDatasetForPreview(dataSource, "viewer_points")
+	if err != nil {
+		t.Fatalf("getDatasetForPreview() error = %v", err)
+	}
+
+	features, hasMore, err := app.loadBoundedPreviewFeatures(dataSourceContext, ds, 2, []int{3})
+	if err != nil {
+		t.Fatalf("loadBoundedPreviewFeatures() error = %v", err)
+	}
+	ids := make([]int, len(features))
+	for i, feature := range features {
+		ids[i] = feature.ID
+	}
+	if !reflect.DeepEqual(ids, []int{1, 2, 3}) {
+		t.Fatalf("feature IDs = %v, want ordinary [1 2] plus required [3]", ids)
+	}
+	if !hasMore {
+		t.Fatal("hasMore = false, want true for three ordinary rows with limit two")
 	}
 }
 

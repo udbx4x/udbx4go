@@ -471,11 +471,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 	if request.MaxVertices <= 0 {
 		request.MaxVertices = settings.SpatialPreview.VertexBudget
 	}
-	minimumFeatureLimit := minSpatialPreviewFeatureLimit
-	if request.Viewport != nil && supportsViewportSpatialQuery(info.Kind) {
-		minimumFeatureLimit = 1
-	}
-	request.Limit = clampInt(request.Limit, minimumFeatureLimit, maxSpatialPreviewFeatureLimit)
+	request.Limit = clampInt(request.Limit, minSpatialPreviewFeatureLimit, maxSpatialPreviewFeatureLimit)
 	request.MaxVertices = clampInt(request.MaxVertices, minSpatialPreviewVertexBudget, maxSpatialPreviewVertexBudget)
 
 	fields, err := ds.GetFields()
