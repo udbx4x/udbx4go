@@ -66,7 +66,6 @@ func TestSpatialQueryConstantValues(t *testing.T) {
 	}{
 		{SpatialQueryStrategyRTree, "rtree"},
 		{SpatialQueryStrategyEnvelopeCache, "envelope_cache"},
-		{SpatialQueryStrategyBoundedSample, "bounded_sample"},
 	}
 	for _, tt := range strategies {
 		assert.Equal(t, tt.want, string(tt.value))
@@ -176,11 +175,10 @@ func TestSpatialQueryPolicyDefaultAndValidate(t *testing.T) {
 func TestSpatialQueryResultAndCapabilityFields(t *testing.T) {
 	feature := &Feature{ID: 1}
 	result := SpatialQueryResult{
-		Features:       []*Feature{feature},
-		QueriedBounds:  BoundingBox{MinX: 1, MinY: 2, MaxX: 3, MaxY: 4},
-		Strategy:       SpatialQueryStrategyEnvelopeCache,
-		HasMore:        true,
-		DegradedReason: SpatialQueryReasonSpatialIndexUnavailable,
+		Features:      []*Feature{feature},
+		QueriedBounds: BoundingBox{MinX: 1, MinY: 2, MaxX: 3, MaxY: 4},
+		Strategy:      SpatialQueryStrategyEnvelopeCache,
+		HasMore:       true,
 	}
 	assert.Same(t, feature, result.Features[0])
 	assert.True(t, result.HasMore)

@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	pageSize                   = 100
-	defaultSpatialPreviewLimit = 1000
-	defaultSpatialVertexBudget = 1000000
+	pageSize                            = 100
+	defaultSpatialPreviewLimit          = 1000
+	defaultSpatialVertexBudget          = 1000000
+	spatialPreviewStrategyBoundedSample = "bounded_sample"
 )
 
 // App struct
@@ -470,7 +471,11 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 	if request.MaxVertices <= 0 {
 		request.MaxVertices = settings.SpatialPreview.VertexBudget
 	}
-	request.Limit = clampInt(request.Limit, minSpatialPreviewFeatureLimit, maxSpatialPreviewFeatureLimit)
+	minimumFeatureLimit := minSpatialPreviewFeatureLimit
+	if request.Viewport != nil && supportsViewportSpatialQuery(info.Kind) {
+		minimumFeatureLimit = 1
+	}
+	request.Limit = clampInt(request.Limit, minimumFeatureLimit, maxSpatialPreviewFeatureLimit)
 	request.MaxVertices = clampInt(request.MaxVertices, minSpatialPreviewVertexBudget, maxSpatialPreviewVertexBudget)
 
 	fields, err := ds.GetFields()
@@ -488,9 +493,9 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 	var (
 		features       []*types.Feature
 		queriedBounds  *BoundingBoxDTO
-		strategy       = types.SpatialQueryStrategyBoundedSample
+		strategy       = spatialPreviewStrategyBoundedSample
 		hasMore        bool
-		degradedReason types.SpatialQueryReason
+		degradedReason string
 	)
 	queryStarted := time.Now()
 	if supportsViewportSpatialQuery(info.Kind) && request.Viewport != nil {
@@ -500,21 +505,40 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 			RequiredIDs: request.RequiredIDs,
 		})
 		if queryErr != nil {
-			return nil, queryErr
+			reason, ok := udbxerrors.SpatialQueryReasonOf(queryErr)
+			if !ok || reason != types.SpatialQueryReasonEnvelopeCacheBudgetExceeded {
+				return nil, queryErr
+			}
+			features, hasMore, err = a.loadBoundedPreviewFeatures(
+				queryContext,
+				ds,
+				request.Limit,
+				request.RequiredIDs,
+			)
+			if err != nil {
+				return nil, err
+			}
+			requestedBounds := request.Viewport.spatialBoundingBox()
+			queriedBounds = boundingBoxDTO(&requestedBounds)
+			degradedReason = string(reason)
+		} else {
+			features = queryResult.Features
+			queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
+			strategy = string(queryResult.Strategy)
+			hasMore = queryResult.HasMore
 		}
-		features = queryResult.Features
-		queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
-		strategy = queryResult.Strategy
-		hasMore = queryResult.HasMore
-		degradedReason = queryResult.DegradedReason
 	} else {
-		features, err = a.listPreviewFeatures(queryContext, ds, &types.QueryOptions{Limit: request.Limit})
+		features, hasMore, err = a.loadBoundedPreviewFeatures(
+			queryContext,
+			ds,
+			request.Limit,
+			request.RequiredIDs,
+		)
 		if err != nil {
 			return nil, err
 		}
-		hasMore = info.ObjectCount > len(features) && len(features) >= request.Limit
 		if !supportsViewportSpatialQuery(info.Kind) {
-			degradedReason = types.SpatialQueryReasonUnsupportedDatasetKind
+			degradedReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
 		}
 	}
 	queryDurationMS := float64(time.Since(queryStarted).Nanoseconds()) / float64(time.Millisecond)
@@ -531,9 +555,9 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		SRID:            info.SRID,
 		Features:        previewFeatures,
 		QueriedBounds:   queriedBounds,
-		Strategy:        string(strategy),
+		Strategy:        strategy,
 		HasMore:         hasMore,
-		DegradedReason:  string(degradedReason),
+		DegradedReason:  degradedReason,
 		QueryDurationMS: queryDurationMS,
 		FileGeneration:  generation,
 	}
@@ -674,6 +698,34 @@ func (a *App) listPreviewFeatures(ctx context.Context, ds interface{}, opts *typ
 		return vectorDs.ListContext(ctx, opts)
 	}
 	return nil, fmt.Errorf("数据集不支持空间要素读取")
+}
+
+func (a *App) loadBoundedPreviewFeatures(
+	ctx context.Context,
+	ds interface{},
+	limit int,
+	requiredIDs []int,
+) ([]*types.Feature, bool, error) {
+	features, err := a.listPreviewFeatures(ctx, ds, &types.QueryOptions{Limit: limit + 1})
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(features) > limit
+	if hasMore {
+		features = features[:limit]
+	}
+	if len(requiredIDs) == 0 {
+		return features, hasMore, nil
+	}
+
+	required, err := a.listPreviewFeatures(ctx, ds, &types.QueryOptions{
+		IDs:   requiredIDs,
+		Limit: len(requiredIDs),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return append(features, required...), hasMore, nil
 }
 
 func (a *App) formatPreviewFeatures(

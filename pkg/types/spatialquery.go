@@ -40,10 +40,9 @@ type SpatialQueryStrategy string
 const (
 	SpatialQueryStrategyRTree         SpatialQueryStrategy = "rtree"
 	SpatialQueryStrategyEnvelopeCache SpatialQueryStrategy = "envelope_cache"
-	SpatialQueryStrategyBoundedSample SpatialQueryStrategy = "bounded_sample"
 )
 
-// SpatialQueryReason explains why a spatial query failed or degraded.
+// SpatialQueryReason explains why a spatial query failed.
 type SpatialQueryReason string
 
 const (
@@ -111,11 +110,10 @@ func (o SpatialQueryOptions) Normalize() (SpatialQueryOptions, error) {
 
 // SpatialQueryResult contains features and execution facts for a spatial query.
 type SpatialQueryResult struct {
-	Features       []*Feature
-	QueriedBounds  BoundingBox
-	Strategy       SpatialQueryStrategy
-	HasMore        bool
-	DegradedReason SpatialQueryReason
+	Features      []*Feature
+	QueriedBounds BoundingBox
+	Strategy      SpatialQueryStrategy
+	HasMore       bool
 }
 
 // SpatialQueryPolicy limits spatial-query fallback resource usage. Its zero

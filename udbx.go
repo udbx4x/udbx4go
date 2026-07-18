@@ -146,7 +146,7 @@ type (
 	// SpatialQueryStrategy identifies how a spatial query was executed.
 	SpatialQueryStrategy = types.SpatialQueryStrategy
 
-	// SpatialQueryReason explains why a spatial query failed or degraded.
+	// SpatialQueryReason explains why a spatial query failed.
 	SpatialQueryReason = types.SpatialQueryReason
 
 	// SpatialQueryOptions provides options for a viewport spatial query.
@@ -182,7 +182,6 @@ const (
 const (
 	SpatialQueryStrategyRTree         = types.SpatialQueryStrategyRTree
 	SpatialQueryStrategyEnvelopeCache = types.SpatialQueryStrategyEnvelopeCache
-	SpatialQueryStrategyBoundedSample = types.SpatialQueryStrategyBoundedSample
 )
 
 // SpatialQueryReason constants.

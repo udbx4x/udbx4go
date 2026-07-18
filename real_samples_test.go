@@ -114,15 +114,8 @@ func TestRealHenanCountySpatialQueryUsesFallbackWithoutRTree(t *testing.T) {
 
 	result, err := ds.QuerySpatial(ctx, "县级行政区划", SpatialQueryOptions{Bounds: bounds, Limit: 100})
 	require.NoError(t, err)
-	switch result.Strategy {
-	case SpatialQueryStrategyEnvelopeCache:
-		assert.Empty(t, result.DegradedReason)
-		assertOrdinaryFeaturesIntersect(t, result.Features, bounds)
-	case SpatialQueryStrategyBoundedSample:
-		assert.Equal(t, SpatialQueryReasonEnvelopeCacheBudgetExceeded, result.DegradedReason)
-	default:
-		t.Fatalf("unexpected county spatial query strategy: %s", result.Strategy)
-	}
+	assert.Equal(t, SpatialQueryStrategyEnvelopeCache, result.Strategy)
+	assertOrdinaryFeaturesIntersect(t, result.Features, bounds)
 }
 
 func TestRealHenanRoadSpatialQueryUsesRTreeWithChinesePhysicalTable(t *testing.T) {

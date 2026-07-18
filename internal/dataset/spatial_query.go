@@ -12,7 +12,7 @@ import (
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
-// Query executes the RTree, envelope-cache, or bounded-sample spatial-query path.
+// Query executes the RTree or envelope-cache spatial-query path.
 func (q *SpatialQuerier) Query(ctx context.Context, options types.SpatialQueryOptions) (*types.SpatialQueryResult, error) {
 	return q.QueryWithEnvelopeCache(ctx, options, nil)
 }
@@ -55,13 +55,12 @@ func (q *SpatialQuerier) QueryWithEnvelopeCache(
 	}
 
 	strategy := types.SpatialQueryStrategyRTree
-	degradedReason := types.SpatialQueryReason("")
 	var candidateIDs []int
 	var hasMore bool
 	if detected.Capability.RTreeAvailable {
 		candidateIDs, hasMore, err = q.queryRTreeCandidateIDs(ctx, detected, normalized)
 	} else {
-		candidateIDs, hasMore, strategy, degradedReason, err = q.queryFallbackCandidateIDs(ctx, detected, normalized, manager)
+		candidateIDs, hasMore, strategy, err = q.queryFallbackCandidateIDs(ctx, detected, normalized, manager)
 	}
 	if err != nil {
 		return nil, mapSpatialQueryExecutionError(ctx, err)
@@ -89,11 +88,10 @@ func (q *SpatialQuerier) QueryWithEnvelopeCache(
 	}
 
 	return &types.SpatialQueryResult{
-		Features:       features,
-		QueriedBounds:  normalized.Bounds,
-		Strategy:       strategy,
-		HasMore:        hasMore,
-		DegradedReason: degradedReason,
+		Features:      features,
+		QueriedBounds: normalized.Bounds,
+		Strategy:      strategy,
+		HasMore:       hasMore,
 	}, nil
 }
 
@@ -102,12 +100,12 @@ func (q *SpatialQuerier) queryFallbackCandidateIDs(
 	detected *detectedSpatialCapability,
 	options types.SpatialQueryOptions,
 	manager *EnvelopeCacheManager,
-) ([]int, bool, types.SpatialQueryStrategy, types.SpatialQueryReason, error) {
+) ([]int, bool, types.SpatialQueryStrategy, error) {
 	if manager == nil {
 		var err error
 		manager, err = NewEnvelopeCacheManager(types.DefaultSpatialQueryPolicy())
 		if err != nil {
-			return nil, false, "", "", err
+			return nil, false, "", err
 		}
 		defer manager.Close()
 	}
@@ -121,21 +119,16 @@ func (q *SpatialQuerier) queryFallbackCandidateIDs(
 	})
 	if err != nil {
 		if stderrors.Is(err, errEnvelopeCacheBudgetExceeded) {
-			ids, sampleErr := q.queryBoundedSampleIDs(ctx, detected.IDColumn, options.Limit)
-			if sampleErr != nil {
-				return nil, false, "", "", sampleErr
-			}
-			return ids,
-				q.info.ObjectCount > options.Limit,
-				types.SpatialQueryStrategyBoundedSample,
+			return nil, false, "", spatialQueryFailure(
 				types.SpatialQueryReasonEnvelopeCacheBudgetExceeded,
-				nil
+				udbxerrors.ConstraintError("spatial query envelope cache exceeds the configured resource budget", err),
+			)
 		}
-		return nil, false, "", "", err
+		return nil, false, "", err
 	}
 
 	ids, hasMore, err := cache.CandidateIDs(options.Bounds, options.Limit)
-	return ids, hasMore, types.SpatialQueryStrategyEnvelopeCache, "", err
+	return ids, hasMore, types.SpatialQueryStrategyEnvelopeCache, err
 }
 
 func (q *SpatialQuerier) detectEnvelopeColumns(ctx context.Context) (string, string, error) {
@@ -257,51 +250,6 @@ func spatialEnvelopeID(value interface{}) (int64, error) {
 		return 0, udbxerrors.FormatError("envelope cache feature ID must be positive")
 	}
 	return id, nil
-}
-
-func (q *SpatialQuerier) queryBoundedSampleIDs(ctx context.Context, idColumn string, limit int) ([]int, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	quotedTable, err := sqliteutil.QuoteIdentifier(q.info.TableName)
-	if err != nil {
-		return nil, udbxerrors.IOError("failed to quote dataset table name", err)
-	}
-	quotedID, err := sqliteutil.QuoteIdentifier(idColumn)
-	if err != nil {
-		return nil, udbxerrors.IOError("failed to quote feature ID column", err)
-	}
-	rows, err := q.db.QueryContext(ctx, "SELECT "+quotedID+" FROM "+quotedTable+" ORDER BY "+quotedID+" LIMIT ?", limit)
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, udbxerrors.IOError("failed to query bounded spatial sample", err)
-	}
-	defer rows.Close()
-
-	ids := make([]int, 0, initialCandidateCapacity(limit))
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, udbxerrors.FormatError("bounded sample feature ID is not an integer", err)
-		}
-		converted := int(id)
-		if converted <= 0 || int64(converted) != id {
-			return nil, udbxerrors.FormatError("bounded sample feature ID is outside the supported integer range")
-		}
-		ids = append(ids, converted)
-	}
-	if err := rows.Err(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, udbxerrors.IOError("error iterating bounded spatial sample", err)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, udbxerrors.IOError("failed to close bounded spatial sample rows", err)
-	}
-	return ids, nil
 }
 
 func mapSpatialQueryExecutionError(ctx context.Context, err error) error {

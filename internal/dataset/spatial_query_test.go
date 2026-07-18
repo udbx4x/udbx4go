@@ -37,7 +37,6 @@ func TestSpatialQueryRTreeUsesPhysicalRowIDAndStableFeatureID(t *testing.T) {
 	assert.Equal(t, types.SpatialQueryStrategyRTree, result.Strategy)
 	assert.Equal(t, types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10}, result.QueriedBounds)
 	assert.True(t, result.HasMore)
-	assert.Empty(t, result.DegradedReason)
 }
 
 func TestSpatialQueryRTreeIncludesBoundaryContacts(t *testing.T) {
@@ -229,7 +228,6 @@ func TestSpatialQueryEnvelopeCacheFiltersWithoutDecodingUnmatchedGeometry(t *tes
 	assert.Equal(t, []int{1, 2, 99, 50}, spatialFeatureIDs(result.Features))
 	assert.Equal(t, types.SpatialQueryStrategyEnvelopeCache, result.Strategy)
 	assert.True(t, result.HasMore)
-	assert.Empty(t, result.DegradedReason)
 	assert.Equal(t, 1, manager.EntryCount())
 
 	again, err := querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
@@ -260,28 +258,28 @@ func TestSpatialQueryAcceptsCaseDifferencesInSQLiteSpatialMetadata(t *testing.T)
 	assert.Equal(t, types.SpatialQueryStrategyRTree, result.Strategy)
 }
 
-func TestSpatialQueryBoundedSampleOnlyOnEnvelopeBudgetRejection(t *testing.T) {
+func TestSpatialQueryEnvelopeCacheBudgetRejectionReturnsError(t *testing.T) {
 	db, querier := createSpatialQueryFixture(t, "points", "FeatureID", "Geometry")
 	defer db.Close()
-	insertSpatialPoint(t, db, querier, 30, 30, 30, "thirty", nil)
 	insertSpatialPoint(t, db, querier, 10, 10, 10, "ten", nil)
 	insertSpatialPoint(t, db, querier, 20, 20, 20, "twenty", nil)
+	insertSpatialPoint(t, db, querier, 30, 30, 30, "thirty", nil)
 	insertSpatialPoint(t, db, querier, 99, 99, 99, "required", nil)
 	removeSpatialRTree(t, db, querier)
 	setSpatialObjectCount(querier, 4)
 	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 3), testEnvelopeCacheRSSCharge(t, 6))
 
 	result, err := querier.QueryWithEnvelopeCache(context.Background(), types.SpatialQueryOptions{
-		Bounds:      types.BoundingBox{MinX: -100, MinY: -100, MaxX: -50, MaxY: -50},
+		Bounds:      types.BoundingBox{MinX: 100, MinY: 100, MaxX: 101, MaxY: 101},
 		Limit:       2,
-		RequiredIDs: []int{99, 30, 99},
+		RequiredIDs: []int{99},
 	}, manager)
 
-	require.NoError(t, err)
-	assert.Equal(t, []int{10, 20, 99, 30}, spatialFeatureIDs(result.Features))
-	assert.Equal(t, types.SpatialQueryStrategyBoundedSample, result.Strategy)
-	assert.Equal(t, types.SpatialQueryReasonEnvelopeCacheBudgetExceeded, result.DegradedReason)
-	assert.True(t, result.HasMore, "hasMore describes the ordinary objectCount/limit sample only")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	reason, ok := udbxerrors.SpatialQueryReasonOf(err)
+	require.True(t, ok)
+	assert.Equal(t, types.SpatialQueryReasonEnvelopeCacheBudgetExceeded, reason)
 	assert.Zero(t, manager.EntryCount())
 }
 

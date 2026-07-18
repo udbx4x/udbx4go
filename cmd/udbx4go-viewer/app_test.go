@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -721,21 +722,29 @@ func TestViewerSpatialReasonMapsRTreeCacheAndBoundedSampleStates(t *testing.T) {
 		if _, err := app.OpenUDBXFile(path); err != nil {
 			t.Fatalf("OpenUDBXFile() error = %v", err)
 		}
+		viewport := &BoundingBoxDTO{MinX: 100, MinY: 100, MaxX: 101, MaxY: 101}
 		preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
-			Viewport: &BoundingBoxDTO{MinX: 0, MinY: 0, MaxX: 5, MaxY: 5},
-			Limit:    100,
+			Viewport:    viewport,
+			Limit:       2,
+			RequiredIDs: []int{3},
 		})
 		if err != nil {
 			t.Fatalf("LoadSpatialPreview() error = %v", err)
 		}
-		if preview.Strategy != string(types.SpatialQueryStrategyBoundedSample) {
+		if ids := previewFeatureIDs(preview.Features); !reflect.DeepEqual(ids, []int{1, 2, 3}) {
+			t.Fatalf("feature IDs = %v, want [1 2 3]", ids)
+		}
+		if preview.Strategy != "bounded_sample" {
 			t.Fatalf("Strategy = %q, want bounded_sample", preview.Strategy)
 		}
 		if preview.DegradedReason != string(types.SpatialQueryReasonEnvelopeCacheBudgetExceeded) {
 			t.Fatalf("DegradedReason = %q, want envelope_cache_budget_exceeded", preview.DegradedReason)
 		}
 		if !preview.HasMore {
-			t.Fatal("HasMore = false, want SDK bounded sample result")
+			t.Fatal("HasMore = false, want true for three ordinary rows with limit two")
+		}
+		if preview.QueriedBounds == nil || *preview.QueriedBounds != *viewport {
+			t.Fatalf("QueriedBounds = %+v, want %+v", preview.QueriedBounds, viewport)
 		}
 	})
 }
@@ -770,7 +779,7 @@ func TestViewerSpatialReasonTextAndCADIgnoreViewportQuery(t *testing.T) {
 			if preview.QueriedBounds != nil {
 				t.Fatalf("QueriedBounds = %+v, want nil for ignored viewport", preview.QueriedBounds)
 			}
-			if preview.Strategy != string(types.SpatialQueryStrategyBoundedSample) {
+			if preview.Strategy != "bounded_sample" {
 				t.Fatalf("Strategy = %q, want bounded_sample", preview.Strategy)
 			}
 			if preview.DegradedReason != string(types.SpatialQueryReasonUnsupportedDatasetKind) {
