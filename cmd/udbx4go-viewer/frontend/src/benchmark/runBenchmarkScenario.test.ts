@@ -109,6 +109,17 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
         featureIDs: [101],
       }
     },
+    runStaleViewportProbe: async (first, latest, requiredIDs) => {
+      calls.push(`stale:${first.bounds.minX}:${latest.bounds.minX}:${requiredIDs.join(',')}:${first.hideLayers || latest.hideLayers ? 'action' : 'plain'}`)
+      return {
+        backendQueryMs: [13, 7],
+        moveendToRenderMs: 31,
+        finalFeatureCount: 23,
+        blankRender: false,
+        strategies: [latest.expectedStrategy],
+        featureIDs: [101],
+      }
+    },
     getCoordinatorMetrics: () => {
       calls.push('metrics')
       return {
@@ -157,18 +168,19 @@ describe('runBenchmarkScenario', () => {
       'viewport:envelope_cache:101:plain',
       'viewport:envelope_cache:101:action',
       'viewport:envelope_cache:101:plain',
+      'stale:110.3:113:101:plain',
       'metrics',
     ])
     expect(result.status).toBe('passed')
-    expect(result.metrics.backendQueryMs).toEqual([8, 8])
-    expect(result.metrics.moveendToRenderMs).toEqual([24, 24])
+    expect(result.metrics.backendQueryMs).toEqual([8, 8, 13, 7])
+    expect(result.metrics.moveendToRenderMs).toEqual([24, 24, 31])
     expect(result.metrics).toMatchObject({
       maxConcurrentQueries: 2,
       pendingPeak: 1,
       pendingFinal: 0,
       staleResultsDiscarded: 1,
       staleResultApplied: false,
-      finalFeatureCount: 164,
+      finalFeatureCount: 23,
       blankRenderCount: 0,
     })
   })
@@ -189,12 +201,45 @@ describe('runBenchmarkScenario', () => {
       'attributes:县级行政区划:101',
       'viewport:envelope_cache::action',
       'viewport:envelope_cache::plain',
+      'stale:110.3:113::plain',
       'metrics',
       'viewport:envelope_cache:101:plain:112:polygon',
       'setSelection:县级行政区划:101',
     ])
-    expect(result.metrics.backendQueryMs).toEqual([8, 8])
-    expect(result.metrics.moveendToRenderMs).toEqual([24, 24])
+    expect(result.metrics.backendQueryMs).toEqual([8, 8, 13, 7])
+    expect(result.metrics.moveendToRenderMs).toEqual([24, 24, 31])
+  })
+
+  it('真实 stale probe 未丢弃旧结果时拒绝通过', async () => {
+    const dependencies = createDependencies([])
+    dependencies.getCoordinatorMetrics = () => ({
+      maxConcurrentQueries: 1,
+      pendingPeak: 1,
+      activeQueries: 0,
+      pendingQueries: 0,
+      staleResultsDiscarded: 0,
+      staleResultApplied: false,
+    })
+
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
+      'stale viewport probe did not discard an obsolete result',
+    )
+  })
+
+  it('stale probe 必须返回 latest 策略证据', async () => {
+    const dependencies = createDependencies([])
+    dependencies.runStaleViewportProbe = async () => ({
+      backendQueryMs: [1, 1],
+      moveendToRenderMs: 2,
+      finalFeatureCount: 1,
+      blankRender: false,
+      strategies: ['bounded_sample'],
+      featureIDs: [101],
+    })
+
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
+      'stale viewport probe: expected strategy envelope_cache, received bounded_sample',
+    )
   })
 
   it('策略不匹配时拒绝通过', async () => {

@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BenchmarkRunner } from './BenchmarkRunner'
 import type { BenchmarkConfig, BenchmarkResult } from './types'
 import { LoadSpatialPreview, OpenUDBXFile } from '../../wailsjs/go/main/App'
@@ -26,6 +26,28 @@ vi.mock('../../wailsjs/go/main/App', () => ({
     fileGeneration: 1,
   })),
 }))
+
+afterEach(() => {
+  vi.mocked(OpenUDBXFile).mockReset()
+  vi.mocked(OpenUDBXFile).mockImplementation(async (path: string) => new main.FileInfo({
+    path,
+    datasetCount: 1,
+    fileGeneration: 1,
+  }))
+  vi.mocked(LoadSpatialPreview).mockReset()
+  vi.mocked(LoadSpatialPreview).mockImplementation(async (datasetName, request) => new main.SpatialPreviewDTO({
+    datasetName,
+    kind: 'point',
+    features: [{ id: 7, geometry: { type: 'Point', coordinates: [1, 2], hasZ: false } }],
+    estimatedVertexCount: 1,
+    sampled: false,
+    queriedBounds: request.viewport,
+    strategy: 'rtree',
+    hasMore: false,
+    queryDurationMs: 9,
+    fileGeneration: 1,
+  }))
+})
 
 const config: BenchmarkConfig = {
   runId: 'sampledata-01',
@@ -217,6 +239,121 @@ describe('BenchmarkRunner', () => {
     expect(adapter.hasFeature).toHaveBeenCalledWith('BaseMap_P', 7)
     expect(adapter.fitBounds).toHaveBeenCalledWith(config.scenario.viewportSteps[0].bounds, 'point')
     expect(adapter.waitForRenderComplete).toHaveBeenCalledTimes(1)
+  })
+
+  it('stale probe 在 latest 调度后释放真实 first 响应并只应用 latest', async () => {
+    const adapter = createAdapter()
+    const firstResponse = createDeferred<main.SpatialPreviewDTO>()
+    const latestResponse = createDeferred<main.SpatialPreviewDTO>()
+    const first = {
+      bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 },
+      expectedStrategy: 'rtree' as const,
+    }
+    const latest = {
+      bounds: { minX: 20, minY: 20, maxX: 30, maxY: 30 },
+      expectedStrategy: 'rtree' as const,
+    }
+    vi.mocked(LoadSpatialPreview).mockClear()
+    vi.mocked(LoadSpatialPreview)
+      .mockImplementationOnce(() => firstResponse.promise)
+      .mockImplementationOnce(() => latestResponse.promise)
+    let probeResult: unknown
+    let coordinatorMetrics: ReturnType<Parameters<NonNullable<Parameters<typeof BenchmarkRunner>[0]['runScenario']>>[1]['getCoordinatorMetrics']> | undefined
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      dependencies.setLayer(queryablePointLayer())
+      probeResult = await dependencies.runStaleViewportProbe(first, latest, [7])
+      coordinatorMetrics = dependencies.getCoordinatorMetrics()
+      return passedResult
+    })
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={() => adapter}
+        runScenario={runScenario}
+        saveResult={saveResult}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledTimes(1))
+    expect(saveResult).not.toHaveBeenCalled()
+    const firstRequest = vi.mocked(LoadSpatialPreview).mock.calls[0][1]
+    firstResponse.resolve(spatialPreview(firstRequest.viewport!, 17))
+
+    await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledTimes(2))
+    expect(adapter.setLayer).not.toHaveBeenCalledWith(expect.objectContaining({
+      preview: expect.objectContaining({ queriedBounds: firstRequest.viewport }),
+    }))
+    expect(saveResult).not.toHaveBeenCalled()
+    const latestRequest = vi.mocked(LoadSpatialPreview).mock.calls[1][1]
+    latestResponse.resolve(spatialPreview(latestRequest.viewport!, 23))
+
+    await waitFor(() => expect(saveResult).toHaveBeenCalledWith(passedResult))
+    expect(probeResult).toMatchObject({
+      backendQueryMs: [17, 23],
+      finalFeatureCount: 1,
+      blankRender: false,
+      strategies: ['rtree'],
+      featureIDs: [7],
+    })
+    expect(coordinatorMetrics).toMatchObject({
+      staleResultsDiscarded: 1,
+      staleResultApplied: false,
+      activeQueries: 0,
+      pendingQueries: 0,
+    })
+    expect(latestRequest.viewport).toEqual({ minX: 18.5, minY: 18.5, maxX: 31.5, maxY: 31.5 })
+    expect(adapter.setLayer).toHaveBeenLastCalledWith(expect.objectContaining({
+      preview: expect.objectContaining({ queriedBounds: latestRequest.viewport }),
+      lastQueriedBounds: latestRequest.viewport,
+    }))
+    expect(adapter.waitForRenderComplete).toHaveBeenCalledTimes(1)
+  })
+
+  it('卸载时拒绝并释放正在暂缓 first 响应的 stale probe', async () => {
+    const firstResponse = createDeferred<main.SpatialPreviewDTO>()
+    vi.mocked(LoadSpatialPreview).mockClear()
+    vi.mocked(LoadSpatialPreview).mockImplementationOnce(() => firstResponse.promise)
+    let probeError: unknown
+    const probeSettled = createDeferred<void>()
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      dependencies.setLayer(queryablePointLayer())
+      try {
+        await dependencies.runStaleViewportProbe(
+          { bounds: { minX: 0, minY: 0, maxX: 10, maxY: 10 }, expectedStrategy: 'rtree' },
+          { bounds: { minX: 20, minY: 20, maxX: 30, maxY: 30 }, expectedStrategy: 'rtree' },
+          [],
+        )
+      } catch (error) {
+        probeError = error
+      } finally {
+        probeSettled.resolve()
+      }
+      return passedResult
+    })
+
+    const view = render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={createAdapter}
+        runScenario={runScenario}
+        saveResult={vi.fn().mockResolvedValue(undefined)}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledTimes(1))
+    const firstRequest = vi.mocked(LoadSpatialPreview).mock.calls[0][1]
+    firstResponse.resolve(spatialPreview(firstRequest.viewport!, 17))
+    await Promise.resolve()
+    view.unmount()
+
+    await expect(probeSettled.promise).resolves.toBeUndefined()
+    expect(probeError).toEqual(new Error('benchmark runner unmounted'))
   })
 
   it('并发为 1 时等待所有可查询空间层完成本轮请求范围', async () => {
@@ -437,4 +574,31 @@ function createDeferred<T>() {
     reject = rejectPromise
   })
   return { promise, resolve, reject }
+}
+
+function queryablePointLayer() {
+  return {
+    datasetName: 'BaseMap_P', kind: 'point', visible: true, style: {} as never,
+    loading: false, error: null,
+    summary: {
+      datasetName: 'BaseMap_P', kind: 'point', objectCount: 1, estimatedVertexCount: 1,
+      previewSupported: true, viewportQuerySupported: true, rtreeAvailable: true,
+    },
+    preview: null, queryStatus: 'idle' as const, queryError: null,
+  }
+}
+
+function spatialPreview(bounds: main.BoundingBoxDTO, queryDurationMs: number) {
+  return new main.SpatialPreviewDTO({
+    datasetName: 'BaseMap_P',
+    kind: 'point',
+    features: [{ id: 7, geometry: { type: 'Point', coordinates: [1, 2], hasZ: false } }],
+    estimatedVertexCount: 1,
+    sampled: false,
+    queriedBounds: bounds,
+    strategy: 'rtree',
+    hasMore: false,
+    queryDurationMs,
+    fileGeneration: 1,
+  })
 }

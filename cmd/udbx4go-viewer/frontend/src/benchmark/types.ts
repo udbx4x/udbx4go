@@ -106,6 +106,11 @@ export interface BenchmarkDependencies {
   fitAllVisibleLayers: () => void
   setSelection: (selection: SelectedMapFeature) => Promise<boolean>
   runViewportStep: (step: BenchmarkViewportStep, requiredIDs: number[]) => Promise<BenchmarkViewportResult>
+  runStaleViewportProbe: (
+    first: BenchmarkViewportStep,
+    latest: BenchmarkViewportStep,
+    requiredIDs: number[],
+  ) => Promise<BenchmarkViewportResult>
   getCoordinatorMetrics: () => BenchmarkCoordinatorMetrics
   resetCoordinatorMetrics?: () => void
 }

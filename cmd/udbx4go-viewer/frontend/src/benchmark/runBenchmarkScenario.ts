@@ -127,7 +127,30 @@ export async function runBenchmarkScenario(
       blankRenderCount += 1
     }
   }
+  const firstViewportStep = withoutLayerActions(config.scenario.viewportSteps[0])
+  const latestViewportStep = withoutLayerActions(
+    config.scenario.viewportSteps[config.scenario.viewportSteps.length - 1],
+  )
+  const staleProbeResult = await dependencies.runStaleViewportProbe(
+    firstViewportStep,
+    latestViewportStep,
+    config.temperature === 'warm' ? [featureID] : [],
+  )
+  assertExpectedStrategies(
+    'stale viewport probe',
+    latestViewportStep.expectedStrategy,
+    staleProbeResult.strategies,
+  )
+  backendQueryMs.push(...staleProbeResult.backendQueryMs)
+  moveendToRenderMs.push(staleProbeResult.moveendToRenderMs)
+  finalFeatureCount = staleProbeResult.finalFeatureCount
+  if (staleProbeResult.blankRender) {
+    blankRenderCount += 1
+  }
   const coordinatorMetrics = dependencies.getCoordinatorMetrics()
+  if (coordinatorMetrics.staleResultsDiscarded < 1) {
+    throw new Error('stale viewport probe did not discard an obsolete result')
+  }
   if (config.temperature === 'cold') {
     selectAndFitMs += await validateSelection()
   }
@@ -154,6 +177,11 @@ export async function runBenchmarkScenario(
     },
     error: '',
   }
+}
+
+function withoutLayerActions(step: BenchmarkConfig['scenario']['viewportSteps'][number]) {
+  const { hideLayers: _hide, showLayers: _show, removeLayers: _remove, ...probeStep } = step
+  return probeStep
 }
 
 function assertExpectedStrategies(

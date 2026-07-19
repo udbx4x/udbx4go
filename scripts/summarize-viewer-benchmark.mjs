@@ -12,9 +12,9 @@ const requiredScenarios = [
 const scalarMetricNames = ['openFileMs', 'loadLayersMs', 'fitVisibleLayersMs', 'selectAndFitMs']
 const maxRssGrowthKiB = 64 * 1024
 const expectedViewportStepCounts = new Map([
-  ['henan-weibo-rtree-pan-zoom', 8],
-  ['henan-county-envelope-selection', 3],
-  ['sampledata-multilayer-viewport', 4],
+  ['henan-weibo-rtree-pan-zoom', 9],
+  ['henan-county-envelope-selection', 4],
+  ['sampledata-multilayer-viewport', 5],
 ])
 
 function percentile(values, fraction) {
@@ -205,6 +205,7 @@ export function summarizeRuns(runs) {
     const coldRuns = scenarioRuns.filter((run) => run.temperature === 'cold')
     const warmRuns = scenarioRuns.filter((run) => run.temperature === 'warm')
     const staleApplied = scenarioRuns.some((run) => Boolean(run.metrics.staleResultApplied))
+    const observedStaleDiscard = scenarioRuns.every((run) => run.metrics.staleResultsDiscarded >= 1)
     const blankRendered = scenarioRuns.some((run) => Number(run.metrics.blankRenderCount) > 0)
     const pendingDrained = scenarioRuns.every((run) => Number(run.metrics.pendingFinal) === 0)
     const noSustainedRssGrowth = scenarioRuns.every((run) =>
@@ -220,6 +221,7 @@ export function summarizeRuns(runs) {
       gates: {
         allRunsPassed: scenarioRuns.every((run) => run.status === 'passed'),
         pendingDrained,
+        observedStaleDiscard,
         noStaleApplied: !staleApplied,
         noBlankRender: !blankRendered,
         noSustainedRssGrowth,
@@ -239,6 +241,7 @@ export function summarizeRuns(runs) {
       scenario.warm.moveendToRenderMs.p95 != null && scenario.warm.moveendToRenderMs.p95 <= 300,
     ),
     pendingDrained: scenarios.every((scenario) => scenario.gates.pendingDrained),
+    observedStaleDiscard: scenarios.every((scenario) => scenario.gates.observedStaleDiscard),
     noStaleApplied: scenarios.every((scenario) => scenario.gates.noStaleApplied),
     noBlankRender: scenarios.every((scenario) => scenario.gates.noBlankRender),
     noSustainedRssGrowth: scenarios.every((scenario) => scenario.gates.noSustainedRssGrowth),
@@ -416,6 +419,7 @@ export function renderMarkdown(summary, workflow = null) {
     `| weibo RTree 热后端 P95 <= 100 ms | ${pass(summary.gates.rtreeBackendP95)} |`,
     `| 全场景热 moveend -> render P95 <= 300 ms | ${pass(summary.gates.moveendToRenderP95)} |`,
     `| pending 最终清空 | ${pass(summary.gates.pendingDrained)} |`,
+    `| 实际观察到旧结果丢弃 | ${pass(summary.gates.observedStaleDiscard)} |`,
     `| 无旧结果应用 | ${pass(summary.gates.noStaleApplied)} |`,
     `| 无白屏 | ${pass(summary.gates.noBlankRender)} |`,
     `| RSS 结束增长 <= 64 MiB | ${pass(summary.gates.noSustainedRssGrowth)} |`, '',

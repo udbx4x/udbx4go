@@ -8,9 +8,9 @@ const scenarioNames = [
   'sampledata-multilayer-viewport',
 ]
 const stepCounts = new Map([
-  [scenarioNames[0], 8],
-  [scenarioNames[1], 3],
-  [scenarioNames[2], 4],
+  [scenarioNames[0], 9],
+  [scenarioNames[1], 4],
+  [scenarioNames[2], 5],
 ])
 
 function run(scenario, iteration, temperature, overrides = {}) {
@@ -74,13 +74,15 @@ test('summarizeRuns reports complete cold/warm P50/P95, RSS and gates', () => {
   assert.equal(summary.maxConcurrentQueries, 1)
   assert.equal(summary.scenarios.length, 3)
   assert.equal(summary.scenarios[0].runs.length, 10)
-  assert.equal(summary.scenarios[0].warm.backendQueryMs.p50, 16)
-  assert.equal(summary.scenarios[0].warm.backendQueryMs.p95, 21)
+  assert.equal(summary.scenarios[0].warm.backendQueryMs.p50, 17)
+  assert.equal(summary.scenarios[0].warm.backendQueryMs.p95, 22)
   assert.equal(summary.scenarios[0].peakRssKiB, 200005)
   assert.equal(summary.scenarios[0].gates.pendingDrained, true)
+  assert.equal(summary.scenarios[0].gates.observedStaleDiscard, true)
   assert.equal(summary.scenarios[0].gates.noStaleApplied, true)
   assert.equal(summary.gates.rtreeBackendP95, true)
   assert.equal(summary.gates.moveendToRenderP95, true)
+  assert.equal(summary.gates.observedStaleDiscard, true)
   assert.equal(summary.gates.noSustainedRssGrowth, true)
 
   const markdown = renderMarkdown(summary)
@@ -88,7 +90,20 @@ test('summarizeRuns reports complete cold/warm P50/P95, RSS and gates', () => {
   assert.match(markdown, /moveend -> render P50\/P95/)
   assert.match(markdown, /原始十轮/)
   assert.match(markdown, /样本 SHA256/)
+  assert.match(markdown, /实际观察到旧结果丢弃.*PASS/)
   assert.match(markdown, /人工验收/)
+})
+
+test('summarizeRuns 要求每个场景的每一真实轮次都观察到旧结果丢弃', () => {
+  const runs = completeRuns()
+  runs[0].metrics.staleResultsDiscarded = 0
+
+  const summary = summarizeRuns(runs)
+
+  assert.equal(summary.status, 'failed')
+  assert.equal(summary.scenarios[0].gates.observedStaleDiscard, false)
+  assert.equal(summary.gates.observedStaleDiscard, false)
+  assert.equal(summary.gates.noStaleApplied, true)
 })
 
 test('summarizeRuns rejects a missing run, scenario or RSS sample', () => {
@@ -191,9 +206,9 @@ test('summarizeRuns marks stale application, blank render and pending growth fai
 test('summarizeRuns enforces RTree and end-to-end P95 gates', () => {
   const runs = completeRuns()
   const weiboWarm = runs.find((item) => item.scenario === scenarioNames[0] && item.temperature === 'warm')
-  weiboWarm.metrics.backendQueryMs = Array(8).fill(101)
+  weiboWarm.metrics.backendQueryMs = Array(9).fill(101)
   const countyWarm = runs.find((item) => item.scenario === scenarioNames[1] && item.temperature === 'warm')
-  countyWarm.metrics.moveendToRenderMs = Array(3).fill(301)
+  countyWarm.metrics.moveendToRenderMs = Array(4).fill(301)
 
   const summary = summarizeRuns(runs)
   assert.equal(summary.status, 'failed')

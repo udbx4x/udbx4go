@@ -53,6 +53,24 @@ interface BenchmarkRunnerProps {
   viewportStepTimeoutMs?: number
 }
 
+interface StepMeasurement {
+  startedAt: number
+  backendQueryMS: number[]
+  strategies: string[]
+  resolve: (result: BenchmarkViewportResult) => void
+  reject: (error: Error) => void
+  timeoutID: number
+  viewportObserved: boolean
+  requiredLayerNames: string[]
+  requestedBounds: BoundingBox | null
+}
+
+interface StaleProbeGate {
+  captured: boolean
+  firstHeld: ReturnType<typeof createSignal>
+  releaseFirst: ReturnType<typeof createSignal>
+}
+
 const zeroMetrics = {
   openFileMs: 0,
   loadLayersMs: 0,
@@ -111,17 +129,18 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
     let cancelled = false
     let fileGeneration = 0
     const layerStates = new Map<string, MapLayerState>()
-    let stepMeasurement: {
-      startedAt: number
-      backendQueryMS: number[]
-      strategies: string[]
-      resolve: (result: BenchmarkViewportResult) => void
-      reject: (error: Error) => void
-      timeoutID: number
-      viewportObserved: boolean
-      requiredLayerNames: string[]
-      requestedBounds: BoundingBox | null
-    } | null = null
+    let stepMeasurement: StepMeasurement | null = null
+    let staleProbeGate: StaleProbeGate | null = null
+
+    const abortStaleProbe = (error: Error) => {
+      const gate = staleProbeGate
+      if (!gate) {
+        return
+      }
+      staleProbeGate = null
+      gate.firstHeld.reject(error)
+      gate.releaseFirst.resolve()
+    }
 
     const publishLayer = (layer: MapLayerState) => {
       layerStates.set(layer.datasetName, layer)
@@ -142,7 +161,9 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         return
       }
       if (queriedLayers.some((layer) => layer.queryStatus === 'error')) {
-        measurement.reject(new Error(queriedLayers.find((layer) => layer.queryStatus === 'error')?.queryError || 'viewport query failed'))
+        const error = new Error(queriedLayers.find((layer) => layer.queryStatus === 'error')?.queryError || 'viewport query failed')
+        abortStaleProbe(error)
+        measurement.reject(error)
         window.clearTimeout(measurement.timeoutID)
         stepMeasurement = null
         return
@@ -161,7 +182,9 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         }
         window.clearTimeout(measurement.timeoutID)
         stepMeasurement = null
-        measurement.reject(error instanceof Error ? error : new Error(String(error)))
+        const renderError = error instanceof Error ? error : new Error(String(error))
+        abortStaleProbe(renderError)
+        measurement.reject(renderError)
         return
       }
       if (stepMeasurement !== measurement) {
@@ -185,13 +208,31 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
     }
 
     const coordinator = new ViewportQueryCoordinator({
-      loadPreview: async (job) => LoadSpatialPreview(job.datasetName, new main.SpatialPreviewRequestDTO({
-        viewport: job.bounds,
-        requiredIds: job.requiredIds,
-        limit: 1000,
-        maxVertices: 1000000,
-        simplify: false,
-      })),
+      loadPreview: async (job) => {
+        try {
+          const preview = await LoadSpatialPreview(job.datasetName, new main.SpatialPreviewRequestDTO({
+            viewport: job.bounds,
+            requiredIds: job.requiredIds,
+            limit: 1000,
+            maxVertices: 1000000,
+            simplify: false,
+          }))
+          const gate = staleProbeGate
+          if (gate && !gate.captured) {
+            gate.captured = true
+            stepMeasurement?.backendQueryMS.push(preview.queryDurationMs)
+            gate.firstHeld.resolve()
+            await gate.releaseFirst.promise
+          }
+          return preview
+        } catch (error) {
+          const gate = staleProbeGate
+          if (gate && !gate.captured) {
+            gate.firstHeld.reject(asError(error))
+          }
+          throw error
+        }
+      },
       applyLoading: (datasetName) => {
         const layer = layerStates.get(datasetName)
         if (layer) {
@@ -326,6 +367,83 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
           handleViewport(adapter.getViewport() ?? step.bounds)
         })
       },
+      runStaleViewportProbe: (first, latest, requiredIDs) => {
+        if (stepMeasurement || staleProbeGate) {
+          return Promise.reject(new Error('stale viewport probe requires an idle benchmark runner'))
+        }
+        const fitLayer = [...layerStates.values()].find((layer) => layer.visible && layer.summary?.viewportQuerySupported)
+        if (!fitLayer) {
+          return Promise.reject(new Error('stale viewport probe has no queryable visible layer'))
+        }
+        currentRequiredIDs = requiredIDs
+        const requiredLayerNames = [...layerStates.values()]
+          .filter((layer) => layer.visible && layer.summary?.viewportQuerySupported)
+          .map((layer) => layer.datasetName)
+        const gate: StaleProbeGate = {
+          captured: false,
+          firstHeld: createSignal(),
+          releaseFirst: createSignal(),
+        }
+        staleProbeGate = gate
+
+        const result = createDeferred<BenchmarkViewportResult>()
+        const timeoutID = window.setTimeout(() => {
+          const error = new Error(`stale viewport probe timed out after ${viewportStepTimeoutMs}ms`)
+          if (stepMeasurement === measurement) {
+            stepMeasurement = null
+          }
+          abortStaleProbe(error)
+          result.reject(error)
+        }, viewportStepTimeoutMs)
+        const measurement: StepMeasurement = {
+          startedAt: performance.now(),
+          backendQueryMS: [],
+          strategies: [],
+          resolve: result.resolve,
+          reject: result.reject,
+          timeoutID,
+          viewportObserved: false,
+          requiredLayerNames,
+          requestedBounds: null,
+        }
+        stepMeasurement = measurement
+        const resultPromise = result.promise
+
+        adapter.fitBounds(first.bounds, first.geometryKind ?? geometryKind(fitLayer.kind))
+        handleViewport(adapter.getViewport() ?? first.bounds)
+
+        return (async () => {
+          try {
+            await Promise.race([
+              gate.firstHeld.promise,
+              resultPromise.then(() => {
+                throw new Error('stale viewport probe completed before first response was held')
+              }),
+            ])
+            if (cancelled) {
+              throw new Error('benchmark runner unmounted')
+            }
+            adapter.fitBounds(latest.bounds, latest.geometryKind ?? geometryKind(fitLayer.kind))
+            handleViewport(adapter.getViewport() ?? latest.bounds)
+            gate.releaseFirst.resolve()
+            return await resultPromise
+          } catch (error) {
+            const probeError = asError(error)
+            if (stepMeasurement === measurement) {
+              window.clearTimeout(measurement.timeoutID)
+              stepMeasurement = null
+              measurement.reject(probeError)
+            }
+            abortStaleProbe(probeError)
+            throw probeError
+          } finally {
+            if (staleProbeGate === gate) {
+              staleProbeGate = null
+            }
+            gate.releaseFirst.resolve()
+          }
+        })()
+      },
       getCoordinatorMetrics: () => coordinator.getMetrics(),
       resetCoordinatorMetrics: () => coordinator.resetMetrics(),
     }
@@ -360,6 +478,13 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
 
     return () => {
       cancelled = true
+      const error = new Error('benchmark runner unmounted')
+      abortStaleProbe(error)
+      if (stepMeasurement) {
+        window.clearTimeout(stepMeasurement.timeoutID)
+        stepMeasurement.reject(error)
+        stepMeasurement = null
+      }
       coordinator.invalidateAll()
       adapter.destroy()
     }
@@ -412,4 +537,28 @@ function boundsEqual(actual: BoundingBox | undefined, expected: BoundingBox): bo
       actual.maxX === expected.maxX &&
       actual.maxY === expected.maxY,
   )
+}
+
+function createSignal() {
+  let resolve!: () => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
 }

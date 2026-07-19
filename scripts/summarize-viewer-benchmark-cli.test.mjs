@@ -8,9 +8,9 @@ import { selectConcurrency, summarizeRuns } from './summarize-viewer-benchmark.m
 
 const script = new URL('./summarize-viewer-benchmark.mjs', import.meta.url).pathname
 const scenarios = [
-  ['henan-weibo-rtree-pan-zoom', 8],
-  ['henan-county-envelope-selection', 3],
-  ['sampledata-multilayer-viewport', 4],
+  ['henan-weibo-rtree-pan-zoom', 9],
+  ['henan-county-envelope-selection', 4],
+  ['sampledata-multilayer-viewport', 5],
 ]
 
 function runsFor(concurrency, renderBase, appSha256, stale = false) {
@@ -30,7 +30,7 @@ function runsFor(concurrency, renderBase, appSha256, stale = false) {
         maxConcurrentQueries: scenario === 'sampledata-multilayer-viewport' ? concurrency : 1,
         pendingPeak: 1,
         pendingFinal: 0,
-        staleResultsDiscarded: 0,
+        staleResultsDiscarded: 1,
         staleResultApplied: stale && scenario === scenarios[0][0] && index === 0,
         finalFeatureCount: 1,
         blankRenderCount: 0,
