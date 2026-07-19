@@ -1202,6 +1202,82 @@ func TestViewerSpatialBoundedPreviewLoadsLimitPlusOneAndRequiredIDs(t *testing.T
 	}
 }
 
+func TestViewerSpatialBoundedPreviewFormatsRequiredIDs(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	dataSource, _, dataSourceContext, release, err := app.acquireDataSource()
+	if err != nil {
+		t.Fatalf("acquireDataSource() error = %v", err)
+	}
+	defer release()
+	_, ds, err := app.getDatasetForPreview(dataSource, "viewer_points")
+	if err != nil {
+		t.Fatalf("getDatasetForPreview() error = %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		requiredIDs   []int
+		wantLoadedIDs []int
+		wantFinalIDs  []int
+	}{
+		{
+			name:          "overlapping required ID is deduplicated",
+			requiredIDs:   []int{2},
+			wantLoadedIDs: []int{1, 2, 2},
+			wantFinalIDs:  []int{1, 2},
+		},
+		{
+			name:          "overlapping required ID moves to the end",
+			requiredIDs:   []int{1},
+			wantLoadedIDs: []int{1, 2, 1},
+			wantFinalIDs:  []int{2, 1},
+		},
+		{
+			name:          "missing required ID adds no placeholder",
+			requiredIDs:   []int{999},
+			wantLoadedIDs: []int{1, 2},
+			wantFinalIDs:  []int{1, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			features, hasMore, err := app.loadBoundedPreviewFeatures(dataSourceContext, ds, 2, tt.requiredIDs)
+			if err != nil {
+				t.Fatalf("loadBoundedPreviewFeatures() error = %v", err)
+			}
+			loadedIDs := make([]int, len(features))
+			for i, feature := range features {
+				loadedIDs[i] = feature.ID
+			}
+			if !reflect.DeepEqual(loadedIDs, tt.wantLoadedIDs) {
+				t.Fatalf("loaded feature IDs = %v, want %v", loadedIDs, tt.wantLoadedIDs)
+			}
+			if !hasMore {
+				t.Fatal("hasMore = false, want true from the ordinary limit plus one query")
+			}
+
+			formatted, vertexBudgetReached := app.formatPreviewFeatures(
+				features,
+				nil,
+				maxSpatialPreviewVertexBudget,
+				requiredIDSet(tt.requiredIDs),
+			)
+			if vertexBudgetReached {
+				t.Fatal("vertexBudgetReached = true, want false")
+			}
+			if ids := previewFeatureIDs(formatted); !reflect.DeepEqual(ids, tt.wantFinalIDs) {
+				t.Fatalf("formatted feature IDs = %v, want %v", ids, tt.wantFinalIDs)
+			}
+		})
+	}
+}
+
 type contextOnlyPreviewLister struct {
 	contextCalled bool
 	legacyCalled  bool
