@@ -42,6 +42,7 @@ interface BenchmarkMapAdapter {
   getViewport(): BoundingBox | null
   waitForRenderComplete(): Promise<void>
   getVisibleFeatureCount(): number
+  hasRenderedFeaturePixels(): boolean
 }
 
 interface BenchmarkRunnerProps {
@@ -201,7 +202,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         backendQueryMs: measurement.backendQueryMS,
         moveendToRenderMs: performance.now() - measurement.startedAt,
         finalFeatureCount,
-        blankRender: finalFeatureCount === 0,
+        blankRender: finalFeatureCount === 0 || !adapter.hasRenderedFeaturePixels(),
         strategies: measurement.strategies,
         featureIDs,
       })

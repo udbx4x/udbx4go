@@ -110,6 +110,7 @@ function createAdapter() {
     getViewport: vi.fn().mockReturnValue(null),
     waitForRenderComplete: vi.fn().mockResolvedValue(undefined),
     getVisibleFeatureCount: vi.fn().mockReturnValue(1),
+    hasRenderedFeaturePixels: vi.fn().mockReturnValue(true),
   }
 }
 
@@ -202,8 +203,15 @@ describe('BenchmarkRunner', () => {
     }
   })
 
-  it('视口步骤等待协调器结束和 rendercomplete 后返回真实指标', async () => {
+  it.each([
+    { renderedPixels: true, expectedBlankRender: false },
+    { renderedPixels: false, expectedBlankRender: true },
+  ])('视口步骤在要素数为正时按像素结果计算 blankRender: $renderedPixels', async ({
+    renderedPixels,
+    expectedBlankRender,
+  }) => {
     const adapter = createAdapter()
+    adapter.hasRenderedFeaturePixels.mockReturnValue(renderedPixels)
     let viewportResult: Awaited<ReturnType<Parameters<NonNullable<Parameters<typeof BenchmarkRunner>[0]['runScenario']>>[1]['runViewportStep']>> | undefined
     const runScenario = vi.fn(async (_config, dependencies) => {
       await dependencies.openFile(config.scenario.filePath)
@@ -232,13 +240,14 @@ describe('BenchmarkRunner', () => {
     expect(viewportResult).toMatchObject({
       backendQueryMs: [9],
       finalFeatureCount: 1,
-      blankRender: false,
+      blankRender: expectedBlankRender,
       strategies: ['rtree'],
       featureIDs: [7],
     })
     expect(adapter.hasFeature).toHaveBeenCalledWith('BaseMap_P', 7)
     expect(adapter.fitBounds).toHaveBeenCalledWith(config.scenario.viewportSteps[0].bounds, 'point')
     expect(adapter.waitForRenderComplete).toHaveBeenCalledTimes(1)
+    expect(adapter.hasRenderedFeaturePixels).toHaveBeenCalledTimes(1)
   })
 
   it('stale probe 在 latest 调度后释放真实 first 响应并只应用 latest', async () => {

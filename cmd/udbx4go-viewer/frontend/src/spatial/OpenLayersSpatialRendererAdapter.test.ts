@@ -229,20 +229,101 @@ describe('OpenLayersSpatialRendererAdapter viewport', () => {
     expect(handler).not.toHaveBeenCalled()
   })
 
-  it('等待下一次 postrender 作为同步矢量图层的绘制完成信号', async () => {
+  it('postrender 不结束等待，只有 rendercomplete 表示绘制完成', async () => {
     const adapter = new OpenLayersSpatialRendererAdapter()
     adapter.mount(document.createElement('div'))
     const map = openLayersMocks.MockMap.instances[0]
 
-    const rendered = adapter.waitForRenderComplete()
-    try {
-      expect(map.once).toHaveBeenCalledWith('postrender', expect.any(Function))
-      expect(map.renderSync).toHaveBeenCalledTimes(2)
-    } finally {
-      map.emit('rendercomplete')
-      map.emit('postrender')
-    }
+    let resolved = false
+    const rendered = adapter.waitForRenderComplete().then(() => {
+      resolved = true
+    })
+    map.emit('postrender')
+    await Promise.resolve()
+    const resolvedAfterPostrender = resolved
+    map.emit('rendercomplete')
     await rendered
+
+    expect(map.once).toHaveBeenCalledWith('rendercomplete', expect.any(Function))
+    expect(map.renderSync).toHaveBeenCalledTimes(2)
+    expect(resolvedAfterPostrender).toBe(false)
+    expect(resolved).toBe(true)
+  })
+
+  it('rendercomplete 超时时解绑同一事件并报告对应错误', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = new OpenLayersSpatialRendererAdapter()
+      adapter.mount(document.createElement('div'))
+      const map = openLayersMocks.MockMap.instances[0]
+
+      const rendered = adapter.waitForRenderComplete(25)
+      const capturedError = rendered.then(
+        () => null,
+        (error: unknown) => error,
+      )
+      const listener = map.once.mock.calls.find(([type]) => type === 'rendercomplete')?.[1]
+
+      await vi.advanceTimersByTimeAsync(25)
+      expect(await capturedError).toEqual(new Error('rendercomplete timed out after 25ms'))
+      expect(map.un).toHaveBeenCalledWith('rendercomplete', listener)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('OpenLayersSpatialRendererAdapter rendered pixels', () => {
+  beforeEach(() => {
+    openLayersMocks.MockMap.instances.length = 0
+    openLayersMocks.MockView.instances.length = 0
+  })
+
+  it('未挂载或所有 canvas 透明时返回 false，任一 alpha 非零时返回 true', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    expect(adapter.hasRenderedFeaturePixels()).toBe(false)
+
+    const container = document.createElement('div')
+    const pixels = new Uint8ClampedArray(8)
+    appendLayerCanvas(container, 2, 1, () => pixels)
+    adapter.mount(container)
+
+    expect(adapter.hasRenderedFeaturePixels()).toBe(false)
+    pixels[7] = 255
+    expect(adapter.hasRenderedFeaturePixels()).toBe(true)
+  })
+
+  it('零尺寸、无 2D context 或像素读取异常按无可验证像素处理', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const container = document.createElement('div')
+    const zeroSizeContext = { getImageData: vi.fn() }
+    const zeroSizeCanvas = appendLayerCanvas(container, 0, 0, () => new Uint8ClampedArray())
+    Object.defineProperty(zeroSizeCanvas, 'getContext', {
+      value: vi.fn(() => zeroSizeContext),
+      configurable: true,
+    })
+    appendLayerCanvas(container, 1, 1, null)
+    appendLayerCanvas(container, 1, 1, () => {
+      throw new DOMException('tainted canvas', 'SecurityError')
+    })
+    adapter.mount(container)
+
+    expect(() => adapter.hasRenderedFeaturePixels()).not.toThrow()
+    expect(adapter.hasRenderedFeaturePixels()).toBe(false)
+    expect(zeroSizeCanvas.getContext).not.toHaveBeenCalled()
+  })
+
+  it('destroy 后不读取旧 container 的 canvas', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const container = document.createElement('div')
+    const readPixels = vi.fn(() => new Uint8ClampedArray([0, 0, 0, 255]))
+    appendLayerCanvas(container, 1, 1, readPixels)
+    adapter.mount(container)
+
+    adapter.destroy()
+
+    expect(adapter.hasRenderedFeaturePixels()).toBe(false)
+    expect(readPixels).not.toHaveBeenCalled()
   })
 })
 
@@ -380,6 +461,29 @@ function pointFeature(id: number): PreviewFeature {
     id,
     geometry: { type: 'Point', coordinates: [id, id], hasZ: false },
   }
+}
+
+function appendLayerCanvas(
+  container: HTMLElement,
+  width: number,
+  height: number,
+  readPixels: (() => Uint8ClampedArray) | null,
+): HTMLCanvasElement {
+  const layer = document.createElement('div')
+  layer.className = 'ol-layer'
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const getImageData = readPixels === null
+    ? null
+    : vi.fn(() => ({ data: readPixels() }))
+  Object.defineProperty(canvas, 'getContext', {
+    value: vi.fn(() => getImageData === null ? null : { getImageData }),
+    configurable: true,
+  })
+  layer.append(canvas)
+  container.append(layer)
+  return canvas
 }
 
 function createLayer(features: PreviewFeature[], fillColor = '#1971c2'): MapLayerState {

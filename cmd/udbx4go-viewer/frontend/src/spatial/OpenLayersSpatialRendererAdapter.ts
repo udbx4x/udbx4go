@@ -18,6 +18,7 @@ type ExtentTuple = [number, number, number, number]
 
 export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter {
   private map: OlMap | null = null
+  private container: HTMLElement | null = null
   private layers = new globalThis.Map<string, VectorLayer>()
   private sources = new Map<string, VectorSource>()
   private layerStates = new Map<string, MapLayerState>()
@@ -29,6 +30,7 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
 
   mount(container: HTMLElement): void {
     this.destroy()
+    this.container = container
     this.map = new OlMap({
       target: container,
       layers: [],
@@ -68,6 +70,7 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     this.sources.clear()
     this.layers.clear()
     this.layerStates.clear()
+    this.container = null
   }
 
   setLayer(layer: MapLayerState): void {
@@ -220,15 +223,39 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
     return new Promise((resolve, reject) => {
       const map = this.map!
       const timeoutID = window.setTimeout(() => {
-        map.un('postrender', finish)
-        reject(new Error(`postrender timed out after ${timeoutMS}ms`))
+        map.un('rendercomplete', finish)
+        reject(new Error(`rendercomplete timed out after ${timeoutMS}ms`))
       }, timeoutMS)
       const finish = () => {
         window.clearTimeout(timeoutID)
         resolve()
       }
-      map.once('postrender', finish)
+      map.once('rendercomplete', finish)
       map.renderSync()
+    })
+  }
+
+  hasRenderedFeaturePixels(): boolean {
+    const canvases = this.container?.querySelectorAll<HTMLCanvasElement>('.ol-layer canvas') ?? []
+    return Array.from(canvases).some((canvas) => {
+      if (canvas.width <= 0 || canvas.height <= 0) {
+        return false
+      }
+      try {
+        const context = canvas.getContext('2d', { willReadFrequently: true })
+        if (!context) {
+          return false
+        }
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
+        for (let index = 3; index < pixels.length; index += 4) {
+          if (pixels[index] !== 0) {
+            return true
+          }
+        }
+      } catch {
+        return false
+      }
+      return false
     })
   }
 
