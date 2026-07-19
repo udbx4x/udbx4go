@@ -149,6 +149,44 @@ function setMeasuredStepStrategies(
 }
 
 describe('runBenchmarkScenario', () => {
+  it('stale probe 拒绝只有一个 viewport step 的场景且不启动副作用', async () => {
+    const calls: string[] = []
+    const singleStepConfig: BenchmarkConfig = {
+      ...config,
+      scenario: {
+        ...config.scenario,
+        viewportSteps: [config.scenario.viewportSteps[0]],
+      },
+    }
+
+    await expect(runBenchmarkScenario(singleStepConfig, createDependencies(calls))).rejects.toThrow(
+      'stale viewport probe requires at least two viewport steps',
+    )
+    expect(calls).toEqual([])
+  })
+
+  it('stale probe 拒绝首尾 bounds 相同的场景且不启动副作用', async () => {
+    const calls: string[] = []
+    const repeatedBoundsConfig: BenchmarkConfig = {
+      ...config,
+      scenario: {
+        ...config.scenario,
+        viewportSteps: [
+          config.scenario.viewportSteps[0],
+          {
+            ...config.scenario.viewportSteps[1],
+            bounds: { ...config.scenario.viewportSteps[0].bounds },
+          },
+        ],
+      },
+    }
+
+    await expect(runBenchmarkScenario(repeatedBoundsConfig, createDependencies(calls))).rejects.toThrow(
+      'stale viewport probe requires different first and latest bounds',
+    )
+    expect(calls).toEqual([])
+  })
+
   it('第二页选择成为 required ID，并按固定视口等待查询与渲染', async () => {
     const calls: string[] = []
 

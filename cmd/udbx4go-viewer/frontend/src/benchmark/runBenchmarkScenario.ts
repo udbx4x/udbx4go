@@ -1,6 +1,6 @@
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
 import { featureGeometryKind, isValidBounds } from '../spatial/featureLocation'
-import type { MapLayerState } from '../types'
+import type { BoundingBox, MapLayerState } from '../types'
 import type { BenchmarkConfig, BenchmarkDependencies, BenchmarkResult } from './types'
 
 const previewRequest = {
@@ -13,6 +13,14 @@ export async function runBenchmarkScenario(
   config: BenchmarkConfig,
   dependencies: BenchmarkDependencies,
 ): Promise<BenchmarkResult> {
+  const viewportSteps = config.scenario.viewportSteps
+  if (viewportSteps.length < 2) {
+    throw new Error('stale viewport probe requires at least two viewport steps')
+  }
+  if (boundsEqual(viewportSteps[0].bounds, viewportSteps[viewportSteps.length - 1].bounds)) {
+    throw new Error('stale viewport probe requires different first and latest bounds')
+  }
+
   const startedAt = new Date().toISOString()
 
   let started = dependencies.now()
@@ -182,6 +190,13 @@ export async function runBenchmarkScenario(
 function withoutLayerActions(step: BenchmarkConfig['scenario']['viewportSteps'][number]) {
   const { hideLayers: _hide, showLayers: _show, removeLayers: _remove, ...probeStep } = step
   return probeStep
+}
+
+function boundsEqual(left: BoundingBox, right: BoundingBox): boolean {
+  return left.minX === right.minX &&
+    left.minY === right.minY &&
+    left.maxX === right.maxX &&
+    left.maxY === right.maxY
 }
 
 function assertExpectedStrategies(
