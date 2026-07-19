@@ -123,6 +123,20 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
   }
 }
 
+function setMeasuredStepStrategies(
+  dependencies: BenchmarkDependencies,
+  strategies: string[] | undefined,
+): void {
+  const runViewportStep = dependencies.runViewportStep
+  dependencies.runViewportStep = async (step, requiredIDs) => {
+    const result = await runViewportStep(step, requiredIDs)
+    return {
+      ...result,
+      strategies: step.hideLayers ? strategies : [step.expectedStrategy],
+    }
+  }
+}
+
 describe('runBenchmarkScenario', () => {
   it('第二页选择成为 required ID，并按固定视口等待查询与渲染', async () => {
     const calls: string[] = []
@@ -184,49 +198,36 @@ describe('runBenchmarkScenario', () => {
   })
 
   it('策略不匹配时拒绝通过', async () => {
-    const dependencies = createDependencies([])
-    dependencies.runViewportStep = async () => ({
-      backendQueryMs: [1],
-      moveendToRenderMs: 2,
-      finalFeatureCount: 1,
-      blankRender: false,
-      strategies: ['bounded_sample'],
-      featureIDs: [101],
-    })
+    const calls: string[] = []
+    const dependencies = createDependencies(calls)
+    setMeasuredStepStrategies(dependencies, ['bounded_sample'])
 
-    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow('expected strategy')
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
+      'viewport step 1: expected strategy envelope_cache, received bounded_sample',
+    )
+    expect(calls).toContain('viewport:envelope_cache:101:action')
   })
 
   it('策略证据为 undefined 时拒绝通过', async () => {
-    const dependencies = createDependencies([])
-    dependencies.runViewportStep = async () => ({
-      backendQueryMs: [1],
-      moveendToRenderMs: 2,
-      finalFeatureCount: 1,
-      blankRender: false,
-      strategies: undefined,
-      featureIDs: [101],
-    })
+    const calls: string[] = []
+    const dependencies = createDependencies(calls)
+    setMeasuredStepStrategies(dependencies, undefined)
 
     await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
-      'missing strategy evidence for envelope_cache',
+      'viewport step 1: missing strategy evidence for envelope_cache',
     )
+    expect(calls).toContain('viewport:envelope_cache:101:action')
   })
 
   it('策略证据为空数组时拒绝通过', async () => {
-    const dependencies = createDependencies([])
-    dependencies.runViewportStep = async () => ({
-      backendQueryMs: [1],
-      moveendToRenderMs: 2,
-      finalFeatureCount: 1,
-      blankRender: false,
-      strategies: [],
-      featureIDs: [101],
-    })
+    const calls: string[] = []
+    const dependencies = createDependencies(calls)
+    setMeasuredStepStrategies(dependencies, [])
 
     await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
-      'missing strategy evidence for envelope_cache',
+      'viewport step 1: missing strategy evidence for envelope_cache',
     )
+    expect(calls).toContain('viewport:envelope_cache:101:action')
   })
 
   it('定位属性缺少 bbox 时失败', async () => {

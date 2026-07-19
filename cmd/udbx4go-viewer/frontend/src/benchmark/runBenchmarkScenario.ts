@@ -85,7 +85,11 @@ export async function runBenchmarkScenario(
   const validateSelection = async () => {
     const validationStarted = dependencies.now()
     const selectionResult = await dependencies.runViewportStep(selectionStep, [featureID])
-    assertExpectedStrategies(selectionStep.expectedStrategy, selectionResult.strategies)
+    assertExpectedStrategies(
+      'selection validation',
+      selectionStep.expectedStrategy,
+      selectionResult.strategies,
+    )
     if (!selectionResult.featureIDs.includes(featureID)) {
       throw new Error(`required 选中 ID ${featureID} 不在查询返回或地图 source 中`)
     }
@@ -112,10 +116,10 @@ export async function runBenchmarkScenario(
   const moveendToRenderMs: number[] = []
   let finalFeatureCount = 0
   let blankRenderCount = 0
-  for (const step of config.scenario.viewportSteps) {
+  for (const [index, step] of config.scenario.viewportSteps.entries()) {
     const requiredIDs = config.temperature === 'warm' ? [featureID] : []
     const viewportResult = await dependencies.runViewportStep(step, requiredIDs)
-    assertExpectedStrategies(step.expectedStrategy, viewportResult.strategies)
+    assertExpectedStrategies(`viewport step ${index + 1}`, step.expectedStrategy, viewportResult.strategies)
     backendQueryMs.push(...viewportResult.backendQueryMs)
     moveendToRenderMs.push(viewportResult.moveendToRenderMs)
     finalFeatureCount = viewportResult.finalFeatureCount
@@ -152,11 +156,15 @@ export async function runBenchmarkScenario(
   }
 }
 
-function assertExpectedStrategies(expectedStrategy: string, strategies: string[] | undefined): void {
+function assertExpectedStrategies(
+  context: string,
+  expectedStrategy: string,
+  strategies: string[] | undefined,
+): void {
   if (!strategies?.length) {
-    throw new Error(`missing strategy evidence for ${expectedStrategy}`)
+    throw new Error(`${context}: missing strategy evidence for ${expectedStrategy}`)
   }
   if (strategies.some((strategy) => strategy !== expectedStrategy)) {
-    throw new Error(`expected strategy ${expectedStrategy}, received ${strategies.join(', ')}`)
+    throw new Error(`${context}: expected strategy ${expectedStrategy}, received ${strategies.join(', ')}`)
   }
 }
