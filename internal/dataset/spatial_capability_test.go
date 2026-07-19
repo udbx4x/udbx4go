@@ -32,7 +32,7 @@ func TestDetectSpatialCapabilityAcceptsValidRTree(t *testing.T) {
 	assert.Equal(t, "SmID", detected.IDColumn)
 }
 
-func TestDetectSpatialCapabilityReportsUnavailableRTree(t *testing.T) {
+func TestDetectSpatialCapabilityReportsExecutableFallback(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord)
@@ -66,33 +66,6 @@ func TestDetectSpatialCapabilityReportsUnavailableRTree(t *testing.T) {
 			},
 		},
 		{
-			name: "geometry columns uses another physical table",
-			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
-				_, err := db.Exec("UPDATE geometry_columns SET f_table_name = ? WHERE f_table_name = ?", "logical_name", info.TableName)
-				require.NoError(t, err)
-			},
-		},
-		{
-			name: "registered geometry column disagrees",
-			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
-				_, err := db.Exec("UPDATE geometry_columns SET f_geometry_column = ? WHERE f_table_name = ?", "other_geometry", info.TableName)
-				require.NoError(t, err)
-			},
-		},
-		{
-			name: "multiple geometry column records",
-			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
-				require.NoError(t, system.NewGeometryColumnsDao(db).Insert(&system.GeometryColumnsRecord{
-					FTableName:          info.TableName,
-					FGeometryColumn:     "other_geometry",
-					GeometryType:        1,
-					CoordDimension:      2,
-					SRID:                4326,
-					SpatialIndexEnabled: 1,
-				}))
-			},
-		},
-		{
 			name: "spatial index declaration disabled",
 			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
 				_, err := db.Exec("UPDATE geometry_columns SET spatial_index_enabled = 0 WHERE f_table_name = ?", info.TableName)
@@ -122,6 +95,85 @@ func TestDetectSpatialCapabilityReportsUnavailableRTree(t *testing.T) {
 				Supported:         true,
 				RTreeAvailable:    false,
 				FallbackAvailable: true,
+				DiagnosticReason:  types.SpatialQueryReasonSpatialIndexUnavailable,
+			}, detected.Capability)
+		})
+	}
+}
+
+func TestDetectSpatialCapabilityRejectsInexecutableFallback(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord)
+	}{
+		{
+			name: "geometry columns record missing",
+			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
+				_, err := db.Exec("DELETE FROM geometry_columns WHERE f_table_name = ?", info.TableName)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "geometry columns uses another physical table",
+			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
+				_, err := db.Exec("UPDATE geometry_columns SET f_table_name = ? WHERE f_table_name = ?", "logical_name", info.TableName)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "registered geometry column disagrees",
+			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
+				_, err := db.Exec("UPDATE geometry_columns SET f_geometry_column = ? WHERE f_table_name = ?", "other_geometry", info.TableName)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "multiple geometry column records",
+			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
+				require.NoError(t, system.NewGeometryColumnsDao(db).Insert(&system.GeometryColumnsRecord{
+					FTableName:          info.TableName,
+					FGeometryColumn:     "other_geometry",
+					GeometryType:        1,
+					CoordDimension:      2,
+					SRID:                4326,
+					SpatialIndexEnabled: 1,
+				}))
+			},
+		},
+		{
+			name: "physical geometry column missing",
+			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
+				_, err := db.Exec(`ALTER TABLE "roads" RENAME TO "old_roads"`)
+				require.NoError(t, err)
+				_, err = db.Exec(`CREATE TABLE "roads" ("SmID" INTEGER PRIMARY KEY)`)
+				require.NoError(t, err)
+			},
+		},
+		{
+			name: "physical id column missing when spatial index disabled",
+			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
+				_, err := db.Exec(`ALTER TABLE "roads" RENAME TO "old_roads"`)
+				require.NoError(t, err)
+				_, err = db.Exec(`CREATE TABLE "roads" ("SmGeometry" BLOB)`)
+				require.NoError(t, err)
+				_, err = db.Exec("UPDATE geometry_columns SET spatial_index_enabled = 0 WHERE f_table_name = ?", info.TableName)
+				require.NoError(t, err)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, info, record := createSpatialCapabilityFixture(t, types.DatasetKindPoint, "roads", "SmGeometry")
+			defer db.Close()
+			tt.setup(t, db, info, record)
+
+			detected, err := NewSpatialQuerier(db, info, record).detectCapability(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, &types.SpatialQueryCapability{
+				Supported:         true,
+				RTreeAvailable:    false,
+				FallbackAvailable: false,
 				DiagnosticReason:  types.SpatialQueryReasonSpatialIndexUnavailable,
 			}, detected.Capability)
 		})

@@ -60,10 +60,10 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		}}, nil
 	}
 
-	unavailable := func() *detectedSpatialCapability {
+	unavailable := func(fallbackAvailable bool) *detectedSpatialCapability {
 		return &detectedSpatialCapability{Capability: &types.SpatialQueryCapability{
 			Supported:         true,
-			FallbackAvailable: true,
+			FallbackAvailable: fallbackAvailable,
 			DiagnosticReason:  types.SpatialQueryReasonSpatialIndexUnavailable,
 		}}
 	}
@@ -73,16 +73,16 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		return nil, err
 	}
 	if len(records) != 1 || !strings.EqualFold(records[0].FTableName, q.info.TableName) {
-		return unavailable(), nil
+		return unavailable(false), nil
 	}
 
 	geometryRecord := records[0]
 	geometryColumn := geometryRecord.FGeometryColumn
 	if geometryColumn == "" {
-		return unavailable(), nil
+		return unavailable(false), nil
 	}
 	if registeredGeometryColumn(q.record) != "" && !strings.EqualFold(registeredGeometryColumn(q.record), geometryColumn) {
-		return unavailable(), nil
+		return unavailable(false), nil
 	}
 
 	tableColumns, err := sqliteTableInfo(ctx, q.db, q.info.TableName)
@@ -90,16 +90,16 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		return nil, err
 	}
 	if !hasColumn(tableColumns, geometryColumn) {
-		return unavailable(), nil
-	}
-
-	if geometryRecord.SpatialIndexEnabled != 1 {
-		return unavailable(), nil
+		return unavailable(false), nil
 	}
 
 	idColumn := registeredIDColumn(q.record)
 	if !hasColumn(tableColumns, idColumn) {
-		return unavailable(), nil
+		return unavailable(false), nil
+	}
+
+	if geometryRecord.SpatialIndexEnabled != 1 {
+		return unavailable(true), nil
 	}
 
 	rtreeName := spatialRTreeName(q.info.TableName, geometryColumn)
@@ -111,13 +111,13 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		rtreeName,
 	).Scan(&physicalRTreeName, &definition)
 	if err == sql.ErrNoRows {
-		return unavailable(), nil
+		return unavailable(true), nil
 	}
 	if err != nil {
 		return nil, errors.IOError("failed to inspect spatial index definition", err)
 	}
 	if !definition.Valid || !rtreeDefinitionPattern.MatchString(definition.String) {
-		return unavailable(), nil
+		return unavailable(true), nil
 	}
 
 	rtreeColumns, err := sqliteTableInfo(ctx, q.db, physicalRTreeName)
@@ -125,7 +125,7 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		return nil, err
 	}
 	if !validRTreeColumns(rtreeColumns) {
-		return unavailable(), nil
+		return unavailable(true), nil
 	}
 
 	return &detectedSpatialCapability{
