@@ -153,8 +153,10 @@ export async function runBenchmarkScenario(
 }
 
 function assertExpectedStrategies(expectedStrategy: string, strategies: string[] | undefined): void {
-  const actual = strategies ?? [expectedStrategy]
-  if (actual.some((strategy) => strategy !== expectedStrategy)) {
-    throw new Error(`expected strategy ${expectedStrategy}, received ${actual.join(', ')}`)
+  if (!strategies?.length) {
+    throw new Error(`missing strategy evidence for ${expectedStrategy}`)
+  }
+  if (strategies.some((strategy) => strategy !== expectedStrategy)) {
+    throw new Error(`expected strategy ${expectedStrategy}, received ${strategies.join(', ')}`)
   }
 }

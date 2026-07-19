@@ -105,6 +105,7 @@ function createDependencies(calls: string[]): BenchmarkDependencies {
         moveendToRenderMs: 24,
         finalFeatureCount: 164,
         blankRender: false,
+        strategies: [step.expectedStrategy],
         featureIDs: [101],
       }
     },
@@ -196,6 +197,38 @@ describe('runBenchmarkScenario', () => {
     await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow('expected strategy')
   })
 
+  it('策略证据为 undefined 时拒绝通过', async () => {
+    const dependencies = createDependencies([])
+    dependencies.runViewportStep = async () => ({
+      backendQueryMs: [1],
+      moveendToRenderMs: 2,
+      finalFeatureCount: 1,
+      blankRender: false,
+      strategies: undefined,
+      featureIDs: [101],
+    })
+
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
+      'missing strategy evidence for envelope_cache',
+    )
+  })
+
+  it('策略证据为空数组时拒绝通过', async () => {
+    const dependencies = createDependencies([])
+    dependencies.runViewportStep = async () => ({
+      backendQueryMs: [1],
+      moveendToRenderMs: 2,
+      finalFeatureCount: 1,
+      blankRender: false,
+      strategies: [],
+      featureIDs: [101],
+    })
+
+    await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
+      'missing strategy evidence for envelope_cache',
+    )
+  })
+
   it('定位属性缺少 bbox 时失败', async () => {
     const dependencies = createDependencies([])
     dependencies.getFeatureAttributes = async (datasetName, featureID) => ({
@@ -215,6 +248,7 @@ describe('runBenchmarkScenario', () => {
       moveendToRenderMs: 2,
       finalFeatureCount: 1,
       blankRender: false,
+      strategies: ['envelope_cache'],
       featureIDs: [],
     })
 
