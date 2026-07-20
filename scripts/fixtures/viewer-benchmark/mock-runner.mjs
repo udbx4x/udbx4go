@@ -10,7 +10,7 @@ const warm = config.temperature === 'warm'
 const renderBase = ({ 1: 200, 2: 180, 3: 170 })[concurrency] + (warm ? 0 : 20)
 const forcedGateFailure = Number(process.env.UDBX_BENCHMARK_MOCK_GATE_FAIL_CONCURRENCY) === concurrency
 const backendBase = forcedGateFailure ? 120 : (warm ? 20 : 40)
-const stepCount = config.scenario.viewportSteps.length
+const stepCount = config.scenario.viewportSteps.length + 1
 const observedConcurrency = Math.min(concurrency, config.scenario.layers.length)
 
 const result = {
@@ -28,7 +28,7 @@ const result = {
     maxConcurrentQueries: observedConcurrency,
     pendingPeak: config.scenario.layers.length,
     pendingFinal: 0,
-    staleResultsDiscarded: 0,
+    staleResultsDiscarded: 1,
     staleResultApplied: false,
     finalFeatureCount: config.scenario.name.includes('county') ? 164 : 1000,
     blankRenderCount: 0,
