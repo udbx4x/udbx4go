@@ -19,7 +19,7 @@
 - 左侧数据集浏览器支持名称搜索、按类型过滤，并显示轻量“已加入”状态。
 - 采样预览图层会在图层面板和地图区域显示轻量提示。
 - Point、Line、Region 及对应 Z 类型按 OpenLayers 稳定视口查询；首次加入图层时先按有效的数据集声明范围定位，再由 `moveend` 触发当前范围加载。
-- 视口查询支持 RTree、DataSource 生命周期包络缓存和有界采样降级，并显示当前范围、截断和降级状态。
+- SDK 视口查询支持 RTree 和 DataSource 生命周期包络缓存；Viewer 在缓存预算错误或 Text/CAD 路径生成私有的非空间有界预览，并显示当前范围、截断和降级状态。
 - 点、线、面图层使用内置默认样式渲染，并在内部保留 `LayerStyle` 结构供后续样式设置 UI 使用。
 - 在地图、图层和属性表之间按 `datasetName + SmID` 做单选联动。
 - 点击地图要素或属性表行查看属性摘要。
@@ -103,7 +103,7 @@ go test ./...
 - 关闭文件后拒绝继续读取。
 - 打开不存在文件时清理旧数据源状态。
 - 页码小于 1 或大于总页数时归一到有效范围。
-- 视口参数传入 SDK，查询策略、`hasMore`、降级原因和声明范围正确映射。
+- 视口参数传入 SDK，`rtree | envelope_cache` 成功策略、`hasMore` 和声明范围正确映射；预算错误及 Text/CAD 路径由 Viewer 转换为带降级原因的私有预览 DTO。
 - 非法视口、context 取消、损坏几何、迟到结果和文件生命周期隔离。
 
 前端测试与构建：
@@ -114,7 +114,7 @@ npm test
 npm run build
 ```
 
-当前前端测试覆盖稳定 `moveend`、100 ms 防抖、每图层一个执行中请求加一个最新待执行请求、全局并发、迟到结果丢弃、Source 原子替换、多图层状态和视口外选择。实现与非 GUI 自动门禁已完成；真实打包运行和人工交互验收仍应按以下脚本执行：
+当前前端测试覆盖稳定 `moveend`、100 ms 防抖、每图层一个执行中请求加一个最新待执行请求、全局并发、迟到结果丢弃、Source 原子替换、多图层状态、视口外选择、确定性陈旧结果探针和 canvas 像素门禁。实现与非 GUI 自动门禁已完成；真实打包运行和交互证据仍应按以下脚本执行：
 
 ```text
 1. 启动 wails dev。
@@ -144,9 +144,11 @@ npm run build
 ### 设置与诊断
 
 - “空间预览要素上限”默认 1,000，限制一次视口查询的普通候选数。存在更多视口命中对象时显示当前范围截断提示；required ID 不占用该上限。
+- SDK 返回的普通要素必须与请求范围 MBR 相交；只有通过 required ID 补入的选中对象可以位于视口外。
 - “空间预览顶点预算”默认 1,000,000，限制一次响应发送和渲染的普通几何顶点总量，用于控制 Wails 传输和前端渲染成本。它不是数据集对象数或 UDBX 格式限制。
-- 高级预览统计中的 `rtree` 表示真实空间索引查询，`envelope_cache` 表示当前打开文件内的内存包络缓存，`bounded_sample` 表示当前资源策略无法准入完整缓存而降级。
-- 当前包络缓存默认策略是单数据集 32 MiB、当前 `DataSource` 合计 64 MiB；关闭或切换文件会释放缓存。这是当前 SDK/Viewer 资源策略，不是 UDBX 格式限制。
+- 高级预览统计中的 `rtree` 和 `envelope_cache` 是 SDK 成功策略。`bounded_sample` 是 Viewer 捕获 `envelope_cache_budget_exceeded` 错误或处理 Text/CAD 时生成的私有非空间有界预览，不属于 SDK `QuerySpatial` 成功结果。
+- SDK `SpatialQueryResult` 没有 `DegradedReason`；Viewer `SpatialPreviewDTO` 保留 `degradedReason` 供界面诊断。
+- 当前包络缓存默认策略是单数据集 32 MiB、当前 `DataSource` 合计 64 MiB；关闭或切换文件会释放缓存。完整缓存超预算时 SDK 返回 `envelope_cache_budget_exceeded` 错误。这是当前 SDK/Viewer 资源策略，不是 UDBX 格式限制。
 - `invalid_viewport`、`spatial_index_unavailable`、`envelope_cache_budget_exceeded`、`query_timeout`、`corrupt_geometry`、`unsupported_dataset_kind` 是稳定诊断原因码。
 
 无索引包络缓存 PoC 脚本会执行五个规模各 20 次的隔离测量，`--report` 必须使用绝对路径。
@@ -229,16 +231,24 @@ cd udbx4go
     └── summary.md
 ```
 
-缺少样本、构建失败、应用超时、结果不完整或任一轮 `status != passed` 时，脚本以非零状态退出，并恢复并发策略文件。候选阶段的并发观测、RSS 或延迟门禁失败只会把该候选标记为不合格，并继续完成其他候选；最终重跑门禁失败仍以非零状态退出。成功验收报告只会在最终门禁通过后原子替换。自动基准通过后，还必须使用最终同一次构建的 `.app` 完成人工六项：
+缺少样本、构建失败、应用超时、结果不完整或任一轮 `status != passed` 时，脚本以非零状态退出，并恢复并发策略文件。候选阶段的并发观测、RSS 或延迟门禁失败只会把该候选标记为不合格，并继续完成其他候选；最终重跑门禁失败仍以非零状态退出。成功验收报告只会在最终门禁通过后原子替换。最终证据必须按来源分类：第 1-4 项是同机同样本人工证据，第 5 项是自动化故障注入，第 6 项是真实切换加自动化生命周期证据。
+
+人工证据：
 
 1. `henan.udbx/weibo` 平移缩放按当前范围加载，放大后截断提示消失。
 2. 县级行政区划按视口浏览，第二页对象可定位并高亮。
 3. `SampleData.udbx` 点、线、面、CAD 多图层显隐和移除正常，CAD 保持有界预览。
 4. 快速连续缩放无白屏、无旧范围回跳。
-5. 单图层查询失败保留旧图形，其他图层继续可用。
-6. 关闭或切换文件后旧请求不写入新地图。
 
-人工结果填写到最终 `summary.md`。截至 2026-07-18，真实并发 1/2/3 候选、最终重建后 30 轮、自动门禁和人工六项均已完成；最终并发保持 1。当前验收基于提交 `644d64f6688728ec7ea9a6137b82e58fdc6ea3c2`，最终应用 SHA256 为 `2057ac3c02e637fd8ced54f0418ddc8dd8ff7b354d36359219cbc290a9ff6b93`。完整原始数据位于 `.benchmark-results/final-calibration-644d64f/`，项目级验收报告位于 `udbx4x` 工作区的 `docs/superpowers/reports/2026-07-16-udbx-viewer-viewport-spatial-query-acceptance.md`；该报告不属于独立 `udbx4go` 仓库。性能数据只适合作为当前电脑、当前系统和当前样本的本机基线；不同 CPU、内存、macOS 版本、后台负载或文件缓存条件下的绝对数值不能直接比较。
+自动化故障注入：
+
+5. 单图层查询失败保留旧图形，其他图层继续可用。
+
+真实切换加自动化生命周期：
+
+6. 真实执行关闭或切换文件，并由自动化生命周期测试证明旧请求结果不写入新地图。
+
+2026-07-18 基于提交 `644d64f6688728ec7ea9a6137b82e58fdc6ea3c2`、应用 SHA256 `2057ac3c02e637fd8ced54f0418ddc8dd8ff7b354d36359219cbc290a9ff6b93` 的并发候选与最终 30 轮结果仅保留为历史性能和交互证据。该运行没有确定性制造 stale request，也没有检查 canvas 非透明像素，因此不能证明当前陈旧结果丢弃和非白屏门禁。历史原始数据位于 `.benchmark-results/final-calibration-644d64f/`，项目级报告位于 `udbx4x` 工作区的 `docs/superpowers/reports/2026-07-16-udbx-viewer-viewport-spatial-query-acceptance.md`；该报告不属于独立 `udbx4go` 仓库。性能数据只适合作为当时电脑、系统和样本的本机基线；不同 CPU、内存、macOS 版本、后台负载或文件缓存条件下的绝对数值不能直接比较。
 
 ## 维护约束
 

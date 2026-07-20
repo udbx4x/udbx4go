@@ -294,8 +294,8 @@ func main() {
         log.Fatal(err)
     }
 
-    fmt.Printf("features=%d hasMore=%t strategy=%s degradedReason=%s\n",
-        len(result.Features), result.HasMore, result.Strategy, result.DegradedReason)
+    fmt.Printf("features=%d hasMore=%t strategy=%s\n",
+        len(result.Features), result.HasMore, result.Strategy)
 }
 ```
 
@@ -304,7 +304,7 @@ func main() {
 - `Bounds` 坐标必须是有限数值且顺序合法。MBR 相交使用闭区间，因此与查询边界接触的要素也会命中。
 - SDK 最多读取 `Limit + 1` 个普通视口候选；额外一条只用于设置 `HasMore`，不会进入返回结果。
 - `RequiredIDs` 去重后，在对象存在时追加到结果，即使对象位于视口外。它们不占用 `Limit`，也不影响 `HasMore`，所以 `len(Features)` 可以大于 `Limit`。
-- `Features` 是视口 MBR 命中对象和实际存在的必含对象的去重并集；必含对象不保证与 `QueriedBounds` 相交。
+- `Features` 是视口 MBR 命中对象和实际存在的必含对象的去重并集；所有普通要素都必须与 `Bounds` MBR 相交，只有通过 `RequiredIDs` 追加的要素可以位于视口外，且不保证与 `QueriedBounds` 相交。
 - 当前只提供 MBR 过滤，不等价于 `Intersects`、`Contains`、`Within` 等精确拓扑谓词。
 
 `Strategy` 记录实际执行路径：
@@ -313,9 +313,8 @@ func main() {
 |----|------|
 | `rtree` | 使用经过结构校验的 UDBX RTree 生成视口候选。 |
 | `envelope_cache` | 数据集没有可用 RTree，使用内存 GAIA 包络缓存生成候选。 |
-| `bounded_sample` | 缓存准入超过当前资源策略，返回有界采样。 |
 
-非降级结果的 `DegradedReason` 为空。错误和降级结果使用以下六个稳定原因码：
+以上是 SDK 成功结果仅有的两种策略。`SpatialQueryResult` 没有 `DegradedReason` 字段。查询错误和 capability 诊断使用以下六个稳定原因码：
 
 | 值 | 含义 |
 |----|------|
@@ -326,7 +325,9 @@ func main() {
 | `corrupt_geometry` | GAIA 头部或完整几何损坏。 |
 | `unsupported_dataset_kind` | 数据集类型不在视口查询范围内。 |
 
-包络缓存只属于当前打开的一个 `DataSource`，不会写入 UDBX 文件，也不会跨进程共享；`Close` 会释放缓存。当前默认策略为单数据集 32 MiB、单个 `DataSource` 合计 64 MiB，构建超时 500 ms。预算按 PoC 拟合的稳定 RSS charge 计费：每个数据集固定约 4 MiB，再按 cache capacity 的每个 entry 约 80 bytes 计费；它不是 `unsafe.Sizeof` slice 大小，也不是对象数硬阈值。这些数值是基于测量的 SDK 当前资源默认值，可以随实测调整，不是 UDBX 格式限制。本版本的 Text、CAD 和 Tabular 数据集不支持 `QuerySpatial`；Text 和 CAD 继续通过有上界的 `List`/`ListContext` 预览路径读取。
+包络缓存只属于当前打开的一个 `DataSource`，不会写入 UDBX 文件，也不会跨进程共享；`Close` 会释放缓存。当前默认策略为单数据集 32 MiB、单个 `DataSource` 合计 64 MiB，构建超时 500 ms。预算按 PoC 拟合的稳定 RSS charge 计费：每个数据集固定约 4 MiB，再按 cache capacity 的每个 entry 约 80 bytes 计费；它不是 `unsafe.Sizeof` slice 大小，也不是对象数硬阈值。完整缓存无法准入时，`QuerySpatial` 返回原因为 `envelope_cache_budget_exceeded` 的错误，不会把非空间采样作为 SDK 成功结果返回。这些数值是基于测量的 SDK 当前资源默认值，可以随实测调整，不是 UDBX 格式限制。
+
+本版本的 Text、CAD 和 Tabular 数据集不支持 `QuerySpatial`；Text 和 CAD 继续通过有上界的 `List`/`ListContext` 预览路径读取。Wails Viewer 可以捕获缓存预算错误，或在 Text/CAD 路径生成私有的非空间 `bounded_sample` 预览。该 Viewer 预览不是 SDK `QuerySpatial` 成功结果；其 DTO 可以保留 `degradedReason` 供界面诊断。
 
 ## 数据集类型
 

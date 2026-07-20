@@ -14,7 +14,7 @@ A Go implementation of the UDBX (Universal Spatial Database Extension) reader/wr
 - ✅ Core UDBX read/write support, including Text / GeoText and CAD minimal GeoHeader baselines.
 - ✅ Dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD
 - ✅ `TextDataset` supports minimal GeoText read/write CRUD and `CadDataset` supports minimal GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion`.
-- ✅ Context-aware viewport MBR queries for Point, Line, Region, and their Z variants, with RTree, envelope-cache, and bounded-sample strategies.
+- ✅ Context-aware viewport MBR queries for Point, Line, Region, and their Z variants, with verified RTree and envelope-cache strategies.
 - ✅ 14 field types with proper type mapping
 - ✅ GeoJSON-like geometry model
 - ✅ Streaming and batch operations
@@ -92,9 +92,9 @@ result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
 })
 ```
 
-MBR intersection uses closed intervals. `HasMore` applies only to ordinary viewport matches; required IDs are deduplicated, do not consume `Limit`, and can keep an offscreen selection in the result. The returned strategy is `rtree`, `envelope_cache`, or `bounded_sample`. Envelope caches live only for the open `DataSource` and are released by `Close`.
+MBR intersection uses closed intervals. Every ordinary feature intersects the requested bounds MBR. `HasMore` applies only to ordinary viewport matches; required IDs are deduplicated, do not consume `Limit`, and are the only features that may remain outside the viewport. A successful SDK result uses only `rtree` or `envelope_cache`, and `SpatialQueryResult` has no `DegradedReason` field. Envelope caches live only for the open `DataSource` and are released by `Close`.
 
-The current defaults of 32 MiB per dataset and 64 MiB per `DataSource` are measured cache resource policies. They charge a stable-RSS model of roughly 4 MiB fixed per dataset plus 80 bytes per capacity entry, not an object-count or UDBX format limit. Viewport queries currently cover Point, Line, Region, PointZ, LineZ, and RegionZ. Text and CAD retain bounded preview/list behavior. See [API.md](./API.md#viewport-spatial-queries) for the runnable program, all six reason codes, and `ListContext` cancellation semantics.
+The current defaults of 32 MiB per dataset and 64 MiB per `DataSource` are measured cache resource policies. They charge a stable-RSS model of roughly 4 MiB fixed per dataset plus 80 bytes per capacity entry, not an object-count or UDBX format limit. If a complete cache exceeds that policy, the SDK returns an `envelope_cache_budget_exceeded` error. Viewport queries currently cover Point, Line, Region, PointZ, LineZ, and RegionZ. Text and CAD retain bounded preview/list behavior. The Viewer may turn the budget error or Text/CAD path into its private non-spatial `bounded_sample` preview, whose DTO can keep `degradedReason`; this is not an SDK success strategy. See [API.md](./API.md#viewport-spatial-queries) for the runnable program, all six reason codes, and `ListContext` cancellation semantics.
 
 ## GUI Viewer
 

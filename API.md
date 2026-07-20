@@ -294,8 +294,8 @@ func main() {
         log.Fatal(err)
     }
 
-    fmt.Printf("features=%d hasMore=%t strategy=%s degradedReason=%s\n",
-        len(result.Features), result.HasMore, result.Strategy, result.DegradedReason)
+    fmt.Printf("features=%d hasMore=%t strategy=%s\n",
+        len(result.Features), result.HasMore, result.Strategy)
 }
 ```
 
@@ -304,7 +304,7 @@ func main() {
 - `Bounds` coordinates must be finite and ordered. MBR intersection uses closed intervals, so features touching a query edge are included.
 - The SDK reads at most `Limit + 1` ordinary viewport candidates. The extra candidate is used only to set `HasMore` and is not returned.
 - `RequiredIDs` are deduplicated and appended when they exist, even when outside the viewport. They do not consume `Limit` and do not affect `HasMore`; therefore `len(Features)` can exceed `Limit`.
-- `Features` is the deduplicated union of viewport MBR matches and existing required features. A returned required feature is not guaranteed to intersect `QueriedBounds`.
+- `Features` is the deduplicated union of viewport MBR matches and existing required features. Every ordinary feature intersects the `Bounds` MBR; only a feature appended through `RequiredIDs` may be outside the viewport and is not guaranteed to intersect `QueriedBounds`.
 - This is MBR filtering, not an exact topology predicate such as `Intersects`, `Contains`, or `Within`.
 
 `Strategy` records the path actually used:
@@ -313,9 +313,8 @@ func main() {
 |-------|---------|
 | `rtree` | A verified UDBX RTree produced viewport candidates. |
 | `envelope_cache` | An in-memory GAIA envelope cache produced candidates for a dataset without a usable RTree. |
-| `bounded_sample` | Cache admission exceeded the current policy, so a bounded sample was returned. |
 
-`DegradedReason` is empty for a non-degraded result. Errors and degraded results use these six stable reason codes:
+These are the only successful SDK strategies. `SpatialQueryResult` has no `DegradedReason` field. Query errors and capability diagnostics use these six stable reason codes:
 
 | Value | Meaning |
 |-------|---------|
@@ -326,7 +325,9 @@ func main() {
 | `corrupt_geometry` | A GAIA header or full geometry is malformed. |
 | `unsupported_dataset_kind` | The dataset kind is outside the viewport-query scope. |
 
-The envelope cache belongs to one open `DataSource`. It is never written to the UDBX file or shared across processes, and `Close` releases it. The current default policy allows 32 MiB for one dataset and 64 MiB across one `DataSource`, with a 500 ms build timeout. Budgets charge an empirical stable-RSS model fitted from the PoC: roughly 4 MiB fixed per dataset plus 80 bytes per cache-capacity entry. This is neither the slice's `unsafe.Sizeof` footprint nor a hard object-count threshold. These values are measured SDK resource defaults and may evolve; they are not UDBX format limits. Text, CAD, and Tabular datasets do not support `QuerySpatial` in this release. Text and CAD remain available through their bounded `List`/`ListContext` preview paths.
+The envelope cache belongs to one open `DataSource`. It is never written to the UDBX file or shared across processes, and `Close` releases it. The current default policy allows 32 MiB for one dataset and 64 MiB across one `DataSource`, with a 500 ms build timeout. Budgets charge an empirical stable-RSS model fitted from the PoC: roughly 4 MiB fixed per dataset plus 80 bytes per cache-capacity entry. This is neither the slice's `unsafe.Sizeof` footprint nor a hard object-count threshold. If a complete cache cannot be admitted, `QuerySpatial` returns an error whose reason is `envelope_cache_budget_exceeded`; it never returns a non-spatial sample as a successful SDK result. These values are measured SDK resource defaults and may evolve; they are not UDBX format limits.
+
+Text, CAD, and Tabular datasets do not support `QuerySpatial` in this release. Text and CAD remain available through bounded `List`/`ListContext` preview paths. The Wails Viewer may catch the cache-budget error, or use the Text/CAD path, and produce a private non-spatial `bounded_sample` preview. That Viewer preview is not an SDK `QuerySpatial` success result; its DTO may retain `degradedReason` for UI diagnostics.
 
 ## Dataset Types
 
