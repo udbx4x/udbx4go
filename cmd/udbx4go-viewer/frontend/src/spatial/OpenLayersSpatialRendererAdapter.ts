@@ -15,6 +15,7 @@ import type { SpatialRendererAdapter } from './SpatialRendererAdapter'
 
 type GeometryKind = 'point' | 'line' | 'polygon'
 type ExtentTuple = [number, number, number, number]
+const MAX_PIXEL_READ_PIXELS = 256 * 1024
 
 export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter {
   private map: OlMap | null = null
@@ -27,50 +28,65 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   private viewportChangeHandler: ((viewport: BoundingBox) => void) | null = null
   private singleClickListener: ((event: MapBrowserEvent) => void) | null = null
   private moveendListener: (() => void) | null = null
+  private pendingRenderWaits = new Set<(error: Error) => void>()
 
   mount(container: HTMLElement): void {
     this.destroy()
     this.container = container
-    this.map = new OlMap({
-      target: container,
-      layers: [],
-      view: new View({
-        center: [0, 0],
-        zoom: 2,
-      }),
-    })
+    try {
+      this.map = new OlMap({
+        target: container,
+        layers: [],
+        view: new View({
+          center: [0, 0],
+          zoom: 2,
+        }),
+      })
 
-    this.singleClickListener = (event) => {
-      const feature = this.map?.forEachFeatureAtPixel(event.pixel, (candidate) => candidate)
-      const datasetName = feature?.get('datasetName')
-      const featureID = feature?.get('featureID')
-      if (typeof datasetName === 'string' && typeof featureID === 'number') {
-        this.featureClickHandler?.(datasetName, featureID)
+      this.singleClickListener = (event) => {
+        const feature = this.map?.forEachFeatureAtPixel(event.pixel, (candidate) => candidate)
+        const datasetName = feature?.get('datasetName')
+        const featureID = feature?.get('featureID')
+        if (typeof datasetName === 'string' && typeof featureID === 'number') {
+          this.featureClickHandler?.(datasetName, featureID)
+        }
       }
-    }
-    this.map.on('singleclick', this.singleClickListener)
+      this.map.on('singleclick', this.singleClickListener)
 
-    this.moveendListener = () => this.emitViewport()
-    this.map.on('moveend', this.moveendListener)
-    this.map.renderSync()
+      this.moveendListener = () => this.emitViewport()
+      this.map.on('moveend', this.moveendListener)
+      this.map.renderSync()
+    } catch (error) {
+      this.destroy()
+      throw error
+    }
   }
 
   destroy(): void {
-    if (this.map && this.singleClickListener) {
-      this.map.un('singleclick', this.singleClickListener)
-    }
-    this.singleClickListener = null
-    if (this.map && this.moveendListener) {
-      this.map.un('moveend', this.moveendListener)
-    }
-    this.moveendListener = null
-    this.map?.setTarget(undefined)
+    const map = this.map
+    const singleClickListener = this.singleClickListener
+    const moveendListener = this.moveendListener
     this.map = null
+    this.container = null
+    this.singleClickListener = null
+    this.moveendListener = null
+
+    const error = new Error('OpenLayers map was destroyed before rendercomplete')
+    for (const cancel of [...this.pendingRenderWaits]) {
+      cancel(error)
+    }
+
+    if (map && singleClickListener) {
+      map.un('singleclick', singleClickListener)
+    }
+    if (map && moveendListener) {
+      map.un('moveend', moveendListener)
+    }
+    map?.setTarget(undefined)
     this.sources.forEach((source) => source.clear())
     this.sources.clear()
     this.layers.clear()
     this.layerStates.clear()
-    this.container = null
   }
 
   setLayer(layer: MapLayerState): void {
@@ -217,21 +233,45 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
   }
 
   waitForRenderComplete(timeoutMS = 5000): Promise<void> {
-    if (!this.map) {
+    const map = this.map
+    if (!map) {
       return Promise.reject(new Error('OpenLayers map is not mounted'))
     }
     return new Promise((resolve, reject) => {
-      const map = this.map!
-      const timeoutID = window.setTimeout(() => {
+      let settled = false
+      let timeoutID: number | null = null
+      const cleanup = () => {
+        if (settled) {
+          return false
+        }
+        settled = true
+        if (timeoutID !== null) {
+          window.clearTimeout(timeoutID)
+        }
         map.un('rendercomplete', finish)
-        reject(new Error(`rendercomplete timed out after ${timeoutMS}ms`))
-      }, timeoutMS)
-      const finish = () => {
-        window.clearTimeout(timeoutID)
-        resolve()
+        this.pendingRenderWaits.delete(cancel)
+        return true
       }
+      const finish = () => {
+        if (cleanup()) {
+          resolve()
+        }
+      }
+      const cancel = (error: Error) => {
+        if (cleanup()) {
+          reject(error)
+        }
+      }
+      this.pendingRenderWaits.add(cancel)
       map.once('rendercomplete', finish)
-      map.renderSync()
+      timeoutID = window.setTimeout(() => {
+        cancel(new Error(`rendercomplete timed out after ${timeoutMS}ms`))
+      }, timeoutMS)
+      try {
+        map.renderSync()
+      } catch (error) {
+        cancel(asError(error))
+      }
     })
   }
 
@@ -246,10 +286,18 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
         if (!context) {
           return false
         }
-        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data
-        for (let index = 3; index < pixels.length; index += 4) {
-          if (pixels[index] !== 0) {
-            return true
+        const chunkWidth = Math.min(canvas.width, MAX_PIXEL_READ_PIXELS)
+        const chunkHeight = Math.max(1, Math.floor(MAX_PIXEL_READ_PIXELS / chunkWidth))
+        for (let y = 0; y < canvas.height; y += chunkHeight) {
+          const readHeight = Math.min(chunkHeight, canvas.height - y)
+          for (let x = 0; x < canvas.width; x += chunkWidth) {
+            const readWidth = Math.min(chunkWidth, canvas.width - x)
+            const pixels = context.getImageData(x, y, readWidth, readHeight).data
+            for (let index = 3; index < pixels.length; index += 4) {
+              if (pixels[index] !== 0) {
+                return true
+              }
+            }
           }
         }
       } catch {
@@ -332,6 +380,10 @@ export class OpenLayersSpatialRendererAdapter implements SpatialRendererAdapter 
       }),
     })
   }
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
 }
 
 function toOpenLayersGeometry(feature: PreviewFeature): Point | MultiLineString | MultiPolygon {

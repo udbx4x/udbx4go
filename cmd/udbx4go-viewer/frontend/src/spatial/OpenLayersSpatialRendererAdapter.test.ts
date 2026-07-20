@@ -52,17 +52,17 @@ const openLayersMocks = vi.hoisted(() => {
 
   class MockMap {
     static instances: MockMap[] = []
+    static constructorError: Error | null = null
+    static renderSyncError: Error | null = null
 
     readonly on = vi.fn((type: string, listener: () => void) => {
-      this.listeners.set(type, listener)
+      this.addListener(type, listener)
     })
     readonly once = vi.fn((type: string, listener: () => void) => {
-      this.listeners.set(type, listener)
+      this.addListener(type, listener)
     })
     readonly un = vi.fn((type: string, listener: () => void) => {
-      if (this.listeners.get(type) === listener) {
-        this.listeners.delete(type)
-      }
+      this.listeners.get(type)?.delete(listener)
     })
     readonly addLayer = vi.fn()
     readonly removeLayer = vi.fn()
@@ -72,14 +72,20 @@ const openLayersMocks = vi.hoisted(() => {
     })
     readonly render = vi.fn()
     readonly renderSync = vi.fn(() => {
+      if (MockMap.renderSyncError) {
+        throw MockMap.renderSyncError
+      }
       this.hasRenderBaseline = true
     })
     readonly view: MockView
-    private readonly listeners = new Map<string, () => void>()
+    private readonly listeners = new Map<string, Set<() => void>>()
     private hasRenderBaseline = false
     private targetActive: boolean
 
     constructor(options: { target: HTMLElement, view: MockView }) {
+      if (MockMap.constructorError) {
+        throw MockMap.constructorError
+      }
       this.view = options.view
       this.targetActive = Boolean(options.target)
       this.view.onFit = () => {
@@ -103,7 +109,15 @@ const openLayersMocks = vi.hoisted(() => {
     }
 
     emit(type: string): void {
-      this.listeners.get(type)?.()
+      for (const listener of [...(this.listeners.get(type) ?? [])]) {
+        listener()
+      }
+    }
+
+    private addListener(type: string, listener: () => void): void {
+      const listeners = this.listeners.get(type) ?? new Set<() => void>()
+      listeners.add(listener)
+      this.listeners.set(type, listeners)
     }
   }
 
@@ -117,6 +131,11 @@ import {
   OpenLayersSpatialRendererAdapter,
   calculateSelectedFeatureFitExtent,
 } from './OpenLayersSpatialRendererAdapter'
+
+beforeEach(() => {
+  openLayersMocks.MockMap.constructorError = null
+  openLayersMocks.MockMap.renderSyncError = null
+})
 
 describe('OpenLayersSpatialRendererAdapter viewport', () => {
   beforeEach(() => {
@@ -271,6 +290,126 @@ describe('OpenLayersSpatialRendererAdapter viewport', () => {
       vi.useRealTimers()
     }
   })
+
+  it('destroy 立即拒绝 pending wait，并解绑 listener、清除 timer', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = new OpenLayersSpatialRendererAdapter()
+      adapter.mount(document.createElement('div'))
+      const map = openLayersMocks.MockMap.instances[0]
+      const rendered = adapter.waitForRenderComplete()
+      const capturedError = captureError(rendered)
+      const listener = map.once.mock.calls.find(([type]) => type === 'rendercomplete')?.[1]
+      expect(vi.getTimerCount()).toBe(1)
+
+      adapter.destroy()
+
+      expect(await capturedError).toEqual(new Error('OpenLayers map was destroyed before rendercomplete'))
+      expect(map.un).toHaveBeenCalledWith('rendercomplete', listener)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('重复 mount 立即拒绝旧 map 的 pending wait 并完成清理', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = new OpenLayersSpatialRendererAdapter()
+      adapter.mount(document.createElement('div'))
+      const oldMap = openLayersMocks.MockMap.instances[0]
+      const rendered = adapter.waitForRenderComplete()
+      const capturedError = captureError(rendered)
+      const listener = oldMap.once.mock.calls.find(([type]) => type === 'rendercomplete')?.[1]
+
+      adapter.mount(document.createElement('div'))
+
+      expect(await capturedError).toEqual(new Error('OpenLayers map was destroyed before rendercomplete'))
+      expect(oldMap.un).toHaveBeenCalledWith('rendercomplete', listener)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('waitForRenderComplete 的 renderSync 同步抛错时清理 listener 和 timer', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = new OpenLayersSpatialRendererAdapter()
+      adapter.mount(document.createElement('div'))
+      const map = openLayersMocks.MockMap.instances[0]
+      openLayersMocks.MockMap.renderSyncError = new Error('render sync failed')
+
+      const rendered = adapter.waitForRenderComplete()
+      const capturedError = captureError(rendered)
+      const listener = map.once.mock.calls.find(([type]) => type === 'rendercomplete')?.[1]
+
+      expect(await capturedError).toEqual(new Error('render sync failed'))
+      expect(map.un).toHaveBeenCalledWith('rendercomplete', listener)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('并发 wait 独立 timeout 和完成，不互相清理 listener 或 timer', async () => {
+    vi.useFakeTimers()
+    try {
+      const adapter = new OpenLayersSpatialRendererAdapter()
+      adapter.mount(document.createElement('div'))
+      const map = openLayersMocks.MockMap.instances[0]
+      const first = adapter.waitForRenderComplete(10)
+      const second = adapter.waitForRenderComplete(50)
+      const firstError = captureError(first)
+      let secondResolved = false
+      const secondResult = second.then(() => { secondResolved = true })
+      const listeners = map.once.mock.calls
+        .filter(([type]) => type === 'rendercomplete')
+        .map(([, listener]) => listener)
+
+      await vi.advanceTimersByTimeAsync(10)
+
+      expect(await firstError).toEqual(new Error('rendercomplete timed out after 10ms'))
+      expect(map.un).toHaveBeenCalledWith('rendercomplete', listeners[0])
+      expect(map.un).not.toHaveBeenCalledWith('rendercomplete', listeners[1])
+      expect(secondResolved).toBe(false)
+      expect(vi.getTimerCount()).toBe(1)
+
+      map.emit('rendercomplete')
+      await secondResult
+      expect(secondResolved).toBe(true)
+      expect(map.un).toHaveBeenCalledWith('rendercomplete', listeners[1])
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['constructor', 'renderSync'] as const)('mount %s 抛错后回滚 map、listener 和 container', (failure) => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const container = document.createElement('div')
+    const readPixels = vi.fn(() => new Uint8ClampedArray([0, 0, 0, 255]))
+    appendLayerCanvas(container, 1, 1, readPixels)
+    const error = new Error(`${failure} failed`)
+    if (failure === 'constructor') {
+      openLayersMocks.MockMap.constructorError = error
+    } else {
+      openLayersMocks.MockMap.renderSyncError = error
+    }
+
+    expect(() => adapter.mount(container)).toThrow(error)
+
+    expect(adapter.hasRenderedFeaturePixels()).toBe(false)
+    expect(readPixels).not.toHaveBeenCalled()
+    const map = openLayersMocks.MockMap.instances[0]
+    if (map) {
+      const singleClickListener = map.on.mock.calls.find(([type]) => type === 'singleclick')?.[1]
+      const moveendListener = map.on.mock.calls.find(([type]) => type === 'moveend')?.[1]
+      expect(map.un).toHaveBeenCalledWith('singleclick', singleClickListener)
+      expect(map.un).toHaveBeenCalledWith('moveend', moveendListener)
+      expect(map.setTarget).toHaveBeenCalledWith(undefined)
+    }
+  })
 })
 
 describe('OpenLayersSpatialRendererAdapter rendered pixels', () => {
@@ -324,6 +463,41 @@ describe('OpenLayersSpatialRendererAdapter rendered pixels', () => {
 
     expect(adapter.hasRenderedFeaturePixels()).toBe(false)
     expect(readPixels).not.toHaveBeenCalled()
+  })
+
+  it('前一个 canvas 读取抛错时继续扫描后一个 canvas 的非零 alpha', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const container = document.createElement('div')
+    appendLayerCanvas(container, 1, 1, () => {
+      throw new DOMException('tainted canvas', 'SecurityError')
+    })
+    appendLayerCanvas(container, 1, 1, () => new Uint8ClampedArray([0, 0, 0, 255]))
+    adapter.mount(container)
+
+    expect(adapter.hasRenderedFeaturePixels()).toBe(true)
+  })
+
+  it('大 canvas 按固定像素上限逐块读取且不漏最后一块', () => {
+    const adapter = new OpenLayersSpatialRendererAdapter()
+    const container = document.createElement('div')
+    const reads: Array<{ x: number, y: number, width: number, height: number }> = []
+    appendLayerCanvas(container, 1024, 513, (x, y, width, height) => {
+      reads.push({ x, y, width, height })
+      const pixels = new Uint8ClampedArray(width * height * 4)
+      if (y === 512) {
+        pixels[pixels.length - 1] = 255
+      }
+      return pixels
+    })
+    adapter.mount(container)
+
+    expect(adapter.hasRenderedFeaturePixels()).toBe(true)
+    expect(reads).toEqual([
+      { x: 0, y: 0, width: 1024, height: 256 },
+      { x: 0, y: 256, width: 1024, height: 256 },
+      { x: 0, y: 512, width: 1024, height: 1 },
+    ])
+    expect(reads.every(({ width, height }) => width * height <= 256 * 1024)).toBe(true)
   })
 })
 
@@ -467,7 +641,7 @@ function appendLayerCanvas(
   container: HTMLElement,
   width: number,
   height: number,
-  readPixels: (() => Uint8ClampedArray) | null,
+  readPixels: ((x: number, y: number, width: number, height: number) => Uint8ClampedArray) | null,
 ): HTMLCanvasElement {
   const layer = document.createElement('div')
   layer.className = 'ol-layer'
@@ -476,7 +650,9 @@ function appendLayerCanvas(
   canvas.height = height
   const getImageData = readPixels === null
     ? null
-    : vi.fn(() => ({ data: readPixels() }))
+    : vi.fn((x: number, y: number, readWidth: number, readHeight: number) => ({
+        data: readPixels(x, y, readWidth, readHeight),
+      }))
   Object.defineProperty(canvas, 'getContext', {
     value: vi.fn(() => getImageData === null ? null : { getImageData }),
     configurable: true,
@@ -484,6 +660,13 @@ function appendLayerCanvas(
   layer.append(canvas)
   container.append(layer)
   return canvas
+}
+
+function captureError(promise: Promise<void>): Promise<unknown> {
+  return promise.then(
+    () => null,
+    (error: unknown) => error,
+  )
 }
 
 function createLayer(features: PreviewFeature[], fillColor = '#1971c2'): MapLayerState {
