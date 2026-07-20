@@ -514,10 +514,10 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
 }
 
 function geometryKind(kind: string): 'point' | 'line' | 'polygon' {
-  if (kind === 'line' || kind === 'line_z') {
+  if (kind === 'line' || kind === 'lineZ') {
     return 'line'
   }
-  if (kind === 'region' || kind === 'region_z') {
+  if (kind === 'region' || kind === 'regionZ') {
     return 'polygon'
   }
   return 'point'

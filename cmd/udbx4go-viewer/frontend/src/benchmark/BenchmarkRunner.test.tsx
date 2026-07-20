@@ -204,11 +204,15 @@ describe('BenchmarkRunner', () => {
   })
 
   it.each([
-    { renderedPixels: true, expectedBlankRender: false },
-    { renderedPixels: false, expectedBlankRender: true },
-  ])('视口步骤在要素数为正时按像素结果计算 blankRender: $renderedPixels', async ({
+    { renderedPixels: true, expectedBlankRender: false, kind: 'point', expectedGeometryKind: 'point' },
+    { renderedPixels: false, expectedBlankRender: true, kind: 'point', expectedGeometryKind: 'point' },
+    { renderedPixels: true, expectedBlankRender: false, kind: 'lineZ', expectedGeometryKind: 'line' },
+    { renderedPixels: true, expectedBlankRender: false, kind: 'regionZ', expectedGeometryKind: 'polygon' },
+  ] as const)('视口步骤按 $kind 类型定位并按像素结果计算 blankRender: $renderedPixels', async ({
     renderedPixels,
     expectedBlankRender,
+    kind,
+    expectedGeometryKind,
   }) => {
     const adapter = createAdapter()
     adapter.hasRenderedFeaturePixels.mockReturnValue(renderedPixels)
@@ -216,9 +220,9 @@ describe('BenchmarkRunner', () => {
     const runScenario = vi.fn(async (_config, dependencies) => {
       await dependencies.openFile(config.scenario.filePath)
       dependencies.setLayer({
-        datasetName: 'BaseMap_P', kind: 'point', visible: true, style: {} as never,
+        datasetName: 'BaseMap_P', kind, visible: true, style: {} as never,
         loading: false, error: null,
-        summary: { datasetName: 'BaseMap_P', kind: 'point', objectCount: 1, estimatedVertexCount: 1, previewSupported: true, viewportQuerySupported: true, rtreeAvailable: true },
+        summary: { datasetName: 'BaseMap_P', kind, objectCount: 1, estimatedVertexCount: 1, previewSupported: true, viewportQuerySupported: true, rtreeAvailable: true },
         preview: null, queryStatus: 'idle', queryError: null,
       })
       viewportResult = await dependencies.runViewportStep(config.scenario.viewportSteps[0], [])
@@ -245,7 +249,7 @@ describe('BenchmarkRunner', () => {
       featureIDs: [7],
     })
     expect(adapter.hasFeature).toHaveBeenCalledWith('BaseMap_P', 7)
-    expect(adapter.fitBounds).toHaveBeenCalledWith(config.scenario.viewportSteps[0].bounds, 'point')
+    expect(adapter.fitBounds).toHaveBeenCalledWith(config.scenario.viewportSteps[0].bounds, expectedGeometryKind)
     expect(adapter.waitForRenderComplete).toHaveBeenCalledTimes(1)
     expect(adapter.hasRenderedFeaturePixels).toHaveBeenCalledTimes(1)
   })
