@@ -67,6 +67,42 @@ func TestGeometryColumnsDao_GetByTableName_NotFound(t *testing.T) {
 	assert.Nil(t, retrieved)
 }
 
+func TestGeometryColumnsDao_ListByTableName(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dao := NewGeometryColumnsDao(db)
+	require.NoError(t, dao.Insert(&GeometryColumnsRecord{
+		FTableName:          "roads",
+		FGeometryColumn:     "centerline",
+		GeometryType:        5,
+		CoordDimension:      2,
+		SRID:                4326,
+		SpatialIndexEnabled: 1,
+	}))
+	require.NoError(t, dao.Insert(&GeometryColumnsRecord{
+		FTableName:          "roads",
+		FGeometryColumn:     "boundary",
+		GeometryType:        6,
+		CoordDimension:      2,
+		SRID:                4326,
+		SpatialIndexEnabled: 0,
+	}))
+	require.NoError(t, dao.Insert(&GeometryColumnsRecord{
+		FTableName:      "roads_archive",
+		FGeometryColumn: "geometry",
+		GeometryType:    5,
+		CoordDimension:  2,
+		SRID:            4326,
+	}))
+
+	records, err := dao.ListByTableName("roads")
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	assert.Equal(t, "boundary", records[0].FGeometryColumn)
+	assert.Equal(t, "centerline", records[1].FGeometryColumn)
+}
+
 func TestGeometryColumnsDao_DeleteByTableName(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -75,10 +111,10 @@ func TestGeometryColumnsDao_DeleteByTableName(t *testing.T) {
 
 	// Insert record
 	err := dao.Insert(&GeometryColumnsRecord{
-		FTableName:      "cities",
-		GeometryType:    1,
-		CoordDimension:  2,
-		SRID:            4326,
+		FTableName:     "cities",
+		GeometryType:   1,
+		CoordDimension: 2,
+		SRID:           4326,
 	})
 	require.NoError(t, err)
 

@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Added `DataSource.QuerySpatial` and `GetSpatialQueryCapability` for Point, Line, Region, and corresponding Z datasets.
+- Added closed-interval MBR queries with stable `hasMore`, required-ID, strategy, and six-reason-code semantics from `udbx4spec`.
+- Added verified RTree querying and DataSource-lifetime envelope caches; cache admission failures return the stable `envelope_cache_budget_exceeded` error.
+- Added context-aware `ListContext` methods for spatial, Text, and CAD datasets.
+- Added Viewer-private non-spatial `bounded_sample` previews for cache-budget failures and Text/CAD paths while retaining `degradedReason` in the Viewer DTO.
+- Added Viewer viewport coordination, offscreen selection retention, deterministic stale-result probes, canvas-pixel blank-render gates, real-sample automatic tests, the envelope-cache PoC, and transactional macOS benchmark tooling.
+
+### Changed
+
+- The current envelope-cache defaults are 32 MiB per dataset and 64 MiB per open DataSource. They are measured SDK resource policies, not UDBX format limits.
+- Tightened `QuerySpatial` to the `udbx4spec` contract: successful strategies are only `rtree` and `envelope_cache`; ordinary features must intersect the requested MBR, only required IDs may be offscreen, and `SpatialQueryResult` no longer carries degraded-result diagnostics.
+- Viewer query concurrency remains 1 until packaged runtime measurements for candidates 2 and 3 pass the acceptance gates.
+
+### Known limitations
+
+- Text and CAD viewport queries, coordinate projection, and exact topology predicates are not implemented; Text and CAD keep bounded preview/list behavior.
+- SDK, Viewer, frontend, specification, and non-GUI benchmark workflow gates are automated. The previous packaged benchmark remains historical evidence because it did not deterministically create a stale request or inspect rendered canvas pixels; the tightened gates require a new packaged run.
+
 ## [0.1.0] - 2026-06-26
 
 ### Added

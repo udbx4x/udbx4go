@@ -30,6 +30,9 @@ export interface SpatialSummary {
   estimatedVertexCount: number
   previewSupported: boolean
   unsupportedReason?: string
+  viewportQuerySupported: boolean
+  rtreeAvailable: boolean
+  queryDiagnosticReason?: string
 }
 
 export interface PreviewGeometry {
@@ -54,6 +57,13 @@ export interface SpatialPreview {
   estimatedVertexCount: number
   sampled: boolean
   sampleReason?: string
+  queriedBounds?: BoundingBox
+  strategy: string
+  hasMore: boolean
+  degradedReason?: string
+  queryDurationMs: number
+  fileGeneration: number
+  viewportFeatureCount?: number
 }
 
 export interface FeatureAttributes {
@@ -105,6 +115,9 @@ export interface MapLayerState {
   error: string | null
   summary: SpatialSummary | null
   preview: SpatialPreview | null
+  queryStatus: 'idle' | 'loading' | 'ready' | 'degraded' | 'error'
+  queryError: string | null
+  lastQueriedBounds?: BoundingBox
 }
 
 export interface SelectedMapFeature {
@@ -116,6 +129,7 @@ export interface SelectedMapFeature {
 export interface FileInfo {
   path: string
   datasetCount: number
+  fileGeneration: number
 }
 
 // Application state

@@ -4,7 +4,11 @@ import {main} from '../models';
 
 export function CloseUDBXFile():Promise<void>;
 
+export function GetBenchmarkConfig():Promise<main.BenchmarkConfigDTO>;
+
 export function GetCurrentFile():Promise<string>;
+
+export function GetCurrentFileInfo():Promise<main.FileInfo>;
 
 export function GetDatasetFields(arg1:string):Promise<Array<string>>;
 
@@ -24,6 +28,10 @@ export function OpenFileDialog():Promise<string>;
 
 export function OpenUDBXFile(arg1:string):Promise<main.FileInfo>;
 
+export function QuitBenchmark():Promise<void>;
+
 export function ResetViewerSettings():Promise<main.ViewerSettingsDTO>;
+
+export function SaveBenchmarkResult(arg1:main.BenchmarkResultDTO):Promise<void>;
 
 export function SaveViewerSettings(arg1:main.ViewerSettingsDTO):Promise<main.ViewerSettingsDTO>;

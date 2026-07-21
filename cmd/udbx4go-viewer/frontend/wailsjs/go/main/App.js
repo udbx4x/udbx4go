@@ -6,8 +6,16 @@ export function CloseUDBXFile() {
   return window['go']['main']['App']['CloseUDBXFile']();
 }
 
+export function GetBenchmarkConfig() {
+  return window['go']['main']['App']['GetBenchmarkConfig']();
+}
+
 export function GetCurrentFile() {
   return window['go']['main']['App']['GetCurrentFile']();
+}
+
+export function GetCurrentFileInfo() {
+  return window['go']['main']['App']['GetCurrentFileInfo']();
 }
 
 export function GetDatasetFields(arg1) {
@@ -46,8 +54,16 @@ export function OpenUDBXFile(arg1) {
   return window['go']['main']['App']['OpenUDBXFile'](arg1);
 }
 
+export function QuitBenchmark() {
+  return window['go']['main']['App']['QuitBenchmark']();
+}
+
 export function ResetViewerSettings() {
   return window['go']['main']['App']['ResetViewerSettings']();
+}
+
+export function SaveBenchmarkResult(arg1) {
+  return window['go']['main']['App']['SaveBenchmarkResult'](arg1);
 }
 
 export function SaveViewerSettings(arg1) {

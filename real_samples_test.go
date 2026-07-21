@@ -1,9 +1,14 @@
 package udbx4go
 
 import (
+	"context"
+	"database/sql"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,25 +16,265 @@ import (
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
-func requireExternalFixturePath(t *testing.T, path string) string {
+func requireExternalFixturePath(t testing.TB, path string) string {
 	t.Helper()
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			t.Skipf("external fixture not available: %s", path)
-		}
-		require.NoError(t, err)
+	available, err := externalFixtureAvailable(path, os.Getenv("UDBX_REAL_SAMPLES") == "1")
+	require.NoError(t, err, "real sample is required when UDBX_REAL_SAMPLES=1")
+	if !available {
+		t.Skipf("external fixture not available: %s", path)
 	}
 	return path
 }
 
-func sampleDataFixturePath(t *testing.T) string {
+func externalFixtureAvailable(path string, required bool) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) && !required {
+		return false, nil
+	}
+	return false, err
+}
+
+func TestExternalFixtureAvailabilityPolicy(t *testing.T) {
+	existing := filepath.Join(t.TempDir(), "sample.udbx")
+	require.NoError(t, os.WriteFile(existing, nil, 0o600))
+
+	available, err := externalFixtureAvailable(existing, false)
+	require.NoError(t, err)
+	assert.True(t, available)
+
+	missing := filepath.Join(t.TempDir(), "missing.udbx")
+	available, err = externalFixtureAvailable(missing, false)
+	require.NoError(t, err)
+	assert.False(t, available)
+
+	available, err = externalFixtureAvailable(missing, true)
+	assert.False(t, available)
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func sampleDataFixturePath(t testing.TB) string {
 	t.Helper()
 	return requireExternalFixturePath(t, filepath.Join("..", "data", "SampleData.udbx"))
 }
 
-func henanFixturePath(t *testing.T) string {
+func henanFixturePath(t testing.TB) string {
 	t.Helper()
 	return requireExternalFixturePath(t, filepath.Join("..", "data", "henan.udbx"))
+}
+
+func openRealHenanReadOnly(t testing.TB) *DataSource {
+	t.Helper()
+	path, err := filepath.Abs(henanFixturePath(t))
+	require.NoError(t, err)
+
+	dsn := url.URL{Scheme: "file", Path: path}
+	query := dsn.Query()
+	query.Set("mode", "ro")
+	query.Set("immutable", "1")
+	dsn.RawQuery = query.Encode()
+
+	db, err := sql.Open("sqlite3", dsn.String())
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	require.NoError(t, db.Ping())
+	return newDataSource(db)
+}
+
+func TestRealHenanWeiboSpatialQueryUsesRTreeAndViewportMBR(t *testing.T) {
+	ds := openRealHenanReadOnly(t)
+	defer ds.Close()
+	ctx := context.Background()
+	bounds := BoundingBox{MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0}
+	const limit = 1000
+
+	capability, err := ds.GetSpatialQueryCapability(ctx, "weibo")
+	require.NoError(t, err)
+	assert.True(t, capability.RTreeAvailable)
+
+	result, err := ds.QuerySpatial(ctx, "weibo", SpatialQueryOptions{Bounds: bounds, Limit: limit})
+	require.NoError(t, err)
+	assert.Equal(t, SpatialQueryStrategyRTree, result.Strategy)
+	assert.LessOrEqual(t, len(result.Features), limit)
+	assertOrdinaryFeaturesIntersect(t, result.Features, bounds)
+}
+
+func TestRealHenanCountySpatialQueryUsesFallbackWithoutRTree(t *testing.T) {
+	ds := openRealHenanReadOnly(t)
+	defer ds.Close()
+	ctx := context.Background()
+	bounds := BoundingBox{MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0}
+
+	capability, err := ds.GetSpatialQueryCapability(ctx, "县级行政区划")
+	require.NoError(t, err)
+	assert.False(t, capability.RTreeAvailable)
+
+	result, err := ds.QuerySpatial(ctx, "县级行政区划", SpatialQueryOptions{Bounds: bounds, Limit: 100})
+	require.NoError(t, err)
+	assert.Equal(t, SpatialQueryStrategyEnvelopeCache, result.Strategy)
+	assertOrdinaryFeaturesIntersect(t, result.Features, bounds)
+}
+
+func TestRealHenanRoadSpatialQueryUsesRTreeWithChinesePhysicalTable(t *testing.T) {
+	ds := openRealHenanReadOnly(t)
+	defer ds.Close()
+	ctx := context.Background()
+	bounds := BoundingBox{MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0}
+
+	capability, err := ds.GetSpatialQueryCapability(ctx, "公路")
+	require.NoError(t, err)
+	assert.True(t, capability.RTreeAvailable)
+
+	result, err := ds.QuerySpatial(ctx, "公路", SpatialQueryOptions{Bounds: bounds, Limit: 100})
+	require.NoError(t, err)
+	assert.Equal(t, SpatialQueryStrategyRTree, result.Strategy)
+	assert.NotEmpty(t, result.Features)
+	assert.LessOrEqual(t, len(result.Features), 100)
+	assertOrdinaryFeaturesIntersect(t, result.Features, bounds)
+}
+
+func TestSpatialQueryLatencyP95UsesNearestRank(t *testing.T) {
+	samples := make([]time.Duration, 20)
+	for i := range samples {
+		samples[i] = time.Duration(i+1) * time.Millisecond
+	}
+	assert.Equal(t, 19*time.Millisecond, spatialQueryLatencyP95(samples))
+}
+
+func TestRealHenanSpatialQueryLatencyP95(t *testing.T) {
+	const sampleCount = 20
+	ctx := context.Background()
+	weiboOptions := SpatialQueryOptions{Bounds: BoundingBox{
+		MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0,
+	}, Limit: 1000}
+	countyOptions := SpatialQueryOptions{Bounds: weiboOptions.Bounds, Limit: 100}
+
+	t.Run("WeiboRTreeHot", func(t *testing.T) {
+		ds := openRealHenanReadOnly(t)
+		defer ds.Close()
+		warm, err := ds.QuerySpatial(ctx, "weibo", weiboOptions)
+		require.NoError(t, err)
+		require.Equal(t, SpatialQueryStrategyRTree, warm.Strategy)
+
+		samples := make([]time.Duration, sampleCount)
+		for i := range samples {
+			started := time.Now()
+			result, err := ds.QuerySpatial(ctx, "weibo", weiboOptions)
+			samples[i] = time.Since(started)
+			require.NoError(t, err)
+			require.Equal(t, SpatialQueryStrategyRTree, result.Strategy)
+		}
+		assertSpatialQueryLatencyP95(t, "Weibo RTree hot", samples, 100*time.Millisecond)
+	})
+
+	t.Run("CountyColdBuild", func(t *testing.T) {
+		samples := make([]time.Duration, sampleCount)
+		for i := range samples {
+			ds := openRealHenanReadOnly(t)
+			started := time.Now()
+			result, err := ds.QuerySpatial(ctx, "县级行政区划", countyOptions)
+			samples[i] = time.Since(started)
+			closeErr := ds.Close()
+			require.NoError(t, err)
+			require.Equal(t, SpatialQueryStrategyEnvelopeCache, result.Strategy)
+			require.NoError(t, closeErr)
+		}
+		assertSpatialQueryLatencyP95(t, "County cold build", samples, 500*time.Millisecond)
+	})
+
+	t.Run("CountyHotFilter", func(t *testing.T) {
+		ds := openRealHenanReadOnly(t)
+		defer ds.Close()
+		warm, err := ds.QuerySpatial(ctx, "县级行政区划", countyOptions)
+		require.NoError(t, err)
+		require.Equal(t, SpatialQueryStrategyEnvelopeCache, warm.Strategy)
+
+		samples := make([]time.Duration, sampleCount)
+		for i := range samples {
+			started := time.Now()
+			result, err := ds.QuerySpatial(ctx, "县级行政区划", countyOptions)
+			samples[i] = time.Since(started)
+			require.NoError(t, err)
+			require.Equal(t, SpatialQueryStrategyEnvelopeCache, result.Strategy)
+		}
+		assertSpatialQueryLatencyP95(t, "County hot filter", samples, 100*time.Millisecond)
+	})
+}
+
+func TestRealHenanWeiboSpatialQueryRequiredOutsideViewportDoesNotAffectHasMore(t *testing.T) {
+	ds := openRealHenanReadOnly(t)
+	defer ds.Close()
+	ctx := context.Background()
+	bounds := BoundingBox{MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0}
+	const limit = 1
+
+	ordinary, err := ds.QuerySpatial(ctx, "weibo", SpatialQueryOptions{Bounds: bounds, Limit: limit})
+	require.NoError(t, err)
+	require.NotEmpty(t, ordinary.Features)
+
+	weibo, err := ds.GetPointDataset("weibo")
+	require.NoError(t, err)
+	candidates, err := weibo.List(&types.QueryOptions{Limit: 100})
+	require.NoError(t, err)
+	requiredID := firstFeatureOutsideBounds(t, candidates, bounds)
+	required, err := ds.QuerySpatial(ctx, "weibo", SpatialQueryOptions{
+		Bounds: bounds, Limit: limit, RequiredIDs: []int{requiredID},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ordinary.HasMore, required.HasMore)
+	assert.LessOrEqual(t, len(required.Features), limit+1)
+
+	foundRequired := false
+	for _, feature := range required.Features {
+		if feature.ID == requiredID {
+			foundRequired = true
+			assert.False(t, bounds.Intersects(featureBoundingBox(t, feature)))
+		}
+	}
+	assert.True(t, foundRequired)
+}
+
+func spatialQueryLatencyP95(samples []time.Duration) time.Duration {
+	ordered := append([]time.Duration(nil), samples...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	rank := (95*len(ordered) + 99) / 100
+	return ordered[rank-1]
+}
+
+func assertSpatialQueryLatencyP95(t *testing.T, name string, samples []time.Duration, threshold time.Duration) {
+	t.Helper()
+	p95 := spatialQueryLatencyP95(samples)
+	t.Logf("%s: samples=%d p95=%s threshold=%s", name, len(samples), p95, threshold)
+	assert.LessOrEqual(t, p95, threshold)
+}
+
+func firstFeatureOutsideBounds(t *testing.T, features []*Feature, bounds BoundingBox) int {
+	t.Helper()
+	for _, feature := range features {
+		if !bounds.Intersects(featureBoundingBox(t, feature)) {
+			return feature.ID
+		}
+	}
+	t.Fatal("expected the real sample candidate page to contain an offscreen feature")
+	return 0
+}
+
+func assertOrdinaryFeaturesIntersect(t *testing.T, features []*Feature, bounds BoundingBox) {
+	t.Helper()
+	for _, feature := range features {
+		assert.Truef(t, bounds.Intersects(featureBoundingBox(t, feature)), "feature %d MBR must intersect viewport", feature.ID)
+	}
+}
+
+func featureBoundingBox(t *testing.T, feature *Feature) BoundingBox {
+	t.Helper()
+	require.NotNil(t, feature.Geometry)
+	bbox := feature.Geometry.GetBBox()
+	require.Len(t, bbox, 4)
+	return BoundingBox{MinX: bbox[0], MinY: bbox[1], MaxX: bbox[2], MaxY: bbox[3]}
 }
 
 func TestRealSampleDataPointDataset(t *testing.T) {

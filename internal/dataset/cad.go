@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -33,14 +34,26 @@ func (d *CadDataset) GetByID(id int) (*types.Feature, error) {
 
 // List returns CAD features.
 func (d *CadDataset) List(opts *types.QueryOptions) ([]*types.Feature, error) {
+	return d.ListContext(context.Background(), opts)
+}
+
+// ListContext returns CAD features and honors cancellation while querying and decoding.
+func (d *CadDataset) ListContext(ctx context.Context, opts *types.QueryOptions) ([]*types.Feature, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
 	query, args := d.buildQuery(opts)
-	rows, err := d.DB().Query(query, args...)
+	rows, err := d.DB().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.IOError("failed to query CAD features", err)
+		return nil, mapSpatialListError(ctx, errors.IOError("failed to query CAD features", err))
 	}
 	defer rows.Close()
 
-	return d.scanFeatures(rows)
+	features, err := d.scanFeaturesContext(ctx, rows)
+	if err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
+	return features, nil
 }
 
 // Insert inserts a CAD feature.
@@ -194,13 +207,23 @@ func (d *CadDataset) scanFeature(row *sql.Row, id int) (*types.Feature, error) {
 }
 
 func (d *CadDataset) scanFeatures(rows *sql.Rows) ([]*types.Feature, error) {
+	return d.scanFeaturesContext(context.Background(), rows)
+}
+
+func (d *CadDataset) scanFeaturesContext(ctx context.Context, rows *sql.Rows) ([]*types.Feature, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, errors.IOError("failed to get CAD columns", err)
 	}
 
 	var features []*types.Feature
-	for rows.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !rows.Next() {
+			break
+		}
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
 		for index := range values {
@@ -211,6 +234,9 @@ func (d *CadDataset) scanFeatures(rows *sql.Rows) ([]*types.Feature, error) {
 		}
 		feature, err := d.buildFeature(columns, values)
 		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		features = append(features, feature)
@@ -225,6 +251,7 @@ func (d *CadDataset) scanFeatures(rows *sql.Rows) ([]*types.Feature, error) {
 func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*types.Feature, error) {
 	feature := &types.Feature{Attributes: make(map[string]interface{})}
 	var geometryBlob []byte
+	geometryColumnFound := false
 
 	for index, column := range columns {
 		value := values[index]
@@ -234,21 +261,25 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 				feature.ID = int(id)
 			}
 		case "SmGeometry":
-			if blob, ok := value.([]byte); ok {
-				geometryBlob = blob
+			geometryColumnFound = true
+			blob, ok := value.([]byte)
+			if !ok || len(blob) == 0 {
+				return nil, newSpatialGeometryError("CAD geometry column is not a non-empty BLOB")
 			}
+			geometryBlob = blob
 		default:
 			feature.Attributes[column] = value
 		}
 	}
 
-	if geometryBlob != nil {
-		geometry, err := d.cadCodec.Decode(geometryBlob)
-		if err != nil {
-			return nil, errors.FormatError("failed to decode CAD geometry", err)
-		}
-		feature.Geometry = geometry
+	if !geometryColumnFound {
+		return nil, newSpatialGeometryError("CAD geometry column is missing")
 	}
+	geometry, err := d.cadCodec.Decode(geometryBlob)
+	if err != nil {
+		return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode CAD geometry", err)}
+	}
+	feature.Geometry = geometry
 
 	return feature, nil
 }

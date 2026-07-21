@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -53,14 +54,26 @@ func (d *TextDataset) GetByID(id int) (*types.Feature, error) {
 
 // List returns Text features.
 func (d *TextDataset) List(opts *types.QueryOptions) ([]*types.Feature, error) {
+	return d.ListContext(context.Background(), opts)
+}
+
+// ListContext returns Text features and honors cancellation while querying and decoding.
+func (d *TextDataset) ListContext(ctx context.Context, opts *types.QueryOptions) ([]*types.Feature, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
 	query, args := d.buildQuery(opts)
-	rows, err := d.DB().Query(query, args...)
+	rows, err := d.DB().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, errors.IOError("failed to query Text features", err)
+		return nil, mapSpatialListError(ctx, errors.IOError("failed to query Text features", err))
 	}
 	defer rows.Close()
 
-	return d.scanFeatures(rows)
+	features, err := d.scanFeaturesContext(ctx, rows)
+	if err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
+	return features, nil
 }
 
 // Insert inserts a Text feature.
@@ -220,13 +233,23 @@ func (d *TextDataset) scanFeature(row *sql.Row, id int) (*types.Feature, error) 
 }
 
 func (d *TextDataset) scanFeatures(rows *sql.Rows) ([]*types.Feature, error) {
+	return d.scanFeaturesContext(context.Background(), rows)
+}
+
+func (d *TextDataset) scanFeaturesContext(ctx context.Context, rows *sql.Rows) ([]*types.Feature, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, errors.IOError("failed to get Text columns", err)
 	}
 
 	var features []*types.Feature
-	for rows.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !rows.Next() {
+			break
+		}
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
 		for index := range values {
@@ -237,6 +260,9 @@ func (d *TextDataset) scanFeatures(rows *sql.Rows) ([]*types.Feature, error) {
 		}
 		feature, err := d.buildFeature(columns, values)
 		if err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		features = append(features, feature)
@@ -251,6 +277,7 @@ func (d *TextDataset) scanFeatures(rows *sql.Rows) ([]*types.Feature, error) {
 func (d *TextDataset) buildFeature(columns []string, values []interface{}) (*types.Feature, error) {
 	feature := &types.Feature{Attributes: make(map[string]interface{})}
 	var geometryBlob []byte
+	geometryColumnFound := false
 
 	for index, column := range columns {
 		value := values[index]
@@ -260,9 +287,12 @@ func (d *TextDataset) buildFeature(columns []string, values []interface{}) (*typ
 				feature.ID = int(id)
 			}
 		case "SmGeometry":
-			if blob, ok := value.([]byte); ok {
-				geometryBlob = blob
+			geometryColumnFound = true
+			blob, ok := value.([]byte)
+			if !ok || len(blob) == 0 {
+				return nil, newSpatialGeometryError("Text geometry column is not a non-empty BLOB")
 			}
+			geometryBlob = blob
 		case "SmUserID", "SmIndexKey":
 			continue
 		default:
@@ -270,13 +300,14 @@ func (d *TextDataset) buildFeature(columns []string, values []interface{}) (*typ
 		}
 	}
 
-	if geometryBlob != nil {
-		geometry, err := d.textCodec.Decode(geometryBlob)
-		if err != nil {
-			return nil, errors.FormatError("failed to decode GeoText geometry", err)
-		}
-		feature.Geometry = geometry
+	if !geometryColumnFound {
+		return nil, newSpatialGeometryError("Text geometry column is missing")
 	}
+	geometry, err := d.textCodec.Decode(geometryBlob)
+	if err != nil {
+		return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode GeoText geometry", err)}
+	}
+	feature.Geometry = geometry
 
 	return feature, nil
 }

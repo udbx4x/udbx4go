@@ -102,6 +102,23 @@ describe('DatasetExplorer', () => {
     expect(screen.queryByText('BaseMap_P')).not.toBeInTheDocument()
   })
 
+  it('把 Text 和 CAD 归入空间数据集而不是未知类型', () => {
+    renderExplorer(vi.fn(), {
+      datasets: [
+        ...datasetFixtures,
+        { name: 'County_T', kind: 'text', objectCount: 15, iconType: 'text' },
+        { name: 'CADDT', kind: 'cad', objectCount: 92, iconType: 'cad' },
+      ],
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '空间' }))
+
+    expect(screen.getByText('County_T')).toBeInTheDocument()
+    expect(screen.getByText('CADDT')).toBeInTheDocument()
+    expect(screen.queryByText('modeldt_Texture')).not.toBeInTheDocument()
+    expect(screen.queryByText(/未知类型 · 92 条/)).not.toBeInTheDocument()
+  })
+
   it('长名称带完整 title 且已加入地图时显示轻量状态', () => {
     renderExplorer(vi.fn(), {
       mapLayers: [...mapLayerFixtures, sampledMapLayerFixture],

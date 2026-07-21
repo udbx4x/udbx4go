@@ -9,6 +9,7 @@ udbx4go 完整 API 参考。
 ## 目录
 
 - [DataSource](#datasource)
+- [视口空间查询](#视口空间查询)
 - [数据集类型](#数据集类型)
   - [数据集稳定语义](#数据集稳定语义)
 - [几何类型](#几何类型)
@@ -81,6 +82,29 @@ for _, info := range datasets {
     fmt.Printf("%s: %s\n", info.Name, info.Kind)
 }
 ```
+
+#### GetSpatialQueryCapability
+
+```go
+func (ds *DataSource) GetSpatialQueryCapability(
+    ctx context.Context,
+    datasetName string,
+) (*SpatialQueryCapability, error)
+```
+
+报告数据集是否支持视口查询、是否存在经过结构校验的 RTree，以及是否可以尝试内存回退路径。
+
+#### QuerySpatial
+
+```go
+func (ds *DataSource) QuerySpatial(
+    ctx context.Context,
+    datasetName string,
+    options SpatialQueryOptions,
+) (*SpatialQueryResult, error)
+```
+
+按视口 MBR 查询 Point、Line、Region、PointZ、LineZ 或 RegionZ 要素。完整示例和结果语义见[视口空间查询](#视口空间查询)。
 
 #### GetDataset
 
@@ -227,6 +251,84 @@ func (ds *DataSource) CreateRegionZDataset(
 
 创建新的三维面数据集。
 
+## 视口空间查询
+
+以下程序打开 UDBX 文件，执行可取消的视口查询，并输出 SDK 返回的执行事实：
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/udbx4x/udbx4go"
+)
+
+func main() {
+    ds, err := udbx4go.Open("henan.udbx")
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer ds.Close()
+
+    ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+    defer cancel()
+
+    result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
+        Bounds: udbx4go.BoundingBox{
+            MinX: 113.5,
+            MinY: 34.5,
+            MaxX: 114.0,
+            MaxY: 35.0,
+        },
+        Limit:       1000,
+        RequiredIDs: []int{12345},
+    })
+    if err != nil {
+        if reason, ok := udbx4go.SpatialQueryReasonOf(err); ok {
+            log.Fatalf("空间查询失败（%s）：%v", reason, err)
+        }
+        log.Fatal(err)
+    }
+
+    fmt.Printf("features=%d hasMore=%t strategy=%s\n",
+        len(result.Features), result.HasMore, result.Strategy)
+}
+```
+
+### 查询语义
+
+- `Bounds` 坐标必须是有限数值且顺序合法。MBR 相交使用闭区间，因此与查询边界接触的要素也会命中。
+- SDK 最多读取 `Limit + 1` 个普通视口候选；额外一条只用于设置 `HasMore`，不会进入返回结果。
+- `RequiredIDs` 去重后，在对象存在时追加到结果，即使对象位于视口外。它们不占用 `Limit`，也不影响 `HasMore`，所以 `len(Features)` 可以大于 `Limit`。
+- `Features` 是视口 MBR 命中对象和实际存在的必含对象的去重并集；所有普通要素都必须与 `Bounds` MBR 相交，只有通过 `RequiredIDs` 追加的要素可以位于视口外，且不保证与 `QueriedBounds` 相交。
+- 当前只提供 MBR 过滤，不等价于 `Intersects`、`Contains`、`Within` 等精确拓扑谓词。
+
+`Strategy` 记录实际执行路径：
+
+| 值 | 含义 |
+|----|------|
+| `rtree` | 使用经过结构校验的 UDBX RTree 生成视口候选。 |
+| `envelope_cache` | 数据集没有可用 RTree，使用内存 GAIA 包络缓存生成候选。 |
+
+以上是 SDK 成功结果仅有的两种策略。`SpatialQueryResult` 没有 `DegradedReason` 字段。查询错误和 capability 诊断使用以下六个稳定原因码：
+
+| 值 | 含义 |
+|----|------|
+| `invalid_viewport` | 边界框、limit 或必含 ID 非法。 |
+| `spatial_index_unavailable` | 必需的空间元数据或可用索引路径不存在。 |
+| `envelope_cache_budget_exceeded` | 构建完整包络缓存超过当前资源策略。 |
+| `query_timeout` | context 被取消或超过截止时间。 |
+| `corrupt_geometry` | GAIA 头部或完整几何损坏。 |
+| `unsupported_dataset_kind` | 数据集类型不在视口查询范围内。 |
+
+包络缓存只属于当前打开的一个 `DataSource`，不会写入 UDBX 文件，也不会跨进程共享；`Close` 会释放缓存。当前默认策略为单数据集 32 MiB、单个 `DataSource` 合计 64 MiB，构建超时 500 ms。预算按 PoC 拟合的稳定 RSS charge 计费：每个数据集固定约 4 MiB，再按 cache capacity 的每个 entry 约 80 bytes 计费；它不是 `unsafe.Sizeof` slice 大小，也不是对象数硬阈值。完整缓存无法准入时，`QuerySpatial` 返回原因为 `envelope_cache_budget_exceeded` 的错误，不会把非空间采样作为 SDK 成功结果返回。这些数值是基于测量的 SDK 当前资源默认值，可以随实测调整，不是 UDBX 格式限制。
+
+本版本的 Text、CAD 和 Tabular 数据集不支持 `QuerySpatial`；Text 和 CAD 继续通过有上界的 `List`/`ListContext` 预览路径读取。Wails Viewer 可以捕获缓存预算错误，或在 Text/CAD 路径生成私有的非空间 `bounded_sample` 预览。该 Viewer 预览不是 SDK `QuerySpatial` 成功结果；其 DTO 可以保留 `degradedReason` 供界面诊断。
+
 ## 数据集类型
 
 ### 数据集稳定语义
@@ -238,6 +340,14 @@ func (ds *DataSource) CreateRegionZDataset(
 - `Count()` 读取物理表真实行数，不以 `SmRegister.SmObjectCount` 缓存为准。
 - `Update(id, ...)` 和 `Delete(id)` 在目标对象不存在时返回 not found error。
 - 更新未知字段时返回 not found 或约束类错误，不得静默忽略。
+
+Point、Line、Region、Text 和 CAD 数据集还提供：
+
+```go
+func (d *PointDataset) ListContext(ctx context.Context, opts *QueryOptions) ([]*Feature, error)
+```
+
+对应具体数据集类型的方法形状相同。`List` 等价于使用 `context.Background()` 调用 `ListContext`。调用方需要通过截止时间或取消来停止 SQLite 遍历和几何解码时，应使用 `ListContext`。取消映射为 `query_timeout` 空间原因码，损坏几何映射为 `corrupt_geometry`。Tabular 当前只提供 `List`。
 
 ### TabularDataset
 

@@ -2,6 +2,7 @@
 package system
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/udbx4x/udbx4go/pkg/errors"
@@ -23,46 +24,47 @@ func NewSmRegisterDao(db *sql.DB) *SmRegisterDao {
 // SmRegisterRecord represents a record in the SmRegister table.
 // Column names match Java/SuperMap UDBX format.
 type SmRegisterRecord struct {
-	SmDatasetID               int
-	SmDatasetName             string
-	SmTableName               string
-	SmOption                  sql.NullInt32
-	SmEncType                 sql.NullInt32
-	SmParentDTID              int
-	SmDatasetType             int
-	SmObjectCount             int
-	SmLeft                    sql.NullFloat64
-	SmRight                   sql.NullFloat64
-	SmTop                     sql.NullFloat64
-	SmBottom                  sql.NullFloat64
-	SmIDColName               sql.NullString
-	SmGeoColName              sql.NullString
-	SmMinZ                    sql.NullFloat64
-	SmMaxZ                    sql.NullFloat64
-	SmSRID                    sql.NullInt32
-	SmIndexType               sql.NullInt32
-	SmToleRanceFuzzy          sql.NullFloat64
-	SmToleranceDAngle         sql.NullFloat64
-	SmToleranceNodeSnap       sql.NullFloat64
-	SmToleranceSmallPolygon   sql.NullFloat64
-	SmToleranceGrain          sql.NullFloat64
-	SmMaxGeometrySize         int
-	SmOptimizeCount           int
-	SmOptimizeRatio           sql.NullFloat64
-	SmDescription             sql.NullString
-	SmExtInfo                 sql.NullString
-	SmCreateTime              sql.NullString
-	SmLastUpdateTime          sql.NullString
-	SmProjectInfo             []byte
+	SmDatasetID             int
+	SmDatasetName           string
+	SmTableName             string
+	SmOption                sql.NullInt32
+	SmEncType               sql.NullInt32
+	SmParentDTID            int
+	SmDatasetType           int
+	SmObjectCount           int
+	SmLeft                  sql.NullFloat64
+	SmRight                 sql.NullFloat64
+	SmTop                   sql.NullFloat64
+	SmBottom                sql.NullFloat64
+	SmIDColName             sql.NullString
+	SmGeoColName            sql.NullString
+	SmMinZ                  sql.NullFloat64
+	SmMaxZ                  sql.NullFloat64
+	SmSRID                  sql.NullInt32
+	SmIndexType             sql.NullInt32
+	SmToleRanceFuzzy        sql.NullFloat64
+	SmToleranceDAngle       sql.NullFloat64
+	SmToleranceNodeSnap     sql.NullFloat64
+	SmToleranceSmallPolygon sql.NullFloat64
+	SmToleranceGrain        sql.NullFloat64
+	SmMaxGeometrySize       int
+	SmOptimizeCount         int
+	SmOptimizeRatio         sql.NullFloat64
+	SmDescription           sql.NullString
+	SmExtInfo               sql.NullString
+	SmCreateTime            sql.NullString
+	SmLastUpdateTime        sql.NullString
+	SmProjectInfo           []byte
 }
 
 // ToDatasetInfo converts a SmRegisterRecord to DatasetInfo.
 func (r *SmRegisterRecord) ToDatasetInfo() *types.DatasetInfo {
+	kind := types.DatasetKind(r.SmDatasetType)
 	info := &types.DatasetInfo{
 		ID:          r.SmDatasetID,
 		Name:        r.SmDatasetName,
 		TableName:   r.SmTableName,
-		Kind:        types.DatasetKind(r.SmDatasetType),
+		Kind:        kind,
 		ObjectCount: r.SmObjectCount,
 	}
 
@@ -71,9 +73,21 @@ func (r *SmRegisterRecord) ToDatasetInfo() *types.DatasetInfo {
 		info.SRID = &srid
 	}
 
-	if types.DatasetKind(r.SmDatasetType).IsSpatial() {
-		geoType := types.DatasetKind(r.SmDatasetType).GeometryType()
+	if kind.IsSpatial() {
+		geoType := kind.GeometryType()
 		info.GeometryType = &geoType
+	}
+
+	if kind.IsSpatial() && r.SmLeft.Valid && r.SmBottom.Valid && r.SmRight.Valid && r.SmTop.Valid {
+		extent := types.BoundingBox{
+			MinX: r.SmLeft.Float64,
+			MinY: r.SmBottom.Float64,
+			MaxX: r.SmRight.Float64,
+			MaxY: r.SmTop.Float64,
+		}
+		if extent.Validate() == nil {
+			info.Extent = &extent
+		}
 	}
 
 	return info
@@ -122,6 +136,11 @@ func (dao *SmRegisterDao) GetByID(id int) (*SmRegisterRecord, error) {
 
 // GetByName returns a record by dataset name.
 func (dao *SmRegisterDao) GetByName(name string) (*SmRegisterRecord, error) {
+	return dao.GetByNameContext(context.Background(), name)
+}
+
+// GetByNameContext returns a record by dataset name and honors context cancellation.
+func (dao *SmRegisterDao) GetByNameContext(ctx context.Context, name string) (*SmRegisterRecord, error) {
 	query := `
 		SELECT SmDatasetID, SmDatasetName, SmTableName, SmOption, SmEncType,
 		       SmParentDTID, SmDatasetType, SmObjectCount, SmLeft, SmRight,
@@ -134,7 +153,7 @@ func (dao *SmRegisterDao) GetByName(name string) (*SmRegisterRecord, error) {
 		WHERE SmDatasetName = ?
 	`
 
-	row := dao.db.QueryRow(query, name)
+	row := dao.db.QueryRowContext(ctx, query, name)
 	record, err := dao.scanRecord(row)
 	if err != nil {
 		if errors.IsNotFound(err) {

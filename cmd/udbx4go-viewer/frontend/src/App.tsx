@@ -14,19 +14,16 @@ import { AppShell } from './components/AppShell'
 import { TopToolbar } from './components/TopToolbar'
 import { InspectorPanel } from './components/InspectorPanel'
 import { SettingsDialog } from './components/SettingsDialog'
+import { BenchmarkRunner } from './benchmark/BenchmarkRunner'
+import { GetBenchmarkConfig } from '../wailsjs/go/main/App'
+import { isSpatialDataset } from './datasets/datasetClassification'
 import { viewerTheme } from './theme/viewerTheme'
 import type { DatasetInfo } from './types'
 import type { AttributeTableMode } from './components/AttributeTableDrawer'
+import type { BenchmarkConfig } from './benchmark/types'
+import type { main } from '../wailsjs/go/models'
 
-const spatialDatasetKinds = new Set(['point', 'pointZ', 'line', 'lineZ', 'region', 'regionZ'])
-
-const isUnknownDataset = (dataset: DatasetInfo) =>
-  dataset.kind === 'unknown' || dataset.iconType === 'unknown'
-
-const isSpatialDataset = (dataset: DatasetInfo) =>
-  !isUnknownDataset(dataset) && spatialDatasetKinds.has(dataset.kind)
-
-function App() {
+export function ViewerApp() {
   const {
     settings,
     loading: settingsLoading,
@@ -47,6 +44,7 @@ function App() {
     mapLayers,
     selectedMapFeature,
     selectedFeatureAttributes,
+    selectionLocationError,
     loading,
     error,
     openFileDialog,
@@ -56,6 +54,8 @@ function App() {
     setMapLayerVisible,
     removeMapLayer,
     selectFeature,
+    queryViewport,
+    loadCurrentFile,
   } = udbx
 
   const [errorOpen, setErrorOpen] = React.useState(false)
@@ -64,6 +64,10 @@ function App() {
   const [settingsSaving, setSettingsSaving] = React.useState(false)
   const settingsDefaultAppliedRef = React.useRef(false)
   const displayError = error || settingsError
+
+  useEffect(() => {
+    void loadCurrentFile()
+  }, [loadCurrentFile])
 
   useEffect(() => {
     if (displayError) {
@@ -138,8 +142,11 @@ function App() {
           <MapWorkspace
             layers={mapLayers}
             selectedFeature={selectedMapFeature}
+            selectedFeatureAttributes={selectedFeatureAttributes}
+            selectionLocationError={selectionLocationError}
             autoFitOnLayerChange={settings.spatialPreview.autoFitOnLayerChange}
             zoomToSelectedFeature={settings.mapInteraction.zoomToSelectedFeature}
+            onViewportChange={queryViewport}
             onFeatureSelect={selectFeature}
           />
         }
@@ -205,6 +212,67 @@ function App() {
       </Snackbar>
     </ThemeProvider>
   )
+}
+
+type BenchmarkGateState =
+  | { status: 'loading' }
+  | { status: 'viewer' }
+  | { status: 'benchmark'; config: BenchmarkConfig }
+  | { status: 'error'; message: string }
+
+function App() {
+  const [gate, setGate] = React.useState<BenchmarkGateState>({ status: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+
+    void GetBenchmarkConfig()
+      .then((config) => {
+        if (cancelled) {
+          return
+        }
+        if (config) {
+          setGate({ status: 'benchmark', config: toBenchmarkConfig(config) })
+        } else {
+          setGate({ status: 'viewer' })
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error)
+          setGate({ status: 'error', message })
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (gate.status === 'loading') {
+    return <div>正在启动 Viewer</div>
+  }
+  if (gate.status === 'error') {
+    return <div>{`无法读取基准配置：${gate.message}`}</div>
+  }
+  if (gate.status === 'benchmark') {
+    return <BenchmarkRunner config={gate.config} />
+  }
+  return <ViewerApp />
+}
+
+function toBenchmarkConfig(config: main.BenchmarkConfigDTO): BenchmarkConfig {
+  return {
+    ...config,
+    temperature: config.temperature as BenchmarkConfig['temperature'],
+    scenario: {
+      ...config.scenario,
+      viewportSteps: config.scenario.viewportSteps.map((step) => ({
+        ...step,
+        expectedStrategy: step.expectedStrategy as BenchmarkConfig['scenario']['viewportSteps'][number]['expectedStrategy'],
+      })),
+    },
+  }
 }
 
 export default App

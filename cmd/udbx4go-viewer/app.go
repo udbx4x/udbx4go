@@ -5,24 +5,39 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	udbx4go "github.com/udbx4x/udbx4go"
+	udbxerrors "github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 const (
-	pageSize                   = 100
-	defaultSpatialPreviewLimit = 1000
-	defaultSpatialVertexBudget = 1000000
+	pageSize                            = 100
+	defaultSpatialPreviewLimit          = 1000
+	defaultSpatialVertexBudget          = 1000000
+	spatialPreviewStrategyBoundedSample = "bounded_sample"
 )
 
 // App struct
 type App struct {
-	ctx                  context.Context
-	dataSource           *udbx4go.DataSource
-	currentPath          string
-	settingsPathOverride string
+	ctx                   context.Context
+	dataSourceLifecycleMu sync.Mutex
+	dataSourceMu          sync.Mutex
+	dataSource            *udbx4go.DataSource
+	dataSourceQueries     *sync.WaitGroup
+	dataSourceContext     context.Context
+	dataSourceCancel      context.CancelFunc
+	fileGeneration        uint64
+	currentPath           string
+	currentDatasetCount   int
+	settingsPathOverride  string
+	benchmarkConfigPath   string
+	benchmarkConfig       *BenchmarkConfigDTO
+	previewQueryHook      func(context.Context) error
+	previewResultHook     func(context.Context)
 }
 
 // DatasetInfoDTO represents dataset information for the frontend
@@ -51,14 +66,17 @@ type BoundingBoxDTO struct {
 
 // SpatialSummaryDTO describes whether and how a dataset can be previewed.
 type SpatialSummaryDTO struct {
-	DatasetName          string          `json:"datasetName"`
-	Kind                 string          `json:"kind"`
-	SRID                 *int            `json:"srid,omitempty"`
-	Extent               *BoundingBoxDTO `json:"extent,omitempty"`
-	ObjectCount          int             `json:"objectCount"`
-	EstimatedVertexCount int             `json:"estimatedVertexCount"`
-	PreviewSupported     bool            `json:"previewSupported"`
-	UnsupportedReason    string          `json:"unsupportedReason,omitempty"`
+	DatasetName            string          `json:"datasetName"`
+	Kind                   string          `json:"kind"`
+	SRID                   *int            `json:"srid,omitempty"`
+	Extent                 *BoundingBoxDTO `json:"extent,omitempty"`
+	ObjectCount            int             `json:"objectCount"`
+	EstimatedVertexCount   int             `json:"estimatedVertexCount"`
+	PreviewSupported       bool            `json:"previewSupported"`
+	UnsupportedReason      string          `json:"unsupportedReason,omitempty"`
+	ViewportQuerySupported bool            `json:"viewportQuerySupported"`
+	RTreeAvailable         bool            `json:"rtreeAvailable"`
+	QueryDiagnosticReason  string          `json:"queryDiagnosticReason,omitempty"`
 }
 
 // SpatialPreviewRequestDTO limits the amount of geometry sent to the frontend.
@@ -67,6 +85,7 @@ type SpatialPreviewRequestDTO struct {
 	Limit       int             `json:"limit"`
 	MaxVertices int             `json:"maxVertices"`
 	Simplify    bool            `json:"simplify"`
+	RequiredIDs []int           `json:"requiredIds,omitempty"`
 }
 
 // PreviewGeometryDTO is a renderer-neutral geometry payload for PoC adapters.
@@ -94,6 +113,12 @@ type SpatialPreviewDTO struct {
 	EstimatedVertexCount int                 `json:"estimatedVertexCount"`
 	Sampled              bool                `json:"sampled"`
 	SampleReason         string              `json:"sampleReason,omitempty"`
+	QueriedBounds        *BoundingBoxDTO     `json:"queriedBounds,omitempty"`
+	Strategy             string              `json:"strategy"`
+	HasMore              bool                `json:"hasMore"`
+	DegradedReason       string              `json:"degradedReason,omitempty"`
+	QueryDurationMS      float64             `json:"queryDurationMs"`
+	FileGeneration       uint64              `json:"fileGeneration"`
 }
 
 // FeatureAttributesDTO is returned when the user identifies a feature.
@@ -107,8 +132,9 @@ type FeatureAttributesDTO struct {
 
 // FileInfo represents information about an opened file
 type FileInfo struct {
-	Path         string `json:"path"`
-	DatasetCount int    `json:"datasetCount"`
+	Path           string `json:"path"`
+	DatasetCount   int    `json:"datasetCount"`
+	FileGeneration uint64 `json:"fileGeneration"`
 }
 
 // NewApp creates a new App application struct
@@ -142,11 +168,11 @@ func (a *App) OpenFileDialog() (string, error) {
 
 // OpenUDBXFile opens a UDBX file and returns file information
 func (a *App) OpenUDBXFile(path string) (*FileInfo, error) {
-	// Close any existing datasource
-	if a.dataSource != nil {
-		a.dataSource.Close()
-		a.dataSource = nil
-		a.currentPath = ""
+	a.dataSourceLifecycleMu.Lock()
+	defer a.dataSourceLifecycleMu.Unlock()
+
+	if err := a.closeCurrentDataSource(); err != nil {
+		return nil, fmt.Errorf("无法关闭当前文件: %w", err)
 	}
 
 	ds, err := udbx4go.Open(path)
@@ -154,40 +180,89 @@ func (a *App) OpenUDBXFile(path string) (*FileInfo, error) {
 		return nil, fmt.Errorf("无法打开文件: %w", err)
 	}
 
-	a.dataSource = ds
-	a.currentPath = path
-
 	datasets, err := ds.ListDatasets()
 	if err != nil {
 		ds.Close()
-		a.dataSource = nil
-		a.currentPath = ""
 		return nil, fmt.Errorf("无法读取数据集列表: %w", err)
 	}
 
+	a.dataSourceMu.Lock()
+	dataSourceContext, dataSourceCancel := context.WithCancel(a.applicationContext())
+	a.dataSource = ds
+	a.dataSourceQueries = &sync.WaitGroup{}
+	a.dataSourceContext = dataSourceContext
+	a.dataSourceCancel = dataSourceCancel
+	a.currentPath = path
+	a.currentDatasetCount = len(datasets)
+	a.fileGeneration++
+	fileGeneration := a.fileGeneration
+	a.dataSourceMu.Unlock()
+
 	return &FileInfo{
-		Path:         path,
-		DatasetCount: len(datasets),
+		Path:           path,
+		DatasetCount:   len(datasets),
+		FileGeneration: fileGeneration,
 	}, nil
 }
 
 // CloseUDBXFile closes the current UDBX file
 func (a *App) CloseUDBXFile() error {
-	if a.dataSource != nil {
-		a.dataSource.Close()
-		a.dataSource = nil
-		a.currentPath = ""
+	a.dataSourceLifecycleMu.Lock()
+	defer a.dataSourceLifecycleMu.Unlock()
+	return a.closeCurrentDataSource()
+}
+
+func (a *App) closeCurrentDataSource() error {
+	a.dataSourceMu.Lock()
+	dataSource := a.dataSource
+	queries := a.dataSourceQueries
+	cancel := a.dataSourceCancel
+	if dataSource != nil {
+		a.fileGeneration++
 	}
-	return nil
+	a.dataSource = nil
+	a.dataSourceQueries = nil
+	a.dataSourceContext = nil
+	a.dataSourceCancel = nil
+	a.currentPath = ""
+	a.currentDatasetCount = 0
+	if cancel != nil {
+		cancel()
+	}
+	a.dataSourceMu.Unlock()
+
+	if dataSource == nil {
+		return nil
+	}
+	if queries != nil {
+		queries.Wait()
+	}
+	return dataSource.Close()
+}
+
+func (a *App) acquireDataSource() (*udbx4go.DataSource, uint64, context.Context, func(), error) {
+	a.dataSourceMu.Lock()
+	defer a.dataSourceMu.Unlock()
+	if a.dataSource == nil {
+		return nil, 0, nil, nil, fmt.Errorf("没有打开的文件")
+	}
+	if a.dataSourceQueries == nil {
+		a.dataSourceQueries = &sync.WaitGroup{}
+	}
+	queries := a.dataSourceQueries
+	queries.Add(1)
+	return a.dataSource, a.fileGeneration, a.dataSourceContext, queries.Done, nil
 }
 
 // ListDatasets returns a list of all datasets in the current file
 func (a *App) ListDatasets() ([]DatasetInfoDTO, error) {
-	if a.dataSource == nil {
-		return nil, fmt.Errorf("没有打开的文件")
+	dataSource, _, _, release, err := a.acquireDataSource()
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 
-	datasets, err := a.dataSource.ListDatasets()
+	datasets, err := dataSource.ListDatasets()
 	if err != nil {
 		return nil, err
 	}
@@ -207,11 +282,13 @@ func (a *App) ListDatasets() ([]DatasetInfoDTO, error) {
 
 // GetDatasetFields returns the fields for a specific dataset
 func (a *App) GetDatasetFields(datasetName string) ([]string, error) {
-	if a.dataSource == nil {
-		return nil, fmt.Errorf("没有打开的文件")
+	dataSource, _, _, release, err := a.acquireDataSource()
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 
-	ds, err := a.dataSource.GetDataset(datasetName)
+	ds, err := dataSource.GetDataset(datasetName)
 	if err != nil {
 		return nil, err
 	}
@@ -231,12 +308,14 @@ func (a *App) GetDatasetFields(datasetName string) ([]string, error) {
 
 // LoadDatasetPage loads a page of data from a dataset
 func (a *App) LoadDatasetPage(datasetName string, page int) (*PageData, error) {
-	if a.dataSource == nil {
-		return nil, fmt.Errorf("没有打开的文件")
+	dataSource, _, _, release, err := a.acquireDataSource()
+	if err != nil {
+		return nil, err
 	}
+	defer release()
 
 	// Get dataset info from ListDatasets
-	datasets, err := a.dataSource.ListDatasets()
+	datasets, err := dataSource.ListDatasets()
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +331,7 @@ func (a *App) LoadDatasetPage(datasetName string, page int) (*PageData, error) {
 		return nil, fmt.Errorf("数据集不存在: %s", datasetName)
 	}
 
-	ds, err := a.dataSource.GetDataset(datasetName)
+	ds, err := dataSource.GetDataset(datasetName)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +400,13 @@ func (a *App) LoadDatasetPage(datasetName string, page int) (*PageData, error) {
 
 // GetDatasetSpatialSummary returns a bounded summary for spatial preview.
 func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, error) {
-	info, ds, err := a.getDatasetForPreview(datasetName)
+	dataSource, _, dataSourceContext, release, err := a.acquireDataSource()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	info, _, err := a.getDatasetForPreview(dataSource, datasetName)
 	if err != nil {
 		return nil, err
 	}
@@ -330,35 +415,50 @@ func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, 
 		DatasetName:      info.Name,
 		Kind:             info.Kind.String(),
 		SRID:             info.SRID,
+		Extent:           boundingBoxDTO(info.Extent),
 		ObjectCount:      info.ObjectCount,
 		PreviewSupported: info.Kind.IsSpatial(),
 	}
 	if !summary.PreviewSupported {
 		summary.UnsupportedReason = "非空间数据集不支持空间预览"
+		summary.QueryDiagnosticReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
+		return summary, nil
+	}
+	if !supportsViewportSpatialQuery(info.Kind) {
+		summary.QueryDiagnosticReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
 		return summary, nil
 	}
 
-	fields, _ := ds.GetFields()
-	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{Limit: defaultSpatialPreviewLimit})
+	queryContext, cancel := a.spatialQueryContext(dataSourceContext)
+	defer cancel()
+	capability, err := dataSource.GetSpatialQueryCapability(queryContext, datasetName)
 	if err != nil {
 		return nil, err
 	}
-	previewFeatures, _ := a.formatPreviewFeatures(features, fields, defaultSpatialVertexBudget)
-	for _, feature := range previewFeatures {
-		summary.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
-		summary.Extent = mergeBBox(summary.Extent, feature.BBox)
-	}
+	summary.ViewportQuerySupported = capability.Supported
+	summary.RTreeAvailable = capability.RTreeAvailable
+	summary.QueryDiagnosticReason = string(capability.DiagnosticReason)
 	return summary, nil
 }
 
 // LoadSpatialPreview returns a bounded renderer-neutral geometry payload.
 func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewRequestDTO) (*SpatialPreviewDTO, error) {
-	info, ds, err := a.getDatasetForPreview(datasetName)
+	dataSource, generation, dataSourceContext, release, err := a.acquireDataSource()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	info, ds, err := a.getDatasetForPreview(dataSource, datasetName)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Kind.IsSpatial() {
 		return nil, fmt.Errorf("数据集 %s 不支持空间预览: 非空间数据集", datasetName)
+	}
+	request.RequiredIDs, err = normalizeViewerRequiredIDs(request.RequiredIDs)
+	if err != nil {
+		return nil, err
 	}
 	settings, err := a.GetViewerSettings()
 	if err != nil {
@@ -378,34 +478,141 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 	if err != nil {
 		return nil, err
 	}
-	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{Limit: request.Limit})
-	if err != nil {
-		return nil, err
+	queryContext, cancel := a.spatialQueryContext(dataSourceContext)
+	defer cancel()
+	if a.previewQueryHook != nil {
+		if err := a.previewQueryHook(queryContext); err != nil {
+			return nil, mapViewerPreviewError(queryContext, err)
+		}
 	}
-	previewFeatures, vertexBudgetReached := a.formatPreviewFeatures(features, fields, request.MaxVertices)
+
+	var (
+		features       []*types.Feature
+		queriedBounds  *BoundingBoxDTO
+		strategy       = spatialPreviewStrategyBoundedSample
+		hasMore        bool
+		degradedReason string
+	)
+	queryStarted := time.Now()
+	if supportsViewportSpatialQuery(info.Kind) && request.Viewport != nil {
+		queryResult, queryErr := dataSource.QuerySpatial(queryContext, datasetName, types.SpatialQueryOptions{
+			Bounds:      request.Viewport.spatialBoundingBox(),
+			Limit:       request.Limit,
+			RequiredIDs: request.RequiredIDs,
+		})
+		if queryErr != nil {
+			reason, ok := udbxerrors.SpatialQueryReasonOf(queryErr)
+			if !ok || reason != types.SpatialQueryReasonEnvelopeCacheBudgetExceeded {
+				return nil, queryErr
+			}
+			features, hasMore, err = a.loadBoundedPreviewFeatures(
+				queryContext,
+				ds,
+				request.Limit,
+				request.RequiredIDs,
+			)
+			if err != nil {
+				return nil, err
+			}
+			requestedBounds := request.Viewport.spatialBoundingBox()
+			queriedBounds = boundingBoxDTO(&requestedBounds)
+			degradedReason = string(reason)
+		} else {
+			features = queryResult.Features
+			queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
+			strategy = string(queryResult.Strategy)
+			hasMore = queryResult.HasMore
+		}
+	} else {
+		features, hasMore, err = a.loadBoundedPreviewFeatures(
+			queryContext,
+			ds,
+			request.Limit,
+			request.RequiredIDs,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if !supportsViewportSpatialQuery(info.Kind) {
+			degradedReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
+		}
+	}
+	queryDurationMS := float64(time.Since(queryStarted).Nanoseconds()) / float64(time.Millisecond)
+	previewFeatures, vertexBudgetReached := a.formatPreviewFeatures(
+		features,
+		fields,
+		request.MaxVertices,
+		requiredIDSet(request.RequiredIDs),
+	)
 
 	response := &SpatialPreviewDTO{
-		DatasetName: info.Name,
-		Kind:        info.Kind.String(),
-		SRID:        info.SRID,
-		Features:    previewFeatures,
+		DatasetName:     info.Name,
+		Kind:            info.Kind.String(),
+		SRID:            info.SRID,
+		Features:        previewFeatures,
+		QueriedBounds:   queriedBounds,
+		Strategy:        strategy,
+		HasMore:         hasMore,
+		DegradedReason:  degradedReason,
+		QueryDurationMS: queryDurationMS,
+		FileGeneration:  generation,
 	}
 	for _, feature := range previewFeatures {
 		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		response.Extent = mergeBBox(response.Extent, feature.BBox)
 	}
-	response.Sampled, response.SampleReason = spatialPreviewSampleReason(
-		info.ObjectCount,
-		len(features),
-		request.Limit,
+	if request.Viewport != nil && supportsViewportSpatialQuery(info.Kind) {
+		applySpatialPreviewSampling(response, vertexBudgetReached)
+	} else {
+		response.Sampled, response.SampleReason = spatialPreviewSampleReason(
+			info.ObjectCount,
+			len(features),
+			request.Limit,
+			vertexBudgetReached,
+		)
+	}
+	if a.previewResultHook != nil {
+		a.previewResultHook(queryContext)
+	}
+	if err := a.validatePreviewLifecycle(queryContext, dataSource, generation); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (a *App) validatePreviewLifecycle(
+	ctx context.Context,
+	dataSource *udbx4go.DataSource,
+	generation uint64,
+) error {
+	if err := ctx.Err(); err != nil {
+		return newViewerSpatialError(types.SpatialQueryReasonQueryTimeout, err)
+	}
+	a.dataSourceMu.Lock()
+	current := a.dataSource == dataSource && a.fileGeneration == generation
+	a.dataSourceMu.Unlock()
+	if !current {
+		return newViewerSpatialError(types.SpatialQueryReasonQueryTimeout, context.Canceled)
+	}
+	return nil
+}
+
+func applySpatialPreviewSampling(response *SpatialPreviewDTO, vertexBudgetReached bool) {
+	response.Sampled, response.SampleReason = spatialPreviewResultSampleReason(
+		response.HasMore,
 		vertexBudgetReached,
 	)
-	return response, nil
 }
 
 // GetFeatureAttributes returns attributes for one feature by SmID.
 func (a *App) GetFeatureAttributes(datasetName string, featureID int) (*FeatureAttributesDTO, error) {
-	info, ds, err := a.getDatasetForPreview(datasetName)
+	dataSource, _, dataSourceContext, release, err := a.acquireDataSource()
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
+	info, ds, err := a.getDatasetForPreview(dataSource, datasetName)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +624,7 @@ func (a *App) GetFeatureAttributes(datasetName string, featureID int) (*FeatureA
 	if err != nil {
 		return nil, err
 	}
-	features, err := a.listPreviewFeatures(ds, &types.QueryOptions{IDs: []int{featureID}, Limit: 1})
+	features, err := a.listPreviewFeatures(dataSourceContext, ds, &types.QueryOptions{IDs: []int{featureID}, Limit: 1})
 	if err != nil {
 		return nil, err
 	}
@@ -449,14 +656,10 @@ func (a *App) GetFeatureAttributes(datasetName string, featureID int) (*FeatureA
 	}, nil
 }
 
-func (a *App) getDatasetForPreview(datasetName string) (*types.DatasetInfo, interface {
+func (a *App) getDatasetForPreview(dataSource *udbx4go.DataSource, datasetName string) (*types.DatasetInfo, interface {
 	GetFields() ([]*types.FieldInfo, error)
 }, error) {
-	if a.dataSource == nil {
-		return nil, nil, fmt.Errorf("没有打开的文件")
-	}
-
-	datasets, err := a.dataSource.ListDatasets()
+	datasets, err := dataSource.ListDatasets()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -471,7 +674,7 @@ func (a *App) getDatasetForPreview(datasetName string) (*types.DatasetInfo, inte
 		return nil, nil, fmt.Errorf("数据集不存在: %s", datasetName)
 	}
 
-	ds, err := a.dataSource.GetDataset(datasetName)
+	ds, err := dataSource.GetDataset(datasetName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -484,26 +687,58 @@ func (a *App) getDatasetForPreview(datasetName string) (*types.DatasetInfo, inte
 	return info, fielded, nil
 }
 
-func (a *App) listPreviewFeatures(ds interface{}, opts *types.QueryOptions) ([]*types.Feature, error) {
+func (a *App) listPreviewFeatures(ctx context.Context, ds interface{}, opts *types.QueryOptions) ([]*types.Feature, error) {
 	if vectorDs, ok := ds.(interface {
-		List(opts *types.QueryOptions) ([]*types.Feature, error)
+		ListContext(ctx context.Context, opts *types.QueryOptions) ([]*types.Feature, error)
 	}); ok {
-		return vectorDs.List(opts)
+		return vectorDs.ListContext(ctx, opts)
 	}
 	return nil, fmt.Errorf("数据集不支持空间要素读取")
 }
 
-func (a *App) formatPreviewFeatures(features []*types.Feature, fields []*types.FieldInfo, maxVertices int) ([]PreviewFeatureDTO, bool) {
-	var result []PreviewFeatureDTO
+func (a *App) loadBoundedPreviewFeatures(
+	ctx context.Context,
+	ds interface{},
+	limit int,
+	requiredIDs []int,
+) ([]*types.Feature, bool, error) {
+	features, err := a.listPreviewFeatures(ctx, ds, &types.QueryOptions{Limit: limit + 1})
+	if err != nil {
+		return nil, false, err
+	}
+	hasMore := len(features) > limit
+	if hasMore {
+		features = features[:limit]
+	}
+	if len(requiredIDs) == 0 {
+		return features, hasMore, nil
+	}
+
+	required, err := a.listPreviewFeatures(ctx, ds, &types.QueryOptions{
+		IDs:   requiredIDs,
+		Limit: len(requiredIDs),
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return append(features, required...), hasMore, nil
+}
+
+func (a *App) formatPreviewFeatures(
+	features []*types.Feature,
+	fields []*types.FieldInfo,
+	maxVertices int,
+	requiredIDs map[int]struct{},
+) ([]PreviewFeatureDTO, bool) {
+	var ordinary []PreviewFeatureDTO
+	var required []PreviewFeatureDTO
+	seenRequired := make(map[int]struct{}, len(requiredIDs))
 	vertexCount := 0
+	vertexBudgetReached := false
 	for _, feature := range features {
 		geometry := toPreviewGeometry(feature.Geometry)
 		if geometry.Type == "" {
 			continue
-		}
-		vertexCount += countPreviewVertices(geometry)
-		if vertexCount > maxVertices {
-			return result, true
 		}
 		props := make(map[string]string)
 		for _, field := range fields {
@@ -511,14 +746,91 @@ func (a *App) formatPreviewFeatures(features []*types.Feature, fields []*types.F
 				props[field.Name] = fmt.Sprintf("%v", value)
 			}
 		}
-		result = append(result, PreviewFeatureDTO{
+		formatted := PreviewFeatureDTO{
 			ID:         feature.ID,
 			Geometry:   geometry,
 			BBox:       bboxFromSlice(feature.Geometry.GetBBox()),
 			Properties: props,
-		})
+		}
+		if _, isRequired := requiredIDs[feature.ID]; isRequired {
+			if _, exists := seenRequired[feature.ID]; !exists {
+				required = append(required, formatted)
+				seenRequired[feature.ID] = struct{}{}
+			}
+			continue
+		}
+		if vertexBudgetReached {
+			continue
+		}
+		featureVertices := countPreviewVertices(geometry)
+		if vertexCount+featureVertices > maxVertices {
+			vertexBudgetReached = true
+			continue
+		}
+		vertexCount += featureVertices
+		ordinary = append(ordinary, formatted)
 	}
-	return result, false
+	return append(ordinary, required...), vertexBudgetReached
+}
+
+func requiredIDSet(ids []int) map[int]struct{} {
+	if len(ids) == 0 {
+		return nil
+	}
+	result := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			result[id] = struct{}{}
+		}
+	}
+	return result
+}
+
+func normalizeViewerRequiredIDs(ids []int) ([]int, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	normalized := make([]int, 0, 1)
+	seen := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, invalidViewerSpatialRequest("required feature ID must be positive")
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		normalized = append(normalized, id)
+		if len(normalized) > 1 {
+			return nil, invalidViewerSpatialRequest("viewer spatial preview supports one required feature")
+		}
+	}
+	return normalized, nil
+}
+
+func invalidViewerSpatialRequest(message string) error {
+	return newViewerSpatialError(
+		types.SpatialQueryReasonInvalidViewport,
+		udbxerrors.ConstraintError(message),
+	)
+}
+
+func mapViewerPreviewError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return newViewerSpatialError(types.SpatialQueryReasonQueryTimeout, ctxErr)
+	}
+	return err
+}
+
+func newViewerSpatialError(reason types.SpatialQueryReason, cause error) error {
+	spatialErr, err := udbx4go.NewSpatialQueryError(reason, cause)
+	if err != nil {
+		return err
+	}
+	return spatialErr
 }
 
 func spatialPreviewSampleReason(objectCount int, rawFeatureCount int, featureLimit int, vertexBudgetReached bool) (bool, string) {
@@ -533,6 +845,63 @@ func spatialPreviewSampleReason(objectCount int, rawFeatureCount int, featureLim
 		return false, ""
 	}
 	return true, strings.Join(sampleReasons, "，")
+}
+
+func spatialPreviewResultSampleReason(hasMore bool, vertexBudgetReached bool) (bool, string) {
+	sampleReasons := make([]string, 0, 2)
+	if hasMore {
+		sampleReasons = append(sampleReasons, "预览达到要素上限")
+	}
+	if vertexBudgetReached {
+		sampleReasons = append(sampleReasons, "预览达到顶点上限")
+	}
+	if len(sampleReasons) == 0 {
+		return false, ""
+	}
+	return true, strings.Join(sampleReasons, "，")
+}
+
+func supportsViewportSpatialQuery(kind types.DatasetKind) bool {
+	switch kind {
+	case types.DatasetKindPoint,
+		types.DatasetKindLine,
+		types.DatasetKindRegion,
+		types.DatasetKindPointZ,
+		types.DatasetKindLineZ,
+		types.DatasetKindRegionZ:
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *BoundingBoxDTO) spatialBoundingBox() types.BoundingBox {
+	if b == nil {
+		return types.BoundingBox{}
+	}
+	return types.BoundingBox{MinX: b.MinX, MinY: b.MinY, MaxX: b.MaxX, MaxY: b.MaxY}
+}
+
+func boundingBoxDTO(bounds *types.BoundingBox) *BoundingBoxDTO {
+	if bounds == nil {
+		return nil
+	}
+	return &BoundingBoxDTO{MinX: bounds.MinX, MinY: bounds.MinY, MaxX: bounds.MaxX, MaxY: bounds.MaxY}
+}
+
+func (a *App) applicationContext() context.Context {
+	base := a.ctx
+	if base == nil {
+		base = context.Background()
+	}
+	return base
+}
+
+func (a *App) spatialQueryContext(base context.Context) (context.Context, context.CancelFunc) {
+	if base == nil {
+		base = a.applicationContext()
+	}
+	return context.WithTimeout(base, viewerSpatialQueryTimeout)
 }
 
 // formatFeatures formats feature data for display
@@ -754,6 +1123,10 @@ func getIconType(kind types.DatasetKind) string {
 		return "line"
 	case types.DatasetKindRegion, types.DatasetKindRegionZ:
 		return "region"
+	case types.DatasetKindText:
+		return "text"
+	case types.DatasetKindCAD:
+		return "cad"
 	case types.DatasetKindTabular:
 		return "tabular"
 	default:
@@ -763,5 +1136,21 @@ func getIconType(kind types.DatasetKind) string {
 
 // GetCurrentFile returns the current file path
 func (a *App) GetCurrentFile() string {
+	a.dataSourceMu.Lock()
+	defer a.dataSourceMu.Unlock()
 	return a.currentPath
+}
+
+// GetCurrentFileInfo returns the backend-authoritative current file state.
+func (a *App) GetCurrentFileInfo() *FileInfo {
+	a.dataSourceMu.Lock()
+	defer a.dataSourceMu.Unlock()
+	if a.dataSource == nil {
+		return nil
+	}
+	return &FileInfo{
+		Path:           a.currentPath,
+		DatasetCount:   a.currentDatasetCount,
+		FileGeneration: a.fileGeneration,
+	}
 }

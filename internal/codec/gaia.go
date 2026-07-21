@@ -10,6 +10,7 @@ import (
 	"math"
 
 	"github.com/udbx4x/udbx4go/pkg/errors"
+	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
 // GAIA constants.
@@ -247,6 +248,25 @@ func ReadGaiaHeader(data []byte) (*GaiaHeader, error) {
 	header.GeoType = geoType
 
 	return header, nil
+}
+
+// ReadGaiaEnvelope reads and validates the MBR stored in a GAIA header.
+func ReadGaiaEnvelope(data []byte) (types.BoundingBox, error) {
+	header, err := ReadGaiaHeader(data)
+	if err != nil {
+		return types.BoundingBox{}, err
+	}
+
+	envelope := types.BoundingBox{
+		MinX: header.MBR[0],
+		MinY: header.MBR[1],
+		MaxX: header.MBR[2],
+		MaxY: header.MBR[3],
+	}
+	if err := envelope.Validate(); err != nil {
+		return types.BoundingBox{}, errors.FormatError("invalid GAIA MBR", err)
+	}
+	return envelope, nil
 }
 
 // WriteGaiaHeader writes the GAIA header.

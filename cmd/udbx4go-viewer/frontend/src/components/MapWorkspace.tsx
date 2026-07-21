@@ -3,32 +3,44 @@ import { Box, IconButton, Paper, Tooltip, Typography } from '@mui/material'
 import { CenterFocusStrong as FitIcon } from '@mui/icons-material'
 import { viewerColors } from '../theme/viewerTheme'
 import { OpenLayersSpatialRendererAdapter } from '../spatial/OpenLayersSpatialRendererAdapter'
-import type { MapLayerState, SelectedMapFeature } from '../types'
+import { featureGeometryKind, isValidBounds } from '../spatial/featureLocation'
+import type { BoundingBox, FeatureAttributes, MapLayerState, SelectedMapFeature } from '../types'
 import { EmptyState } from './EmptyState'
 
 interface MapWorkspaceProps {
   layers: MapLayerState[]
   selectedFeature: SelectedMapFeature | null
+  selectedFeatureAttributes?: FeatureAttributes | null
+  selectionLocationError?: string | null
   autoFitOnLayerChange: boolean
   zoomToSelectedFeature: boolean
+  onViewportChange: (viewport: BoundingBox) => void
   onFeatureSelect: (datasetName: string, featureID: number) => void
 }
 
 export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   layers,
   selectedFeature,
+  selectedFeatureAttributes,
+  selectionLocationError,
   autoFitOnLayerChange,
   zoomToSelectedFeature,
+  onViewportChange,
   onFeatureSelect,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const adapterRef = useRef<OpenLayersSpatialRendererAdapter | null>(null)
   const renderedLayerNamesRef = useRef<Set<string>>(new Set())
+  const appliedLayerStateRef = useRef<Map<string, { preview: MapLayerState['preview']; visible: boolean }>>(new Map())
   const layerPreviewReadyRef = useRef<Map<string, boolean>>(new Map())
   const hasSyncedLayersRef = useRef(false)
   const selectedFeatureRef = useRef<SelectedMapFeature | null>(selectedFeature)
   const zoomToSelectedFeatureRef = useRef(zoomToSelectedFeature)
   const featureSelectHandlerRef = useRef(onFeatureSelect)
+  const viewportChangeHandlerRef = useRef(onViewportChange)
+  const fittedSummaryLayersRef = useRef<Set<string>>(new Set())
+  const viewportBootstrapLayersRef = useRef<Set<string>>(new Set())
+  const currentViewportRef = useRef<BoundingBox | null>(null)
   const sampledLayerCount = layers.filter((layer) => layer.preview?.sampled).length
 
   useEffect(() => {
@@ -36,23 +48,43 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
   }, [onFeatureSelect])
 
   useEffect(() => {
+    viewportChangeHandlerRef.current = onViewportChange
+  }, [onViewportChange])
+
+  useEffect(() => {
     if (!containerRef.current) {
       return
     }
 
     const adapter = new OpenLayersSpatialRendererAdapter()
+    const unsubscribeViewport = adapter.onViewportChange((viewport) => {
+      currentViewportRef.current = viewport
+      viewportChangeHandlerRef.current(viewport)
+    })
     adapter.mount(containerRef.current)
+    if (!autoFitOnLayerChange) {
+      const currentViewport = adapter.getViewport()
+      if (currentViewport && isValidBounds(currentViewport)) {
+        currentViewportRef.current = currentViewport
+        viewportChangeHandlerRef.current(currentViewport)
+      }
+    }
     adapter.onFeatureClick((datasetName, featureID) => {
       featureSelectHandlerRef.current(datasetName, featureID)
     })
     adapterRef.current = adapter
 
     return () => {
+      unsubscribeViewport()
       adapter.destroy()
       adapterRef.current = null
       renderedLayerNamesRef.current.clear()
+      appliedLayerStateRef.current.clear()
       layerPreviewReadyRef.current.clear()
       hasSyncedLayersRef.current = false
+      fittedSummaryLayersRef.current.clear()
+      viewportBootstrapLayersRef.current.clear()
+      currentViewportRef.current = null
     }
   }, [])
 
@@ -66,6 +98,9 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     renderedLayerNamesRef.current.forEach((datasetName) => {
       if (!nextLayerNames.has(datasetName)) {
         adapter.removeLayer(datasetName)
+        appliedLayerStateRef.current.delete(datasetName)
+        fittedSummaryLayersRef.current.delete(datasetName)
+        viewportBootstrapLayersRef.current.delete(datasetName)
       }
     })
 
@@ -87,24 +122,69 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
 
     layers.forEach((layer) => {
       nextPreviewReady.set(layer.datasetName, Boolean(layer.preview))
+      const applied = appliedLayerStateRef.current.get(layer.datasetName)
       if (layer.preview) {
-        adapter.setLayer(layer)
-        adapter.setLayerVisible(layer.datasetName, layer.visible)
+        if (applied?.preview !== layer.preview) {
+          adapter.setLayer(layer)
+        } else if (applied.visible !== layer.visible) {
+          adapter.setLayerVisible(layer.datasetName, layer.visible)
+        }
+        appliedLayerStateRef.current.set(layer.datasetName, {
+          preview: layer.preview,
+          visible: layer.visible,
+        })
       } else {
-        adapter.removeLayer(layer.datasetName)
+        if (applied?.preview) {
+          adapter.removeLayer(layer.datasetName)
+        }
+        appliedLayerStateRef.current.set(layer.datasetName, {
+          preview: null,
+          visible: layer.visible,
+        })
       }
     })
 
     renderedLayerNamesRef.current = nextLayerNames
     layerPreviewReadyRef.current = nextPreviewReady
     hasSyncedLayersRef.current = true
-    if (autoFitOnLayerChange) {
+    const newViewportLayers = layers.filter((layer) =>
+      layer.visible &&
+      layer.summary?.viewportQuerySupported &&
+      !viewportBootstrapLayersRef.current.has(layer.datasetName),
+    )
+    newViewportLayers.forEach((layer) => viewportBootstrapLayersRef.current.add(layer.datasetName))
+    const layerToFit = layers.find((layer) =>
+      layer.visible &&
+      layer.summary?.viewportQuerySupported &&
+      isValidBounds(layer.summary.extent) &&
+      !fittedSummaryLayersRef.current.has(layer.datasetName),
+    )
+    if (autoFitOnLayerChange && layerToFit && isValidBounds(layerToFit.summary?.extent)) {
+      fittedSummaryLayersRef.current.add(layerToFit.datasetName)
+      adapter.fitBounds(layerToFit.summary.extent, geometryKindFromDatasetKind(layerToFit.kind))
+    } else if (newViewportLayers.length > 0 && !currentViewportRef.current) {
+      const currentViewport = adapter.getViewport()
+      if (currentViewport && isValidBounds(currentViewport)) {
+        currentViewportRef.current = currentViewport
+        viewportChangeHandlerRef.current(currentViewport)
+      }
+    } else if (
+      autoFitOnLayerChange &&
+      layers.some((layer) =>
+        !layer.summary?.viewportQuerySupported &&
+        Boolean(layer.preview) &&
+        previousPreviewReady.get(layer.datasetName) !== true,
+      )
+    ) {
       adapter.fitAllVisibleLayers()
     }
-    if (shouldFitSelectedAfterLayerSync && currentSelectedFeature) {
+    if (shouldFitSelectedAfterLayerSync && currentSelectedFeature && selectedFeatureAttributes === undefined) {
       adapter.fitFeature(currentSelectedFeature.datasetName, currentSelectedFeature.featureID)
     }
-  }, [autoFitOnLayerChange, layers])
+    if (currentSelectedFeature) {
+      adapter.setSelection(currentSelectedFeature)
+    }
+  }, [autoFitOnLayerChange, layers, selectedFeatureAttributes])
 
   useEffect(() => {
     selectedFeatureRef.current = selectedFeature
@@ -116,10 +196,28 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
     }
 
     adapter.setSelection(selectedFeature)
-    if (selectedFeature && zoomToSelectedFeature) {
+    if (selectedFeature && zoomToSelectedFeature && selectedFeatureAttributes === undefined) {
       adapter.fitFeature(selectedFeature.datasetName, selectedFeature.featureID)
     }
-  }, [selectedFeature, zoomToSelectedFeature])
+  }, [selectedFeature, selectedFeatureAttributes, zoomToSelectedFeature])
+
+  useEffect(() => {
+    const adapter = adapterRef.current
+    if (!adapter || !selectedFeature || !selectedFeatureAttributes || !zoomToSelectedFeature) {
+      return
+    }
+    if (
+      selectedFeature.datasetName !== selectedFeatureAttributes.datasetName ||
+      selectedFeature.featureID !== selectedFeatureAttributes.id
+    ) {
+      return
+    }
+    const geometryKind = featureGeometryKind(selectedFeatureAttributes.geometryType)
+    if (!geometryKind || !isValidBounds(selectedFeatureAttributes.bbox)) {
+      return
+    }
+    adapter.fitBounds(selectedFeatureAttributes.bbox, geometryKind)
+  }, [selectedFeature, selectedFeatureAttributes, zoomToSelectedFeature])
 
   return (
     <Paper elevation={0} sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -151,6 +249,27 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
             </Typography>
           </Box>
         )}
+        {selectionLocationError && (
+          <Box
+            sx={{
+              position: 'absolute',
+              left: 12,
+              top: 12,
+              px: 1.25,
+              py: 0.75,
+              bgcolor: 'background.paper',
+              border: 1,
+              borderColor: 'error.light',
+              boxShadow: 1,
+              borderRadius: 1,
+              pointerEvents: 'none',
+            }}
+          >
+            <Typography variant="caption" color="error.main">
+              {selectionLocationError}
+            </Typography>
+          </Box>
+        )}
         <Box sx={{ position: 'absolute', top: 12, right: 12 }}>
           <Tooltip title="适配全部可见图层">
             <span>
@@ -177,4 +296,14 @@ export const MapWorkspace: React.FC<MapWorkspaceProps> = ({
       </Box>
     </Paper>
   )
+}
+
+function geometryKindFromDatasetKind(kind: string): 'point' | 'line' | 'polygon' {
+  if (kind === 'line' || kind === 'lineZ') {
+    return 'line'
+  }
+  if (kind === 'region' || kind === 'regionZ') {
+    return 'polygon'
+  }
+  return 'point'
 }

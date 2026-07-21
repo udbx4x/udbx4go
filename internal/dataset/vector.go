@@ -1,11 +1,13 @@
 package dataset
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 
 	"github.com/udbx4x/udbx4go/internal/codec"
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
@@ -15,6 +17,18 @@ type VectorDataset struct {
 	*BaseDataset
 	geoCodec *codec.GaiaGeometryCodec
 	srid     int
+}
+
+type spatialGeometryError struct {
+	cause error
+}
+
+func (e *spatialGeometryError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *spatialGeometryError) Unwrap() error {
+	return e.cause
 }
 
 // NewVectorDataset creates a new vector dataset.
@@ -71,6 +85,14 @@ func (d *VectorDataset) scanFeature(row *sql.Row, geometryType string, id int) (
 
 // scanFeatures scans multiple rows into Features.
 func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*types.Feature, error) {
+	return d.scanFeaturesContext(context.Background(), rows, geometryType)
+}
+
+func (d *VectorDataset) scanFeaturesContext(
+	ctx context.Context,
+	rows *sql.Rows,
+	geometryType string,
+) ([]*types.Feature, error) {
 	columns, err := rows.Columns()
 	if err != nil {
 		return nil, errors.IOError("failed to get columns", err)
@@ -78,7 +100,13 @@ func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*ty
 
 	var features []*types.Feature
 
-	for rows.Next() {
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if !rows.Next() {
+			break
+		}
 		values := make([]interface{}, len(columns))
 		valuePtrs := make([]interface{}, len(columns))
 		for i := range values {
@@ -94,6 +122,9 @@ func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*ty
 		if err != nil {
 			return nil, err
 		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 
 		features = append(features, feature)
 	}
@@ -105,41 +136,172 @@ func (d *VectorDataset) scanFeatures(rows *sql.Rows, geometryType string) ([]*ty
 	return features, nil
 }
 
+func (d *VectorDataset) listContext(
+	ctx context.Context,
+	opts *types.QueryOptions,
+	geometryType string,
+) ([]*types.Feature, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
+	query, args := d.buildQuery(opts)
+	rows, err := d.DB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, mapSpatialListError(ctx, errors.IOError("failed to query features", err))
+	}
+	defer rows.Close()
+
+	features, err := d.scanFeaturesContext(ctx, rows, geometryType)
+	if err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
+	return features, nil
+}
+
 // buildFeature builds a Feature from column values.
 func (d *VectorDataset) buildFeature(columns []string, values []interface{}, geometryType string) (*types.Feature, error) {
+	return d.buildFeatureWithMetadata(columns, values, "SmID", "SmGeometry")
+}
+
+func (d *VectorDataset) buildFeatureWithMetadata(
+	columns []string,
+	values []interface{},
+	idColumn string,
+	geometryColumn string,
+) (*types.Feature, error) {
 	feature := &types.Feature{
 		Attributes: make(map[string]interface{}),
 	}
 
 	var geometryBlob []byte
+	geometryColumnFound := false
 
 	for i, col := range columns {
 		val := values[i]
 
-		switch col {
-		case "SmID":
-			if id, ok := val.(int64); ok {
+		switch {
+		case strings.EqualFold(col, idColumn):
+			switch id := val.(type) {
+			case int64:
 				feature.ID = int(id)
+			case int:
+				feature.ID = id
+			default:
+				return nil, errors.FormatError("feature ID column is not an integer")
 			}
-		case "SmGeometry":
-			if blob, ok := val.([]byte); ok {
-				geometryBlob = blob
+		case strings.EqualFold(col, geometryColumn):
+			geometryColumnFound = true
+			blob, ok := val.([]byte)
+			if !ok || len(blob) == 0 {
+				return nil, newSpatialGeometryError("feature geometry column is not a non-empty BLOB")
 			}
+			geometryBlob = blob
 		default:
 			feature.Attributes[col] = val
 		}
 	}
 
-	// Decode geometry if present
-	if geometryBlob != nil {
-		geometry, err := d.geoCodec.Decode(geometryBlob)
-		if err != nil {
-			return nil, errors.FormatError("failed to decode geometry", err)
-		}
-		feature.Geometry = geometry
+	if !geometryColumnFound {
+		return nil, newSpatialGeometryError("feature geometry column is missing")
 	}
 
+	geometry, err := d.geoCodec.Decode(geometryBlob)
+	if err != nil {
+		return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode geometry", err)}
+	}
+	feature.Geometry = geometry
+
 	return feature, nil
+}
+
+func newSpatialGeometryError(message string) error {
+	return &spatialGeometryError{cause: errors.FormatError(message)}
+}
+
+const spatialFeatureIDBatchSize = 500
+
+func (d *VectorDataset) loadFeaturesByIDs(
+	ctx context.Context,
+	ids []int,
+	idColumn string,
+	geometryColumn string,
+) (map[int]*types.Feature, error) {
+	features := make(map[int]*types.Feature, len(ids))
+	for start := 0; start < len(ids); start += spatialFeatureIDBatchSize {
+		end := start + spatialFeatureIDBatchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		batch, err := d.loadFeatureBatch(ctx, ids[start:end], idColumn, geometryColumn)
+		if err != nil {
+			return nil, err
+		}
+		for id, feature := range batch {
+			features[id] = feature
+		}
+	}
+	return features, nil
+}
+
+func (d *VectorDataset) loadFeatureBatch(
+	ctx context.Context,
+	ids []int,
+	idColumn string,
+	geometryColumn string,
+) (map[int]*types.Feature, error) {
+	features := make(map[int]*types.Feature, len(ids))
+	if len(ids) == 0 {
+		return features, nil
+	}
+
+	quotedTable, err := sqliteutil.QuoteIdentifier(d.TableName())
+	if err != nil {
+		return nil, errors.IOError("failed to quote dataset table name", err)
+	}
+	quotedID, err := sqliteutil.QuoteIdentifier(idColumn)
+	if err != nil {
+		return nil, errors.IOError("failed to quote feature ID column", err)
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := "SELECT * FROM " + quotedTable +
+		" WHERE " + quotedID + " IN (" + strings.Join(placeholders, ", ") + ")" +
+		" ORDER BY " + quotedID
+
+	rows, err := d.DB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, errors.IOError("failed to load spatial query features", err)
+	}
+	defer rows.Close()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, errors.IOError("failed to get spatial query columns", err)
+	}
+	for rows.Next() {
+		values := make([]interface{}, len(columns))
+		valuePointers := make([]interface{}, len(columns))
+		for i := range values {
+			valuePointers[i] = &values[i]
+		}
+		if err := rows.Scan(valuePointers...); err != nil {
+			return nil, errors.IOError("failed to scan spatial query feature", err)
+		}
+		feature, err := d.buildFeatureWithMetadata(columns, values, idColumn, geometryColumn)
+		if err != nil {
+			return nil, err
+		}
+		features[feature.ID] = feature
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errors.IOError("error iterating spatial query features", err)
+	}
+	return features, nil
 }
 
 // buildQuery builds a SELECT query with optional filters.

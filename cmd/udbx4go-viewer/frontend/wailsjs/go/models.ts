@@ -30,6 +30,216 @@ export namespace main {
 	        this.maxY = source["maxY"];
 	    }
 	}
+	export class BenchmarkViewportStepDTO {
+	    bounds: BoundingBoxDTO;
+	    expectedStrategy: string;
+	    hideLayers?: string[];
+	    showLayers?: string[];
+	    removeLayers?: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkViewportStepDTO(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.bounds = this.convertValues(source["bounds"], BoundingBoxDTO);
+	        this.expectedStrategy = source["expectedStrategy"];
+	        this.hideLayers = source["hideLayers"];
+	        this.showLayers = source["showLayers"];
+	        this.removeLayers = source["removeLayers"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BenchmarkSelectionDTO {
+	    datasetName: string;
+	    page: number;
+	    rowIndex: number;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkSelectionDTO(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.datasetName = source["datasetName"];
+	        this.page = source["page"];
+	        this.rowIndex = source["rowIndex"];
+	    }
+	}
+	export class BenchmarkScenarioDTO {
+	    name: string;
+	    filePath: string;
+	    layers: string[];
+	    selection: BenchmarkSelectionDTO;
+	    viewportSteps: BenchmarkViewportStepDTO[];
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkScenarioDTO(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.filePath = source["filePath"];
+	        this.layers = source["layers"];
+	        this.selection = this.convertValues(source["selection"], BenchmarkSelectionDTO);
+	        this.viewportSteps = this.convertValues(source["viewportSteps"], BenchmarkViewportStepDTO);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BenchmarkConfigDTO {
+	    runId: string;
+	    outputPath: string;
+	    temperature: string;
+	    maxConcurrentQueries: number;
+	    scenario: BenchmarkScenarioDTO;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkConfigDTO(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.outputPath = source["outputPath"];
+	        this.temperature = source["temperature"];
+	        this.maxConcurrentQueries = source["maxConcurrentQueries"];
+	        this.scenario = this.convertValues(source["scenario"], BenchmarkScenarioDTO);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BenchmarkMetricsDTO {
+	    openFileMs: number;
+	    loadLayersMs: number;
+	    fitVisibleLayersMs: number;
+	    selectAndFitMs: number;
+	    backendQueryMs: number[];
+	    moveendToRenderMs: number[];
+	    maxConcurrentQueries: number;
+	    pendingPeak: number;
+	    pendingFinal: number;
+	    staleResultsDiscarded: number;
+	    staleResultApplied: boolean;
+	    finalFeatureCount: number;
+	    blankRenderCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkMetricsDTO(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.openFileMs = source["openFileMs"];
+	        this.loadLayersMs = source["loadLayersMs"];
+	        this.fitVisibleLayersMs = source["fitVisibleLayersMs"];
+	        this.selectAndFitMs = source["selectAndFitMs"];
+	        this.backendQueryMs = source["backendQueryMs"];
+	        this.moveendToRenderMs = source["moveendToRenderMs"];
+	        this.maxConcurrentQueries = source["maxConcurrentQueries"];
+	        this.pendingPeak = source["pendingPeak"];
+	        this.pendingFinal = source["pendingFinal"];
+	        this.staleResultsDiscarded = source["staleResultsDiscarded"];
+	        this.staleResultApplied = source["staleResultApplied"];
+	        this.finalFeatureCount = source["finalFeatureCount"];
+	        this.blankRenderCount = source["blankRenderCount"];
+	    }
+	}
+	export class BenchmarkResultDTO {
+	    runId: string;
+	    status: string;
+	    startedAt: string;
+	    scenario: string;
+	    metrics: BenchmarkMetricsDTO;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BenchmarkResultDTO(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.status = source["status"];
+	        this.startedAt = source["startedAt"];
+	        this.scenario = source["scenario"];
+	        this.metrics = this.convertValues(source["metrics"], BenchmarkMetricsDTO);
+	        this.error = source["error"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+
+
+
 	export class DatasetInfoDTO {
 	    name: string;
 	    kind: string;
@@ -89,6 +299,7 @@ export namespace main {
 	export class FileInfo {
 	    path: string;
 	    datasetCount: number;
+	    fileGeneration: number;
 
 	    static createFrom(source: any = {}) {
 	        return new FileInfo(source);
@@ -98,6 +309,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
 	        this.datasetCount = source["datasetCount"];
+	        this.fileGeneration = source["fileGeneration"];
 	    }
 	}
 	export class MapInteractionSettingsDTO {
@@ -192,6 +404,12 @@ export namespace main {
 	    estimatedVertexCount: number;
 	    sampled: boolean;
 	    sampleReason?: string;
+	    queriedBounds?: BoundingBoxDTO;
+	    strategy: string;
+	    hasMore: boolean;
+	    degradedReason?: string;
+	    queryDurationMs: number;
+	    fileGeneration: number;
 
 	    static createFrom(source: any = {}) {
 	        return new SpatialPreviewDTO(source);
@@ -207,6 +425,12 @@ export namespace main {
 	        this.estimatedVertexCount = source["estimatedVertexCount"];
 	        this.sampled = source["sampled"];
 	        this.sampleReason = source["sampleReason"];
+	        this.queriedBounds = this.convertValues(source["queriedBounds"], BoundingBoxDTO);
+	        this.strategy = source["strategy"];
+	        this.hasMore = source["hasMore"];
+	        this.degradedReason = source["degradedReason"];
+	        this.queryDurationMs = source["queryDurationMs"];
+	        this.fileGeneration = source["fileGeneration"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -232,6 +456,7 @@ export namespace main {
 	    limit: number;
 	    maxVertices: number;
 	    simplify: boolean;
+	    requiredIds?: number[];
 
 	    static createFrom(source: any = {}) {
 	        return new SpatialPreviewRequestDTO(source);
@@ -243,6 +468,7 @@ export namespace main {
 	        this.limit = source["limit"];
 	        this.maxVertices = source["maxVertices"];
 	        this.simplify = source["simplify"];
+	        this.requiredIds = source["requiredIds"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -288,6 +514,9 @@ export namespace main {
 	    estimatedVertexCount: number;
 	    previewSupported: boolean;
 	    unsupportedReason?: string;
+	    viewportQuerySupported: boolean;
+	    rtreeAvailable: boolean;
+	    queryDiagnosticReason?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new SpatialSummaryDTO(source);
@@ -303,6 +532,9 @@ export namespace main {
 	        this.estimatedVertexCount = source["estimatedVertexCount"];
 	        this.previewSupported = source["previewSupported"];
 	        this.unsupportedReason = source["unsupportedReason"];
+	        this.viewportQuerySupported = source["viewportQuerySupported"];
+	        this.rtreeAvailable = source["rtreeAvailable"];
+	        this.queryDiagnosticReason = source["queryDiagnosticReason"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

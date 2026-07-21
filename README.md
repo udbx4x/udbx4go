@@ -14,6 +14,7 @@ A Go implementation of the UDBX (Universal Spatial Database Extension) reader/wr
 - ✅ Core UDBX read/write support, including Text / GeoText and CAD minimal GeoHeader baselines.
 - ✅ Dataset types: Point, Line, Region, PointZ, LineZ, RegionZ, Tabular, Text, CAD
 - ✅ `TextDataset` supports minimal GeoText read/write CRUD and `CadDataset` supports minimal GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion`.
+- ✅ Context-aware viewport MBR queries for Point, Line, Region, and their Z variants, with verified RTree and envelope-cache strategies.
 - ✅ 14 field types with proper type mapping
 - ✅ GeoJSON-like geometry model
 - ✅ Streaming and batch operations
@@ -75,6 +76,25 @@ func main() {
     }
 }
 ```
+
+### Viewport Spatial Query
+
+`DataSource.QuerySpatial` returns a stable, bounded set of features for a map viewport:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+
+result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
+    Bounds: udbx4go.BoundingBox{MinX: 113.5, MinY: 34.5, MaxX: 114.0, MaxY: 35.0},
+    Limit: 1000,
+    RequiredIDs: []int{12345},
+})
+```
+
+MBR intersection uses closed intervals. Every ordinary feature intersects the requested bounds MBR. `HasMore` applies only to ordinary viewport matches; required IDs are deduplicated, do not consume `Limit`, and are the only features that may remain outside the viewport. A successful SDK result uses only `rtree` or `envelope_cache`, and `SpatialQueryResult` has no `DegradedReason` field. Envelope caches live only for the open `DataSource` and are released by `Close`.
+
+The current defaults of 32 MiB per dataset and 64 MiB per `DataSource` are measured cache resource policies. They charge a stable-RSS model of roughly 4 MiB fixed per dataset plus 80 bytes per capacity entry, not an object-count or UDBX format limit. If a complete cache exceeds that policy, the SDK returns an `envelope_cache_budget_exceeded` error. Viewport queries currently cover Point, Line, Region, PointZ, LineZ, and RegionZ. Text and CAD retain bounded preview/list behavior. The Viewer may turn the budget error or Text/CAD path into its private non-spatial `bounded_sample` preview, whose DTO can keep `degradedReason`; this is not an SDK success strategy. See [API.md](./API.md#viewport-spatial-queries) for the runnable program, all six reason codes, and `ListContext` cancellation semantics.
 
 ## GUI Viewer
 

@@ -18,13 +18,20 @@ import {
 } from '@mui/material'
 import {
   AddCircleOutline,
+  Architecture as CadIcon,
   CropDin as RegionIcon,
   HelpOutline as UnknownIcon,
   LocationOn as PointIcon,
   Search as SearchIcon,
   ShowChart as LineIcon,
   TableChart as TableIcon,
+  TextFields as TextIcon,
 } from '@mui/icons-material'
+import {
+  getDatasetCategory,
+  isSpatialDataset,
+  isUnknownDataset,
+} from '../datasets/datasetClassification'
 import type { DatasetInfo, MapLayerState } from '../types'
 
 interface DatasetExplorerProps {
@@ -36,26 +43,6 @@ interface DatasetExplorerProps {
 }
 
 type DatasetFilter = 'all' | 'spatial' | 'tabular' | 'unknown'
-
-const spatialKinds = new Set(['point', 'pointZ', 'line', 'lineZ', 'region', 'regionZ'])
-
-const isUnknownDataset = (dataset: DatasetInfo) =>
-  dataset.kind === 'unknown' || dataset.iconType === 'unknown'
-
-const isSpatialDataset = (dataset: DatasetInfo) =>
-  !isUnknownDataset(dataset) && spatialKinds.has(dataset.kind)
-
-const getDatasetCategory = (dataset: DatasetInfo): Exclude<DatasetFilter, 'all'> => {
-  if (isUnknownDataset(dataset)) {
-    return 'unknown'
-  }
-
-  if (dataset.kind === 'tabular') {
-    return 'tabular'
-  }
-
-  return isSpatialDataset(dataset) ? 'spatial' : 'unknown'
-}
 
 const getDatasetSecondaryText = (dataset: DatasetInfo) =>
   isUnknownDataset(dataset)
@@ -72,6 +59,10 @@ const getDatasetIcon = (iconType: string) => {
       return <RegionIcon color="warning" />
     case 'tabular':
       return <TableIcon color="action" />
+    case 'text':
+      return <TextIcon color="secondary" />
+    case 'cad':
+      return <CadIcon color="secondary" />
     default:
       return <UnknownIcon color="disabled" />
   }

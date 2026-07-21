@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { LayerPanel } from './LayerPanel'
 import { mapLayerFixtures, sampledMapLayerFixture } from '../test/fixtures'
 import { viewerTheme } from '../theme/viewerTheme'
-import type { MapLayerState } from '../types'
+import type { BoundingBox, MapLayerState } from '../types'
 
 type LayerPanelProps = {
   layers: MapLayerState[]
@@ -45,6 +45,10 @@ describe('LayerPanel', () => {
       features: [],
       estimatedVertexCount: 0,
       sampled: false,
+      strategy: 'rtree',
+      hasMore: false,
+      queryDurationMs: 0,
+      fileGeneration: 0,
     },
   }
 
@@ -94,8 +98,7 @@ describe('LayerPanel', () => {
 
     renderLayerPanel({ layers: [sampledLayer], showPreviewStats: true })
 
-    expect(screen.getByText('预览要素 1')).toBeInTheDocument()
-    expect(screen.getByText('顶点 1')).toBeInTheDocument()
+    expect(screen.getByText('bounded_sample · 0 ms · 要素 1 · 顶点 1')).toBeInTheDocument()
   })
 
   it('多图层时通过当前打开的菜单移除对应图层', () => {
@@ -150,7 +153,116 @@ describe('LayerPanel', () => {
     renderLayerPanel({ layers: [sampledMapLayerFixture], showPreviewStats: true })
 
     expect(screen.getAllByText('预览达到要素上限')).toHaveLength(1)
-    expect(screen.getByText('预览要素 0')).toBeInTheDocument()
-    expect(screen.getByText('顶点 50000')).toBeInTheDocument()
+    expect(screen.getByText('bounded_sample · 0 ms · 要素 0 · 顶点 50000')).toBeInTheDocument()
+  })
+
+  it.each([
+    ['error', 'backend details'],
+    ['degraded', 'point · 0 个预览要素'],
+    ['ready', '当前范围 0+ 个对象，请继续放大'],
+    ['loading', '加载当前范围'],
+  ] as const)('按最高优先级显示 %s 查询状态', (queryStatus, message) => {
+    const layer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      queryStatus,
+      queryError: queryStatus === 'error' ? 'backend details' : null,
+      preview: {
+        ...mapLayerFixtures[0].preview!,
+        strategy: queryStatus === 'degraded' ? 'bounded_sample' : 'rtree',
+        degradedReason: queryStatus === 'degraded' ? 'spatial_index_unavailable' : undefined,
+        hasMore: queryStatus === 'ready',
+      },
+    }
+
+    renderLayerPanel({ layers: [layer] })
+
+    expect(screen.getByText(message)).toBeInTheDocument()
+  })
+
+  it('仅包络缓存预算超限显示空间索引降级', () => {
+    const layer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      queryStatus: 'degraded',
+      preview: {
+        ...mapLayerFixtures[0].preview!,
+        strategy: 'bounded_sample',
+        degradedReason: 'envelope_cache_budget_exceeded',
+      },
+    }
+
+    renderLayerPanel({ layers: [layer] })
+
+    expect(screen.getByText('无空间索引，显示有界预览')).toBeInTheDocument()
+  })
+
+  it('ShowPreviewStats 开启时显示查询策略、耗时、要素、顶点和原因', () => {
+    const layer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      queryStatus: 'degraded',
+      preview: {
+        ...mapLayerFixtures[0].preview!,
+        strategy: 'bounded_sample',
+        queryDurationMs: 12.5,
+        degradedReason: 'spatial_index_unavailable',
+        hasMore: false,
+      },
+    }
+
+    renderLayerPanel({ layers: [layer], showPreviewStats: true })
+
+    expect(screen.getByText('bounded_sample · 12.5 ms · 要素 0 · 顶点 0 · spatial_index_unavailable')).toBeInTheDocument()
+  })
+
+  it.each(['text', 'cad'])('%s bounded preview 不显示空间索引降级', (kind) => {
+    const layer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      kind,
+      queryStatus: 'ready',
+      preview: {
+        ...mapLayerFixtures[0].preview!,
+        kind,
+        strategy: 'bounded_sample',
+        degradedReason: 'unsupported_dataset_kind',
+      },
+    }
+
+    renderLayerPanel({ layers: [layer] })
+
+    expect(screen.queryByText('无空间索引，显示有界预览')).not.toBeInTheDocument()
+    expect(screen.getByText(`${kind} · 0 个预览要素`)).toBeInTheDocument()
+  })
+
+  it('hasMore 计数排除视口外 required feature', () => {
+    const layer = viewportLayerWithRequiredFeature({ minX: 200, minY: 200, maxX: 200, maxY: 200 })
+
+    renderLayerPanel({ layers: [layer] })
+
+    expect(screen.getByText('当前范围 2+ 个对象，请继续放大')).toBeInTheDocument()
+  })
+
+  it('hasMore 计数保留视口内 required feature且不误扣', () => {
+    const layer = viewportLayerWithRequiredFeature({ minX: 20, minY: 20, maxX: 20, maxY: 20 })
+
+    renderLayerPanel({ layers: [layer] })
+
+    expect(screen.getByText('当前范围 3+ 个对象，请继续放大')).toBeInTheDocument()
   })
 })
+
+function viewportLayerWithRequiredFeature(requiredBBox: BoundingBox): MapLayerState {
+  return {
+    ...mapLayerFixtures[0],
+    queryStatus: 'ready',
+    preview: {
+      ...mapLayerFixtures[0].preview!,
+      queriedBounds: { minX: 0, minY: 0, maxX: 100, maxY: 100 },
+      hasMore: true,
+      viewportFeatureCount: requiredBBox.minX > 100 ? 2 : 3,
+      features: [
+        { id: 1, bbox: { minX: 10, minY: 10, maxX: 10, maxY: 10 }, geometry: { type: 'Point', coordinates: [10, 10], hasZ: false } },
+        { id: 2, bbox: { minX: 30, minY: 30, maxX: 30, maxY: 30 }, geometry: { type: 'Point', coordinates: [30, 30], hasZ: false } },
+        { id: 7, bbox: requiredBBox, geometry: { type: 'Point', coordinates: [requiredBBox.minX, requiredBBox.minY], hasZ: false } },
+      ],
+    },
+  }
+}

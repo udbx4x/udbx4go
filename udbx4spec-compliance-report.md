@@ -8,7 +8,7 @@
 | 编程语言 | Go |
 | 模块路径 | github.com/udbx4x/udbx4go |
 | Go 版本 | 1.22 |
-| 检查时间 | 2026-06-26 |
+| 检查时间 | 2026-07-20 |
 | 规范版本 | udbx4spec (当前) |
 
 ## 项目识别结果
@@ -31,10 +31,11 @@
 | 几何类型完整性 | ✅ | 3/3 | 100% |
 | 错误类型完整性 | ✅ | 5/5 | 100% |
 | 数据集类完整性 | ✅ | 9/9 | 100% |
-| DataSource API | ✅ | 14/14 | 100% |
-| **总计** | **✅** | **54/54** | **100%** |
+| DataSource API | ✅ | 16/16 | 100% |
+| 视口空间查询契约 | ✅ | 1/1 | 100% |
+| **总计** | **✅** | **57/57** | **100%** |
 
-注意：本报告的接口存在性评分不代表所有真实 SuperMap UDBX 变体都已完全兼容。当前可执行合规覆盖已包含 2D/3D 矢量、Tabular、Text / GeoText 最小基线和 CAD 最小 GeoHeader（`GeoPoint`、`GeoLine`、`GeoRegion`）读写闭环。
+注意：本报告的接口存在性评分不代表所有真实 SuperMap UDBX 变体都已完全兼容。当前可执行合规覆盖已包含 2D/3D 矢量、Tabular、Text / GeoText 最小基线、CAD 最小 GeoHeader（`GeoPoint`、`GeoLine`、`GeoRegion`）读写闭环，以及 Go 运行时的视口空间查询。Java 和 TypeScript 当前只有 `udbx4spec` reference-only 契约，没有对应 SDK 运行时实现。
 
 ## 可执行合规测试
 
@@ -53,6 +54,7 @@ go test . -run Udbx4Spec -v
 | R4 单语言语义 roundtrip | ✅ | 读取覆盖 `point/line/region/pointZ/lineZ/regionZ/tabular/cad/text` 的 `compliance.udbx` 后通过 Go SDK 写出临时 UDBX，再重新打开并比较数据集、字段、对象数、几何和属性语义 |
 | R5 跨语言语义 roundtrip | ✅ 三实现闭环 | 读取 `udbx4spec/compliance/roundtrip/udbx4ts-roundtrip.udbx`、`udbx4spec/compliance/roundtrip/udbx4j-roundtrip.udbx`，验证 Go 能读取 TypeScript 与 Java 写出的 UDBX；同时生成 `udbx4go-roundtrip.udbx`，供 `udbx4j`、`udbx4ts` 读取验证 |
 | R6 Source-derived fixture | ✅ stable | 读取 `source-derived/sampledata/county-t/smid-1-smgeometry.bin`，验证真实 Text 中非 UTF-8 可读 `faceName` / `subText` 的容错解码行为；读取 `source-derived/sampledata/caddt/smid-1/16/63-smgeometry.bin`，验证真实 CAD Point / Line / Region 无样式 GeoHeader 解码行为；校验 `sampledata-3d-srid-zero-metadata` 的 stable manifest 与 3D metadata-json，并通过真实样本测试覆盖 `BaseMap_PZ` / `BaseMap_LZ` / `BaseMap_RZ`；Go 已统一为逐非法字节替换为 U+FFFD |
+| R7 Spatial query contract | ✅ | `node --test ../udbx4spec/tools/spatial-query-contract.test.mjs` 校验 JSON Schema、TypeScript 和 Java reference-only 类型的字段、两种成功策略与六种原因码一致；Go SDK 已实现并由单元、race、真实样本和 PoC 自动测试覆盖 |
 
 未完成项：
 
@@ -167,6 +169,8 @@ go test . -run Udbx4Spec -v
 |----------|----------|------|
 | `listDatasets()` | ✅ | `ListDatasets() ([]*DatasetInfo, error)` |
 | `getDataset(name)` | ✅ | `GetDataset(name string) (Dataset, error)` |
+| `getSpatialQueryCapability(ctx, name)` | ✅ | `GetSpatialQueryCapability(context.Context, string) (*SpatialQueryCapability, error)` |
+| `querySpatial(ctx, name, options)` | ✅ | `QuerySpatial(context.Context, string, SpatialQueryOptions) (*SpatialQueryResult, error)` |
 
 #### 6.3 类型专用获取方法 ✅
 
@@ -202,6 +206,9 @@ go test . -run Udbx4Spec -v
 | `DatasetInfo` | ✅ | `DatasetInfo` struct |
 | `FieldInfo` | ✅ | `FieldInfo` struct |
 | `QueryOptions` | ✅ | `QueryOptions` struct |
+| `BoundingBox` / `SpatialQueryOptions` / `SpatialQueryResult` | ✅ | Go 运行时实现；闭区间 MBR、`limit + 1`、`requiredIds` 和 `hasMore` 语义与规范一致；成功结果无 `DegradedReason` |
+| `SpatialQueryStrategy` | ✅ | SDK 成功策略仅为 `rtree`、`envelope_cache` |
+| `SpatialQueryReason` | ✅ | 六个稳定原因码 |
 
 ## 当前实现边界
 
@@ -209,6 +216,7 @@ go test . -run Udbx4Spec -v
 |------|------|----------|
 | Text / GeoText | 已完成最小合规基线 | 扩展复杂样式、复杂文本对象和更多真实样本 |
 | CAD GeoHeader | 已完成最小合规基线 | 扩展复杂 CAD 类型、样式和混合对象 |
+| 视口空间查询 | Go 已实现并通过 SDK/自动测试；Java/TypeScript reference-only | Text/CAD 视口查询、投影转换和精确拓扑谓词；严格 stale/canvas 门禁的 macOS 打包运行需要重新验收 |
 
 ## 命名一致性检查
 
@@ -253,8 +261,11 @@ go test . -run Udbx4Spec -v
 - API 命名符合 Go 语言惯例
 - Text / GeoText 最小基线已纳入合规闭环
 - CAD 最小 GeoHeader 基线已纳入合规闭环
+- Go 视口空间查询已实现；两种 SDK 成功策略、普通要素 MBR 相交、仅 required ID 可在视口外、预算超限错误和六个原因码均已纳入合规闭环
+- Viewer 私有 `bounded_sample` 是预算错误或 Text/CAD 路径的非空间有界预览，不属于 SDK 成功结果；Viewer DTO 可保留 `degradedReason`
 
 需要改进：
 - 扩展真实 SuperMap UDBX 样本文本和 CAD 兼容范围
+- 使用严格契约、确定性 stale probe 和 canvas 像素门禁重新执行 macOS 打包三场景验收；证据按人工 1-4、自动化故障注入 5、真实切换加自动化生命周期 6 分类，当前固定并发保持 1
 
 建议后续以真实样本兼容和发布治理为重点继续推进。

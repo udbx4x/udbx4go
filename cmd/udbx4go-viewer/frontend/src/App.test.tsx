@@ -21,6 +21,7 @@ declare global {
 
 const mockUseUDBX = vi.fn()
 const mockUseViewerSettings = vi.fn()
+const mockGetBenchmarkConfig = vi.fn()
 type CapturedSettingsDialogProps = {
   open: boolean
   settings: ViewerSettings
@@ -32,6 +33,9 @@ type CapturedSettingsDialogProps = {
 type CapturedMapWorkspaceProps = {
   autoFitOnLayerChange: boolean
   zoomToSelectedFeature: boolean
+  selectedFeatureAttributes: FeatureAttributes | null
+  selectionLocationError: string | null
+  onViewportChange: (viewport: { minX: number; minY: number; maxX: number; maxY: number }) => void
 }
 type CapturedInspectorPanelProps = {
   layers: MapLayerState[]
@@ -69,6 +73,16 @@ vi.mock('./hooks/useUDBX', () => ({
 
 vi.mock('./hooks/useViewerSettings', () => ({
   useViewerSettings: () => mockUseViewerSettings(),
+}))
+
+vi.mock('../wailsjs/go/main/App', () => ({
+  GetBenchmarkConfig: () => mockGetBenchmarkConfig(),
+}))
+
+vi.mock('./benchmark/BenchmarkRunner', () => ({
+  BenchmarkRunner: ({ config }: { config: { scenario: { name: string } } }) => (
+    <div>{`基准模式 ${config.scenario.name}`}</div>
+  ),
 }))
 
 vi.mock('./components/AppShell', () => ({
@@ -150,6 +164,7 @@ vi.mock('./components/SettingsDialog', () => ({
 }))
 
 let App: typeof import('./App').default
+let ApplicationRoot: typeof import('./App').default
 
 const baseUdbxState = {
   currentFile: null,
@@ -160,6 +175,7 @@ const baseUdbxState = {
   mapLayers: [],
   selectedMapFeature: null,
   selectedFeatureAttributes: null,
+  selectionLocationError: null,
   loading: false,
   error: null,
   openFileDialog: vi.fn(),
@@ -169,6 +185,8 @@ const baseUdbxState = {
   setMapLayerVisible: vi.fn(),
   removeMapLayer: vi.fn(),
   selectFeature: vi.fn(),
+  queryViewport: vi.fn(),
+  loadCurrentFile: vi.fn(),
 }
 
 const loadedSettings: ViewerSettings = {
@@ -181,7 +199,9 @@ const loadedSettings: ViewerSettings = {
 describe('App settings integration', () => {
   beforeAll(async () => {
     window.__vite_plugin_react_preamble_installed__ = true
-    App = (await import('./App')).default
+    const appModule = await import('./App')
+    App = appModule.ViewerApp
+    ApplicationRoot = appModule.default
   })
 
   beforeEach(() => {
@@ -192,6 +212,7 @@ describe('App settings integration', () => {
     capturedDatasetExplorerProps = null
     capturedAttributeTableDrawerProps = null
     mockUseUDBX.mockReturnValue(baseUdbxState)
+    mockGetBenchmarkConfig.mockResolvedValue(null)
     mockUseViewerSettings.mockReturnValue({
       settings: defaultViewerSettings,
       loading: true,
@@ -199,6 +220,52 @@ describe('App settings integration', () => {
       saveSettings: vi.fn(),
       resetSettings: vi.fn(),
     })
+  })
+
+  it('默认入口在无基准配置时进入普通 Viewer', async () => {
+    render(<ApplicationRoot />)
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument())
+    expect(mockGetBenchmarkConfig).toHaveBeenCalledTimes(1)
+  })
+
+  it('普通 Viewer 启动时恢复当前文件生命周期', () => {
+    render(<App />)
+
+    expect(baseUdbxState.loadCurrentFile).toHaveBeenCalledOnce()
+  })
+
+  it('默认入口在有基准配置时只进入基准模式', async () => {
+    mockGetBenchmarkConfig.mockResolvedValue({
+      runId: 'sampledata-01',
+      outputPath: '/tmp/sampledata-01.json',
+      temperature: 'cold',
+      maxConcurrentQueries: 1,
+      scenario: {
+        name: 'sampledata-multilayer',
+        filePath: '/data/SampleData.udbx',
+        layers: ['BaseMap_P'],
+        selection: { datasetName: 'BaseMap_P', page: 1, rowIndex: 0 },
+        viewportSteps: [{
+          bounds: { minX: 115, minY: 38, maxX: 118, maxY: 42 },
+          expectedStrategy: 'envelope_cache',
+        }],
+      },
+    })
+
+    render(<ApplicationRoot />)
+
+    await waitFor(() => expect(screen.getByText('基准模式 sampledata-multilayer')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '设置' })).not.toBeInTheDocument()
+  })
+
+  it('基准配置读取失败时显示错误且不进入普通 Viewer', async () => {
+    mockGetBenchmarkConfig.mockRejectedValue(new Error('配置损坏'))
+
+    render(<ApplicationRoot />)
+
+    await waitFor(() => expect(screen.getByText('无法读取基准配置：配置损坏')).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '设置' })).not.toBeInTheDocument()
   })
 
   it('只在设置首次加载完成后应用默认属性表展开状态', async () => {
@@ -304,6 +371,7 @@ describe('App settings integration', () => {
     })
     expect(capturedMapWorkspaceProps?.autoFitOnLayerChange).toBe(false)
     expect(capturedMapWorkspaceProps?.zoomToSelectedFeature).toBe(false)
+    expect(capturedMapWorkspaceProps?.onViewportChange).toBe(baseUdbxState.queryViewport)
     expect(capturedInspectorPanelProps?.showPreviewStats).toBe(true)
   })
 
@@ -345,6 +413,8 @@ describe('App settings integration', () => {
     expect(capturedInspectorPanelProps?.layers).toBe(mapLayerFixtures)
     expect(capturedInspectorPanelProps?.showPreviewStats).toBe(true)
     expect(capturedInspectorPanelProps?.selectedFeatureAttributes).toBe(featureAttributesFixture)
+    expect(capturedMapWorkspaceProps?.selectedFeatureAttributes).toBe(featureAttributesFixture)
+    expect(capturedMapWorkspaceProps?.selectionLocationError).toBeNull()
     expect(capturedAttributeTableDrawerProps?.pageData).toBe(pageDataFixture)
     expect(capturedAttributeTableDrawerProps?.datasetName).toBe('BaseMap_P')
     expect(capturedAttributeTableDrawerProps?.selectedFeature).toBe(selectedFeatureFixture)
@@ -521,6 +591,27 @@ describe('App settings integration', () => {
     capturedDatasetExplorerProps?.onSelectDataset('BaseMap_L')
 
     expect(loadDataset).toHaveBeenCalledWith('BaseMap_L', 1)
+    expect(loadTableDataset).not.toHaveBeenCalled()
+  })
+
+  it('选择 CAD 数据集时加载地图预览和属性表', () => {
+    const loadDataset = vi.fn()
+    const loadTableDataset = vi.fn()
+    mockUseUDBX.mockReturnValue({
+      ...baseUdbxState,
+      datasets: [
+        ...datasetFixtures,
+        { name: 'CADDT', kind: 'cad', objectCount: 92, iconType: 'cad' },
+      ],
+      loadDataset,
+      loadTableDataset,
+    })
+
+    render(<App />)
+
+    capturedDatasetExplorerProps?.onSelectDataset('CADDT')
+
+    expect(loadDataset).toHaveBeenCalledWith('CADDT', 1)
     expect(loadTableDataset).not.toHaveBeenCalled()
   })
 

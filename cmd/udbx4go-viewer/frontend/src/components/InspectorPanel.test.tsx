@@ -83,7 +83,6 @@ describe('InspectorPanel', () => {
   it('向图层 tab 透传 showPreviewStats', () => {
     renderInspectorPanel({ showPreviewStats: true })
 
-    expect(screen.getByText('预览要素 0')).toBeInTheDocument()
-    expect(screen.getByText('顶点 0')).toBeInTheDocument()
+    expect(screen.getByText('bounded_sample · 0 ms · 要素 0 · 顶点 0')).toBeInTheDocument()
   })
 })

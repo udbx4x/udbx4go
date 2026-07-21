@@ -16,6 +16,8 @@ type DatasetInfo struct {
 	ObjectCount int
 	// GeometryType is the GAIA geometry type (nil for non-spatial)
 	GeometryType *int
+	// Extent is the declared spatial extent (nil if absent or invalid)
+	Extent *BoundingBox
 }
 
 // FieldInfo holds metadata about a field.
