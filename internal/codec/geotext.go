@@ -120,32 +120,7 @@ func EncodeTextIndexKey(geometry *types.TextGeometry, srid int) ([]byte, error) 
 	maxX := geometry.Anchor[0] + halfSize
 	maxY := geometry.Anchor[1] + halfSize
 
-	points := [][2]float64{
-		{minX, minY},
-		{maxX, minY},
-		{maxX, maxY},
-		{minX, maxY},
-		{minX, minY},
-	}
-
-	writer := NewBinaryWriter()
-	writer.WriteByte(GaiaHeaderStart)
-	writer.WriteByte(GaiaByteOrder)
-	writer.WriteInt32(int32(srid))
-	writer.WriteFloat64(minX)
-	writer.WriteFloat64(minY)
-	writer.WriteFloat64(maxX)
-	writer.WriteFloat64(maxY)
-	writer.WriteByte(GaiaMarker)
-	writer.WriteInt32(3)
-	writer.WriteInt32(0)
-	writer.WriteInt32(int32(len(points)))
-	for _, point := range points {
-		writer.WriteFloat64(point[0])
-		writer.WriteFloat64(point[1])
-	}
-	writer.WriteByte(GaiaEndMarker)
-	return writer.Bytes(), nil
+	return EncodeEnvelopeIndexKey([]float64{minX, minY, maxX, maxY}, srid)
 }
 
 func decodeTextStyle(reader *BinaryReader) (*types.TextStyle, error) {
