@@ -31,15 +31,7 @@ func EncodeEnvelopeIndexKey(bbox []float64, srid int) ([]byte, error) {
 	}
 
 	writer := NewBinaryWriter()
-	writer.WriteByte(GaiaHeaderStart)
-	writer.WriteByte(GaiaByteOrder)
-	writer.WriteInt32(int32(srid))
-	writer.WriteFloat64(minX)
-	writer.WriteFloat64(minY)
-	writer.WriteFloat64(maxX)
-	writer.WriteFloat64(maxY)
-	writer.WriteByte(GaiaMarker)
-	writer.WriteInt32(3)
+	writer.WriteBytes(WriteGaiaHeader(int32(srid), [4]float64{minX, minY, maxX, maxY}, 3))
 	writer.WriteInt32(0)
 	writer.WriteInt32(int32(len(points)))
 	for _, point := range points {
