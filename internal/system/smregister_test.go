@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/udbx4x/udbx4go/internal/schema"
+	udbxerrors "github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
@@ -57,7 +58,7 @@ func TestSmRegisterDaoInsertPreservesSpatialColumnMetadata(t *testing.T) {
 		SmTableName:   "cad",
 		SmIDColName:   sql.NullString{String: "SmID", Valid: true},
 		SmGeoColName:  sql.NullString{String: "SmGeometry", Valid: true},
-		SmSRID:        sql.NullInt32{Int32: 0, Valid: true},
+		SmSRID:        sql.NullInt32{Int32: 4326, Valid: true},
 		SmIndexType:   sql.NullInt32{Int32: 0, Valid: true},
 	}
 
@@ -68,6 +69,40 @@ func TestSmRegisterDaoInsertPreservesSpatialColumnMetadata(t *testing.T) {
 	assert.Equal(t, record.SmGeoColName, stored.SmGeoColName)
 	assert.Equal(t, record.SmSRID, stored.SmSRID)
 	assert.Equal(t, record.SmIndexType, stored.SmIndexType)
+}
+
+func TestSmRegisterDaoInsertUsesDefaultIndexTypeWhenUnset(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	record := &SmRegisterRecord{
+		SmDatasetType: int(types.DatasetKindPoint),
+		SmDatasetName: "cities",
+		SmTableName:   "cities",
+	}
+	require.NoError(t, NewSmRegisterDao(db).Insert(record))
+
+	stored, err := NewSmRegisterDao(db).GetByName("cities")
+	require.NoError(t, err)
+	assert.Equal(t, sql.NullInt32{Int32: 1, Valid: true}, stored.SmIndexType)
+}
+
+func TestSmRegisterDaoWithTransactionRollsBackInsert(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	require.NoError(t, NewSmRegisterDao(tx).Insert(&SmRegisterRecord{
+		SmDatasetType: int(types.DatasetKindPoint),
+		SmDatasetName: "cities",
+		SmTableName:   "cities",
+	}))
+	require.NoError(t, tx.Rollback())
+
+	_, err = NewSmRegisterDao(db).GetByName("cities")
+	require.Error(t, err)
+	assert.True(t, udbxerrors.IsNotFound(err))
 }
 
 func TestSmRegisterDao_GetByName(t *testing.T) {

@@ -45,6 +45,21 @@ func TestInitializer_Initialize(t *testing.T) {
 	}
 }
 
+func TestInitializerWithTransactionRollsBackSchema(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	tx, err := db.Begin()
+	require.NoError(t, err)
+	require.NoError(t, NewInitializer(tx).Initialize())
+	require.NoError(t, tx.Rollback())
+
+	var count int
+	err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='SmRegister'").Scan(&count)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+}
+
 func TestInitializer_Initialize_Idempotent(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
