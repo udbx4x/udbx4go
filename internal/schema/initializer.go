@@ -2,18 +2,17 @@
 package schema
 
 import (
-	"database/sql"
-
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 )
 
 // Initializer handles creation of UDBX system tables.
 type Initializer struct {
-	db *sql.DB
+	db sqliteutil.DBTX
 }
 
 // NewInitializer creates a new schema initializer.
-func NewInitializer(db *sql.DB) *Initializer {
+func NewInitializer(db sqliteutil.DBTX) *Initializer {
 	return &Initializer{db: db}
 }
 

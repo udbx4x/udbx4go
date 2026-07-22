@@ -47,6 +47,29 @@ func TestSmRegisterDao_Insert(t *testing.T) {
 	assert.Greater(t, record.SmDatasetID, 0)
 }
 
+func TestSmRegisterDaoInsertPreservesSpatialColumnMetadata(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	record := &SmRegisterRecord{
+		SmDatasetType: 149,
+		SmDatasetName: "cad",
+		SmTableName:   "cad",
+		SmIDColName:   sql.NullString{String: "SmID", Valid: true},
+		SmGeoColName:  sql.NullString{String: "SmGeometry", Valid: true},
+		SmSRID:        sql.NullInt32{Int32: 0, Valid: true},
+		SmIndexType:   sql.NullInt32{Int32: 0, Valid: true},
+	}
+
+	require.NoError(t, NewSmRegisterDao(db).Insert(record))
+	stored, err := NewSmRegisterDao(db).GetByName("cad")
+	require.NoError(t, err)
+	assert.Equal(t, record.SmIDColName, stored.SmIDColName)
+	assert.Equal(t, record.SmGeoColName, stored.SmGeoColName)
+	assert.Equal(t, record.SmSRID, stored.SmSRID)
+	assert.Equal(t, record.SmIndexType, stored.SmIndexType)
+}
+
 func TestSmRegisterDao_GetByName(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

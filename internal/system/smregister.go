@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
@@ -13,11 +14,11 @@ import (
 // SmRegister stores dataset metadata.
 // Compatible with Java/SuperMap UDBX format.
 type SmRegisterDao struct {
-	db *sql.DB
+	db sqliteutil.DBTX
 }
 
 // NewSmRegisterDao creates a new SmRegisterDao.
-func NewSmRegisterDao(db *sql.DB) *SmRegisterDao {
+func NewSmRegisterDao(db sqliteutil.DBTX) *SmRegisterDao {
 	return &SmRegisterDao{db: db}
 }
 
@@ -167,18 +168,20 @@ func (dao *SmRegisterDao) GetByNameContext(ctx context.Context, name string) (*S
 // Insert inserts a new record into SmRegister.
 func (dao *SmRegisterDao) Insert(record *SmRegisterRecord) error {
 	query := `
-		INSERT INTO SmRegister (SmDatasetType, SmDatasetName, SmTableName,
-		                       SmParentDTID, SmObjectCount, SmLeft, SmRight,
-		                       SmTop, SmBottom, SmSRID, SmMaxGeometrySize,
-		                       SmOptimizeCount)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO SmRegister (
+			SmDatasetType, SmDatasetName, SmTableName, SmParentDTID, SmObjectCount,
+			SmLeft, SmRight, SmTop, SmBottom, SmIDColName, SmGeoColName, SmSRID,
+			SmIndexType, SmMaxGeometrySize, SmOptimizeCount
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	result, err := dao.db.Exec(query,
 		record.SmDatasetType, record.SmDatasetName, record.SmTableName,
 		record.SmParentDTID, record.SmObjectCount,
 		record.SmLeft, record.SmRight, record.SmTop, record.SmBottom,
-		record.SmSRID, record.SmMaxGeometrySize, record.SmOptimizeCount,
+		record.SmIDColName, record.SmGeoColName, record.SmSRID,
+		record.SmIndexType, record.SmMaxGeometrySize, record.SmOptimizeCount,
 	)
 	if err != nil {
 		return errors.IOError("failed to insert into SmRegister", err)

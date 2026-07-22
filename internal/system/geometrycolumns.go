@@ -4,17 +4,18 @@ import (
 	"context"
 	"database/sql"
 
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 )
 
 // GeometryColumnsDao provides access to the geometry_columns system table.
 // geometry_columns stores spatial metadata for geometry columns (OGC/SpatiaLite standard).
 type GeometryColumnsDao struct {
-	db *sql.DB
+	db sqliteutil.DBTX
 }
 
 // NewGeometryColumnsDao creates a new GeometryColumnsDao.
-func NewGeometryColumnsDao(db *sql.DB) *GeometryColumnsDao {
+func NewGeometryColumnsDao(db sqliteutil.DBTX) *GeometryColumnsDao {
 	return &GeometryColumnsDao{db: db}
 }
 
