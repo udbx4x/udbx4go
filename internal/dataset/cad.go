@@ -377,8 +377,19 @@ func (d *CadDataset) scanFeaturesContext(ctx context.Context, rows *sql.Rows) ([
 }
 
 func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*types.Feature, error) {
+	return d.buildFeatureWithMetadata(columns, values, "SmID", "SmGeometry", "SmIndexKey")
+}
+
+func (d *CadDataset) buildFeatureWithMetadata(
+	columns []string,
+	values []interface{},
+	idColumn string,
+	payloadColumn string,
+	envelopeColumn string,
+) (*types.Feature, error) {
 	feature := &types.Feature{Attributes: make(map[string]interface{})}
 	var geometryBlob []byte
+	idColumnFound := false
 	geometryColumnFound := false
 	storedGeoType := 0
 	storedGeoTypeFound := false
@@ -387,26 +398,32 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 
 	for index, column := range columns {
 		value := values[index]
-		switch column {
-		case "SmID":
-			if id, ok := value.(int64); ok {
+		switch {
+		case strings.EqualFold(column, idColumn):
+			idColumnFound = true
+			switch id := value.(type) {
+			case int64:
 				feature.ID = int(id)
+			case int:
+				feature.ID = id
+			default:
+				return nil, errors.FormatError("CAD feature ID column is not an integer")
 			}
-		case "SmGeometry":
+		case strings.EqualFold(column, payloadColumn):
 			geometryColumnFound = true
 			blob, ok := value.([]byte)
 			if !ok || len(blob) == 0 {
 				return nil, newSpatialGeometryError("CAD geometry column is not a non-empty BLOB")
 			}
 			geometryBlob = blob
-		case "SmGeoType":
+		case strings.EqualFold(column, "SmGeoType"):
 			storedGeoTypeFound = true
 			geoType, ok := value.(int64)
 			if !ok {
 				return nil, newSpatialGeometryError("CAD SmGeoType column is not an integer")
 			}
 			storedGeoType = int(geoType)
-		case "SmIndexKey":
+		case strings.EqualFold(column, envelopeColumn):
 			indexKeyColumnFound = true
 			if value == nil {
 				continue
@@ -420,13 +437,19 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 				return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode CAD SmIndexKey envelope", err)}
 			}
 			indexEnvelope = &envelope
-		case "SmUserID":
+		case strings.EqualFold(column, "SmID"),
+			strings.EqualFold(column, "SmUserID"),
+			strings.EqualFold(column, "SmGeometry"),
+			strings.EqualFold(column, "SmIndexKey"):
 			continue
 		default:
 			feature.Attributes[column] = value
 		}
 	}
 
+	if !idColumnFound {
+		return nil, errors.FormatError("CAD feature ID column is missing")
+	}
 	if !geometryColumnFound {
 		return nil, newSpatialGeometryError("CAD geometry column is missing")
 	}
@@ -458,6 +481,21 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 	feature.Geometry = geometry
 
 	return feature, nil
+}
+
+func (d *CadDataset) loadFeaturesByIDs(
+	ctx context.Context,
+	ids []int,
+	idColumn string,
+	payloadColumn string,
+	envelopeColumn string,
+) (map[int]*types.Feature, error) {
+	return loadSpatialFeaturesByIDs(ctx, d.DB(), d.TableName(), idColumn, ids, func(
+		columns []string,
+		values []interface{},
+	) (*types.Feature, error) {
+		return d.buildFeatureWithMetadata(columns, values, idColumn, payloadColumn, envelopeColumn)
+	})
 }
 
 func (d *CadDataset) encodeGeometry(geometry types.CadGeometry) ([]byte, error) {

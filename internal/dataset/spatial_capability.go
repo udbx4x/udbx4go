@@ -140,16 +140,17 @@ func (q *SpatialQuerier) detectSpatialColumns(ctx context.Context) (*detectedSpa
 	if err != nil {
 		return nil, nil, err
 	}
-	if !hasColumn(tableColumns, idColumn) ||
-		!hasColumn(tableColumns, envelopeColumn) ||
-		!hasColumn(tableColumns, payloadColumn) {
+	physicalIDColumn, idFound := physicalColumnName(tableColumns, idColumn)
+	physicalEnvelopeColumn, envelopeFound := physicalColumnName(tableColumns, envelopeColumn)
+	physicalPayloadColumn, payloadFound := physicalColumnName(tableColumns, payloadColumn)
+	if !idFound || !envelopeFound || !payloadFound {
 		return nil, nil, nil
 	}
 
 	return &detectedSpatialCapability{
-		IDColumn:       idColumn,
-		EnvelopeColumn: envelopeColumn,
-		PayloadColumn:  payloadColumn,
+		IDColumn:       physicalIDColumn,
+		EnvelopeColumn: physicalEnvelopeColumn,
+		PayloadColumn:  physicalPayloadColumn,
 	}, geometryRecord, nil
 }
 
@@ -162,8 +163,7 @@ func spatialColumnRoles(
 	if kind == types.DatasetKindText || kind == types.DatasetKindCAD {
 		if !strings.EqualFold(geometryColumn, "SmIndexKey") ||
 			geometryRecord.GeometryType != 3 ||
-			geometryRecord.CoordDimension != kind.CoordDimension() ||
-			!spatialSRIDMatches(record, geometryRecord.SRID) {
+			!validTextCADEnvelopeDimension(kind, geometryRecord.CoordDimension) {
 			return "", "", false
 		}
 		registeredColumn := registeredGeometryColumn(record)
@@ -183,8 +183,11 @@ func spatialColumnRoles(
 	return geometryColumn, geometryColumn, true
 }
 
-func spatialSRIDMatches(record *system.SmRegisterRecord, srid int) bool {
-	return record == nil || !record.SmSRID.Valid || int(record.SmSRID.Int32) == srid
+func validTextCADEnvelopeDimension(kind types.DatasetKind, dimension int) bool {
+	if kind == types.DatasetKindCAD {
+		return dimension == 2 || dimension == 3
+	}
+	return dimension == 2
 }
 
 func supportsSpatialQuery(kind types.DatasetKind) bool {
@@ -253,12 +256,17 @@ func sqliteTableInfo(ctx context.Context, db *sql.DB, tableName string) ([]sqlit
 }
 
 func hasColumn(columns []sqliteColumnInfo, name string) bool {
+	_, found := physicalColumnName(columns, name)
+	return found
+}
+
+func physicalColumnName(columns []sqliteColumnInfo, name string) (string, bool) {
 	for _, column := range columns {
 		if strings.EqualFold(column.name, name) {
-			return true
+			return column.name, true
 		}
 	}
-	return false
+	return "", false
 }
 
 func validRTreeColumns(columns []sqliteColumnInfo) bool {

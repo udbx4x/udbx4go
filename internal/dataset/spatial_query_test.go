@@ -297,13 +297,8 @@ func TestEnvelopeCacheSQLiteBuildStopsBeforeUnderreportedObjectCountExceedsBudge
 	removeSpatialRTree(t, db, querier)
 	setSpatialObjectCount(querier, 1)
 	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 4), testEnvelopeCacheRSSCharge(t, 4))
-	idColumn, envelopeColumn, payloadColumn, err := querier.detectEnvelopeColumns(context.Background())
+	detected, err := querier.detectCapability(context.Background())
 	require.NoError(t, err)
-	detected := &detectedSpatialCapability{
-		IDColumn:       idColumn,
-		EnvelopeColumn: envelopeColumn,
-		PayloadColumn:  payloadColumn,
-	}
 
 	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(
 		ctx context.Context,

@@ -331,13 +331,7 @@ func TestDetectSpatialCapabilityRejectsInvalidTextAndCADMetadata(t *testing.T) {
 		{
 			name: "wrong coordinate dimension",
 			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
-				updateSpatialGeometryMetadata(t, db, info.TableName, "coord_dimension", 3)
-			},
-		},
-		{
-			name: "wrong srid",
-			setup: func(t *testing.T, db *sql.DB, info *types.DatasetInfo, record *system.SmRegisterRecord) {
-				updateSpatialGeometryMetadata(t, db, info.TableName, "srid", 3857)
+				updateSpatialGeometryMetadata(t, db, info.TableName, "coord_dimension", 4)
 			},
 		},
 		{
@@ -376,6 +370,95 @@ func TestDetectSpatialCapabilityRejectsInvalidTextAndCADMetadata(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestDetectSpatialCapabilityRejectsText3DEnvelope(t *testing.T) {
+	db, info, record := createTextCADSpatialCapabilityFixture(t, types.DatasetKindText, "features")
+	defer db.Close()
+	updateSpatialGeometryMetadata(t, db, info.TableName, "coord_dimension", 3)
+
+	detected, err := NewSpatialQuerier(db, info, record).detectCapability(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, &types.SpatialQueryCapability{
+		Supported:        true,
+		DiagnosticReason: types.SpatialQueryReasonSpatialIndexUnavailable,
+	}, detected.Capability)
+}
+
+func TestDetectSpatialCapabilityAcceptsCAD2DOr3DEnvelopeAndIndependentSRID(t *testing.T) {
+	for _, dimension := range []int{2, 3} {
+		t.Run(fmt.Sprintf("dimension-%d", dimension), func(t *testing.T) {
+			db, info, record := createTextCADSpatialCapabilityFixture(t, types.DatasetKindCAD, "features")
+			defer db.Close()
+			updateSpatialGeometryMetadata(t, db, info.TableName, "coord_dimension", dimension)
+			updateSpatialGeometryMetadata(t, db, info.TableName, "srid", 3857)
+
+			detected, err := NewSpatialQuerier(db, info, record).detectCapability(context.Background())
+			require.NoError(t, err)
+			assert.True(t, detected.Capability.Supported)
+			assert.True(t, detected.Capability.FallbackAvailable)
+			assert.Equal(t, "SmIndexKey", detected.EnvelopeColumn)
+		})
+	}
+}
+
+func TestDetectSpatialCapabilityAcceptsTextEnvelopeWithIndependentSRID(t *testing.T) {
+	db, info, record := createTextCADSpatialCapabilityFixture(t, types.DatasetKindText, "features")
+	defer db.Close()
+	updateSpatialGeometryMetadata(t, db, info.TableName, "srid", 3857)
+
+	detected, err := NewSpatialQuerier(db, info, record).detectCapability(context.Background())
+	require.NoError(t, err)
+	assert.True(t, detected.Capability.Supported)
+	assert.True(t, detected.Capability.FallbackAvailable)
+}
+
+func TestDetectSpatialCapabilityPreservesPhysicalColumnAndRTreeNames(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	tableName := `县级"TextLayer`
+	idColumn := `sMiD"编号`
+	payloadColumn := "sMgEoMeTrY"
+	envelopeColumn := "sMiNdExKeY"
+	quotedTable, err := sqliteutil.QuoteIdentifier(tableName)
+	require.NoError(t, err)
+	quotedID, err := sqliteutil.QuoteIdentifier(idColumn)
+	require.NoError(t, err)
+	quotedPayload, err := sqliteutil.QuoteIdentifier(payloadColumn)
+	require.NoError(t, err)
+	quotedEnvelope, err := sqliteutil.QuoteIdentifier(envelopeColumn)
+	require.NoError(t, err)
+	_, err = db.Exec(fmt.Sprintf(
+		"CREATE TABLE %s (%s INTEGER PRIMARY KEY, %s BLOB, %s POLYGON)",
+		quotedTable, quotedID, quotedPayload, quotedEnvelope,
+	))
+	require.NoError(t, err)
+
+	record := &system.SmRegisterRecord{
+		SmDatasetID:   1,
+		SmDatasetName: "fixture",
+		SmTableName:   tableName,
+		SmDatasetType: int(types.DatasetKindText),
+		SmIDColName:   sql.NullString{String: `smid"编号`, Valid: true},
+		SmGeoColName:  sql.NullString{String: "smgeometry", Valid: true},
+		SmSRID:        sql.NullInt32{Int32: 4326, Valid: true},
+	}
+	require.NoError(t, system.NewGeometryColumnsDao(db).Insert(&system.GeometryColumnsRecord{
+		FTableName:          `县级"textlayer`,
+		FGeometryColumn:     "smindexkey",
+		GeometryType:        3,
+		CoordDimension:      2,
+		SRID:                4326,
+		SpatialIndexEnabled: 1,
+	}))
+	createSpatialRTree(t, db, tableName, envelopeColumn, "pkid, xmin, xmax, ymin, ymax")
+
+	detected, err := NewSpatialQuerier(db, record.ToDatasetInfo(), record).detectCapability(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, idColumn, detected.IDColumn)
+	assert.Equal(t, envelopeColumn, detected.EnvelopeColumn)
+	assert.Equal(t, payloadColumn, detected.PayloadColumn)
+	assert.Equal(t, spatialRTreeName(tableName, envelopeColumn), detected.RTreeName)
 }
 
 func TestDetectSpatialCapabilityReportsTextAndCADFallbackWithoutRTree(t *testing.T) {
@@ -443,7 +526,7 @@ func TestSpatialCapabilityAcceptsRealSampleDataTextAndCADMetadataCasing(t *testi
 		assert.True(t, detected.Capability.Supported)
 		assert.False(t, detected.Capability.RTreeAvailable)
 		assert.True(t, detected.Capability.FallbackAvailable)
-		assert.Equal(t, "smindexkey", detected.EnvelopeColumn)
+		assert.Equal(t, "SmIndexKey", detected.EnvelopeColumn)
 		assert.Equal(t, "SmGeometry", detected.PayloadColumn)
 	}
 	assert.True(t, found[types.DatasetKindText], "SampleData must include Text metadata")
@@ -577,18 +660,24 @@ func replaceTextCADSpatialTable(t *testing.T, db *sql.DB, tableName, columns str
 
 func sampleDataSpatialCapabilityPath(t *testing.T) string {
 	t.Helper()
-	for _, path := range []string{
-		filepath.Join("..", "..", "..", "data", "SampleData.udbx"),
-		filepath.Join("..", "..", "..", "..", "..", "data", "SampleData.udbx"),
-	} {
-		if _, err := os.Stat(path); err == nil {
-			return path
-		} else if !os.IsNotExist(err) {
-			require.NoError(t, err)
+	path := os.Getenv("UDBX_SAMPLE_DATA_PATH")
+	required := os.Getenv("UDBX_REAL_SAMPLES") == "1"
+	if path == "" {
+		if required {
+			t.Fatal("UDBX_SAMPLE_DATA_PATH is required when UDBX_REAL_SAMPLES=1")
 		}
+		t.Skip("set UDBX_SAMPLE_DATA_PATH to run SampleData spatial tests")
 	}
-	t.Skip("external SampleData.udbx fixture is unavailable")
-	return ""
+	if !filepath.IsAbs(path) {
+		t.Fatalf("UDBX_SAMPLE_DATA_PATH must be absolute: %s", path)
+	}
+	if _, err := os.Stat(path); err != nil {
+		if required {
+			require.NoError(t, err, "SampleData fixture is required when UDBX_REAL_SAMPLES=1")
+		}
+		t.Skipf("SampleData fixture is unavailable: %s", path)
+	}
+	return path
 }
 
 func createSpatialRTree(t *testing.T, db *sql.DB, tableName, geometryColumn, columns string) {
