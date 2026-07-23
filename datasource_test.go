@@ -12,6 +12,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	internaldataset "github.com/udbx4x/udbx4go/internal/dataset"
 	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
@@ -210,6 +211,61 @@ func TestDataSourceCreateCadDatasetQuotesMaliciousFieldName(t *testing.T) {
 	columns, err := sqliteTableColumns(ds.db, cad.Info().TableName)
 	require.NoError(t, err)
 	assert.Contains(t, columns, fieldName)
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM SmRegister", 1)
+}
+
+func TestDataSourceCreateCadDatasetCRUDQuotesIdentifiers(t *testing.T) {
+	ds, err := Create(filepath.Join(t.TempDir(), "cad-identifier-crud.udbx"))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	cad, err := ds.CreateCadDataset(`select"中文; DROP TABLE SmRegister;--`, []*types.FieldInfo{
+		{Name: "from", FieldType: types.FieldTypeText, Nullable: true},
+		{Name: `quoted"field`, FieldType: types.FieldTypeInt32, Nullable: true},
+		{Name: "中文字段", FieldType: types.FieldTypeText, Nullable: true},
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, cad.Insert(&types.Feature{
+		ID:       1,
+		Geometry: &types.CadPointGeometry{XCoord: -2, YCoord: 3},
+		Attributes: map[string]interface{}{
+			"from":         "inserted",
+			`quoted"field`: 7,
+			"中文字段":         "初始值",
+		},
+	}))
+
+	feature, err := cad.GetByID(1)
+	require.NoError(t, err)
+	assert.Equal(t, "inserted", feature.Attributes["from"])
+	assert.EqualValues(t, 7, feature.Attributes[`quoted"field`])
+	assert.Equal(t, "初始值", feature.Attributes["中文字段"])
+
+	require.NoError(t, cad.Update(1, &internaldataset.FeatureChanges{
+		Geometry: &types.CadLineGeometry{
+			NumSub:         1,
+			SubPointCounts: []int{2},
+			Coordinates:    [][2]float64{{-4, -5}, {6, 7}},
+		},
+		Attributes: map[string]interface{}{
+			"from":         "updated",
+			`quoted"field`: 8,
+			"中文字段":         "更新值",
+		},
+	}))
+
+	features, err := cad.List(nil)
+	require.NoError(t, err)
+	require.Len(t, features, 1)
+	assert.Equal(t, "updated", features[0].Attributes["from"])
+	assert.EqualValues(t, 8, features[0].Attributes[`quoted"field`])
+	assert.Equal(t, "更新值", features[0].Attributes["中文字段"])
+
+	require.NoError(t, cad.Delete(1))
+	count, err := cad.Count()
+	require.NoError(t, err)
+	assert.Zero(t, count)
 	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM SmRegister", 1)
 }
 

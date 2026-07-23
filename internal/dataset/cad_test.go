@@ -12,8 +12,18 @@ import (
 	"github.com/udbx4x/udbx4go/internal/codec"
 	"github.com/udbx4x/udbx4go/internal/schema"
 	"github.com/udbx4x/udbx4go/internal/system"
+	udbxerrors "github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
+
+type unsupportedCadGeometry struct{}
+
+func (*unsupportedCadGeometry) GeometryType() string     { return "UnsupportedCad" }
+func (*unsupportedCadGeometry) GetSRID() int             { return 0 }
+func (*unsupportedCadGeometry) HasZ() bool               { return false }
+func (*unsupportedCadGeometry) GetBBox() []float64       { panic("must not call unsupported geometry") }
+func (*unsupportedCadGeometry) CadGeoType() int          { panic("must not call unsupported geometry") }
+func (*unsupportedCadGeometry) CadStyle() types.CadStyle { panic("must not call unsupported geometry") }
 
 func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegisterRecord) {
 	return createCadDatasetWithSRID(t, db, 0)
@@ -188,7 +198,31 @@ func TestCadDatasetRejectsStoredGeoTypeMismatch(t *testing.T) {
 	require.Error(t, err)
 	var geometryErr *spatialGeometryError
 	assert.True(t, stderrors.As(err, &geometryErr))
+	assert.True(t, udbxerrors.IsFormatError(err))
 	assert.ErrorContains(t, err, "stored CAD SmGeoType 5 does not match decoded geometry type 1")
+}
+
+func TestCadDatasetRejectsDynamicStoredGeoType(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         1,
+		Geometry:   &types.CadPointGeometry{XCoord: 3, YCoord: 4},
+		Attributes: map[string]interface{}{"name": "point"},
+	}))
+
+	for _, value := range []interface{}{1.5, "point"} {
+		_, err := db.Exec("UPDATE cad_layers SET SmGeoType = ? WHERE SmID = 1", value)
+		require.NoError(t, err)
+		_, err = dataset.GetByID(1)
+		require.Error(t, err)
+		var geometryErr *spatialGeometryError
+		assert.True(t, stderrors.As(err, &geometryErr))
+		assert.True(t, udbxerrors.IsFormatError(err))
+		assert.ErrorContains(t, err, "CAD SmGeoType column is not an integer")
+	}
 }
 
 func TestCadDatasetGeometryEncodingFailureDoesNotWritePartialData(t *testing.T) {
@@ -274,6 +308,324 @@ func assertCadStorage(
 	envelope, err := codec.ReadGaiaEnvelope(index)
 	require.NoError(t, err)
 	assert.Equal(t, wantBBox, envelope)
+}
+
+func TestCadDatasetTextPreservesIndexEnvelopeAndPayload(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDatasetWithSRID(t, db, 4326)
+	text := &types.CadTextGeometry{
+		Text:     "firstsecond",
+		Anchor:   []float64{10, 20},
+		Rotation: 12.3,
+		BBox:     []float64{-5, -6, 30, 40},
+		TextStyle: &types.TextStyle{
+			Color:           &types.Color{A: 255, B: 3, G: 2, R: 1},
+			BackgroundColor: &types.Color{A: 255, B: 6, G: 5, R: 4},
+			FixedSize:       11,
+			Weight:          80,
+			StyleFlag:       2,
+			AlignFlag:       1,
+			FontWidth:       2.5,
+			FontHeight:      3.5,
+			Anchor:          []float64{10, 20},
+			FaceName:        "Test Font",
+		},
+		SubTexts: []*types.TextSubText{
+			{Text: "first", Anchor: []float64{10, 20}, Rotation: 12.3},
+			{Text: "second", Anchor: []float64{11, 21}, Rotation: 4.5},
+		},
+	}
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         1,
+		Geometry:   text,
+		Attributes: map[string]interface{}{"name": "label"},
+	}))
+
+	feature, err := dataset.GetByID(1)
+	require.NoError(t, err)
+	decoded, ok := feature.Geometry.(*types.CadTextGeometry)
+	require.True(t, ok)
+	assert.Equal(t, text.Text, decoded.Text)
+	assert.Equal(t, text.Anchor, decoded.Anchor)
+	assert.Equal(t, text.Rotation, decoded.Rotation)
+	assert.Equal(t, text.BBox, decoded.BBox)
+	assert.Equal(t, text.TextStyle, decoded.TextStyle)
+	assert.Equal(t, text.SubTexts, decoded.SubTexts)
+
+	features, err := dataset.List(nil)
+	require.NoError(t, err)
+	require.Len(t, features, 1)
+	listed := features[0].Geometry.(*types.CadTextGeometry)
+	assert.Equal(t, text.BBox, listed.BBox)
+
+	require.NoError(t, dataset.Update(1, &FeatureChanges{Geometry: listed}))
+	assertCadStorage(t, db, dataset.TableName(), 1, 7, 4326, types.BoundingBox{
+		MinX: -5, MinY: -6, MaxX: 30, MaxY: 40,
+	})
+}
+
+func TestCadDatasetValidatesStoredIndexKey(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         1,
+		Geometry:   &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+		Attributes: map[string]interface{}{"name": "point"},
+	}))
+
+	validHeader := codec.WriteGaiaHeader(0, [4]float64{1, 2, 1, 2}, 3)
+	malformedMarker := append([]byte(nil), validHeader...)
+	malformedMarker[38] = 0
+	for _, indexKey := range [][]byte{
+		validHeader[:codec.GaiaHeaderLength-1],
+		malformedMarker,
+	} {
+		_, err := db.Exec("UPDATE cad_layers SET SmIndexKey = ? WHERE SmID = 1", indexKey)
+		require.NoError(t, err)
+
+		_, err = dataset.GetByID(1)
+		require.Error(t, err)
+		var geometryErr *spatialGeometryError
+		assert.True(t, stderrors.As(err, &geometryErr))
+		assert.True(t, udbxerrors.IsFormatError(err))
+		assert.ErrorContains(t, err, "failed to decode CAD SmIndexKey envelope")
+	}
+
+	_, err := db.Exec("UPDATE cad_layers SET SmIndexKey = ? WHERE SmID = 1", validHeader)
+	require.NoError(t, err)
+	_, err = dataset.GetByID(1)
+	require.NoError(t, err)
+
+	_, err = db.Exec("UPDATE cad_layers SET SmIndexKey = NULL WHERE SmID = 1")
+	require.NoError(t, err)
+	features, err := dataset.List(nil)
+	require.NoError(t, err)
+	require.Len(t, features, 1)
+	assert.IsType(t, &types.CadPointGeometry{}, features[0].Geometry)
+}
+
+func TestCadDatasetRequiresStrictMetadataColumns(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	geometryBlob, err := dataset.cadCodec.Encode(&types.CadPointGeometry{XCoord: 1, YCoord: 2})
+	require.NoError(t, err)
+	indexKey, err := codec.EncodeEnvelopeIndexKey([]float64{1, 2, 1, 2}, 0)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		columns    []string
+		values     []interface{}
+		wantDetail string
+	}{
+		{
+			name:       "missing SmGeoType",
+			columns:    []string{"SmID", "SmGeometry", "SmIndexKey"},
+			values:     []interface{}{int64(1), geometryBlob, indexKey},
+			wantDetail: "CAD SmGeoType column is missing",
+		},
+		{
+			name:       "missing SmIndexKey",
+			columns:    []string{"SmID", "SmGeoType", "SmGeometry"},
+			values:     []interface{}{int64(1), int64(1), geometryBlob},
+			wantDetail: "CAD SmIndexKey column is missing",
+		},
+		{
+			name:       "non-integer SmGeoType",
+			columns:    []string{"SmID", "SmGeoType", "SmGeometry", "SmIndexKey"},
+			values:     []interface{}{int64(1), "1", geometryBlob, indexKey},
+			wantDetail: "CAD SmGeoType column is not an integer",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := dataset.buildFeature(tt.columns, tt.values)
+			require.Error(t, err)
+			var geometryErr *spatialGeometryError
+			assert.True(t, stderrors.As(err, &geometryErr))
+			assert.True(t, udbxerrors.IsFormatError(err))
+			assert.ErrorContains(t, err, tt.wantDetail)
+		})
+	}
+}
+
+func TestCadDatasetRejectsTextOuterCadStyleWithoutWriting(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	err := dataset.Insert(&types.Feature{
+		ID: 1,
+		Geometry: &types.CadTextGeometry{
+			Text:         "styled",
+			Anchor:       []float64{1, 2},
+			BBox:         []float64{0, 1, 2, 3},
+			CadStyleData: &types.CadLineStyle{LineStyle: 1},
+		},
+		Attributes: map[string]interface{}{"name": "styled"},
+	})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "CAD Text outer style is unsupported")
+	assert.True(t, udbxerrors.IsUnsupported(err))
+
+	count, err := dataset.Count()
+	require.NoError(t, err)
+	assert.Zero(t, count)
+
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         2,
+		Geometry:   &types.CadPointGeometry{XCoord: 3, YCoord: 4},
+		Attributes: map[string]interface{}{"name": "seed"},
+	}))
+	err = dataset.Update(2, &FeatureChanges{Geometry: &types.CadTextGeometry{
+		Text:         "styled update",
+		Anchor:       []float64{1, 2},
+		BBox:         []float64{0, 1, 2, 3},
+		CadStyleData: &types.CadLineStyle{LineStyle: 1},
+	}})
+	require.Error(t, err)
+	assert.True(t, udbxerrors.IsUnsupported(err))
+
+	feature, err := dataset.GetByID(2)
+	require.NoError(t, err)
+	assert.IsType(t, &types.CadPointGeometry{}, feature.Geometry)
+}
+
+func TestCadDatasetRejectsTypedNilGeometry(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         100,
+		Geometry:   &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+		Attributes: map[string]interface{}{"name": "seed"},
+	}))
+
+	tests := []struct {
+		name     string
+		geometry types.CadGeometry
+	}{
+		{name: "point", geometry: (*types.CadPointGeometry)(nil)},
+		{name: "line", geometry: (*types.CadLineGeometry)(nil)},
+		{name: "region", geometry: (*types.CadRegionGeometry)(nil)},
+		{name: "text", geometry: (*types.CadTextGeometry)(nil)},
+	}
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := dataset.Insert(&types.Feature{
+				ID:         index + 1,
+				Geometry:   tt.geometry,
+				Attributes: map[string]interface{}{"name": tt.name},
+			})
+			require.Error(t, err)
+			assert.True(t, udbxerrors.IsConstraintViolation(err))
+			assert.ErrorContains(t, err, "CAD geometry is required")
+
+			err = dataset.Update(100, &FeatureChanges{Geometry: tt.geometry})
+			require.Error(t, err)
+			assert.True(t, udbxerrors.IsConstraintViolation(err))
+			assert.ErrorContains(t, err, "CAD geometry is required")
+		})
+	}
+
+	count, err := dataset.Count()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
+func TestCadDatasetRejectsUnknownCadGeometry(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         100,
+		Geometry:   &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+		Attributes: map[string]interface{}{"name": "seed"},
+	}))
+	for _, geometry := range []types.CadGeometry{
+		&unsupportedCadGeometry{},
+		(*unsupportedCadGeometry)(nil),
+	} {
+		err := dataset.Insert(&types.Feature{ID: 1, Geometry: geometry})
+		require.Error(t, err)
+		assert.True(t, udbxerrors.IsUnsupported(err))
+		assert.ErrorContains(t, err, "unsupported CAD geometry")
+
+		err = dataset.Update(100, &FeatureChanges{Geometry: geometry})
+		require.Error(t, err)
+		assert.True(t, udbxerrors.IsUnsupported(err))
+		assert.ErrorContains(t, err, "unsupported CAD geometry")
+	}
+}
+
+func TestCadDatasetMaliciousFieldMetadataCannotChangeSQLStructure(t *testing.T) {
+	tests := []struct {
+		name          string
+		fieldName     string
+		wantQuoteFail bool
+	}{
+		{name: "NUL", fieldName: "name\x00); DROP TABLE cad_layers;--", wantQuoteFail: true},
+		{name: "SQL punctuation", fieldName: `name"); DROP TABLE cad_layers;--`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupTestDB(t)
+			defer db.Close()
+
+			dataset, record := createCadDataset(t, db)
+			require.NoError(t, dataset.Insert(&types.Feature{
+				ID:         100,
+				Geometry:   &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+				Attributes: map[string]interface{}{"name": "seed"},
+			}))
+			require.NoError(t, system.NewSmFieldInfoDao(db).Insert(&system.SmFieldInfoRecord{
+				SmDatasetID: record.SmDatasetID,
+				SmFieldName: tt.fieldName,
+				SmFieldType: int(types.FieldTypeText),
+			}))
+
+			err := dataset.Insert(&types.Feature{
+				ID:         1,
+				Geometry:   &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+				Attributes: map[string]interface{}{"name": "safe", tt.fieldName: "malicious"},
+			})
+			require.Error(t, err)
+			if tt.wantQuoteFail {
+				assert.True(t, udbxerrors.IsFormatError(err))
+				assert.ErrorContains(t, err, "invalid CAD field name")
+			} else {
+				assert.True(t, udbxerrors.IsIOError(err))
+			}
+
+			err = dataset.Update(100, &FeatureChanges{Attributes: map[string]interface{}{tt.fieldName: "malicious"}})
+			require.Error(t, err)
+			if tt.wantQuoteFail {
+				assert.True(t, udbxerrors.IsFormatError(err))
+			} else {
+				assert.True(t, udbxerrors.IsIOError(err))
+			}
+
+			var tableCount, rowCount int
+			require.NoError(t, db.QueryRow(
+				"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'cad_layers'",
+			).Scan(&tableCount))
+			require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM cad_layers").Scan(&rowCount))
+			assert.Equal(t, 1, tableCount)
+			assert.Equal(t, 1, rowCount)
+
+			feature, err := dataset.GetByID(100)
+			require.NoError(t, err)
+			assert.Equal(t, "seed", feature.Attributes["name"])
+		})
+	}
 }
 
 func TestCadDataset_CRUD(t *testing.T) {

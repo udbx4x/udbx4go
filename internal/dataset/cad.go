@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/udbx4x/udbx4go/internal/codec"
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
@@ -29,9 +30,31 @@ func NewCadDataset(db *sql.DB, info *types.DatasetInfo) *CadDataset {
 
 // GetByID returns a CAD feature by ID.
 func (d *CadDataset) GetByID(id int) (*types.Feature, error) {
-	query := fmt.Sprintf("SELECT * FROM %s WHERE SmID = ?", d.TableName())
+	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
+	if err != nil {
+		return nil, err
+	}
+	quotedID, err := quoteCadIdentifier("SmID", "CAD SmID column")
+	if err != nil {
+		return nil, err
+	}
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s = ?", quotedTable, quotedID)
 	row := d.DB().QueryRow(query, id)
 	return d.scanFeature(row, id)
+}
+
+// Count returns the number of CAD features.
+func (d *CadDataset) Count() (int, error) {
+	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
+	if err != nil {
+		return 0, err
+	}
+
+	var count int
+	if err := d.DB().QueryRow("SELECT COUNT(*) FROM " + quotedTable).Scan(&count); err != nil {
+		return 0, errors.IOError("failed to count CAD dataset rows", err)
+	}
+	return count, nil
 }
 
 // List returns CAD features.
@@ -44,7 +67,10 @@ func (d *CadDataset) ListContext(ctx context.Context, opts *types.QueryOptions) 
 	if err := ctx.Err(); err != nil {
 		return nil, mapSpatialListError(ctx, err)
 	}
-	query, args := d.buildQuery(opts)
+	query, args, err := d.buildQuery(opts)
+	if err != nil {
+		return nil, mapSpatialListError(ctx, err)
+	}
 	rows, err := d.DB().QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, mapSpatialListError(ctx, errors.IOError("failed to query CAD features", err))
@@ -79,18 +105,34 @@ func (d *CadDataset) Insert(feature *types.Feature) error {
 		return err
 	}
 
-	columns := []string{"SmID", "SmUserID", "SmGeoType", "SmGeometry", "SmIndexKey"}
+	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
+	if err != nil {
+		return err
+	}
+	columnNames := []string{"SmID", "SmUserID", "SmGeoType", "SmGeometry", "SmIndexKey"}
+	columns := make([]string, 0, len(columnNames)+len(fields))
+	for _, name := range columnNames {
+		quoted, err := quoteCadIdentifier(name, "CAD system column "+name)
+		if err != nil {
+			return err
+		}
+		columns = append(columns, quoted)
+	}
 	placeholders := []string{"?", "?", "?", "?", "?"}
 	values := []interface{}{feature.ID, 0, cadGeometry.CadGeoType(), geometryBlob, indexKey}
 
 	for _, field := range fields {
-		columns = append(columns, field.Name)
+		quoted, err := quoteCadIdentifier(field.Name, fmt.Sprintf("CAD field name %q", field.Name))
+		if err != nil {
+			return err
+		}
+		columns = append(columns, quoted)
 		placeholders = append(placeholders, "?")
 		values = append(values, feature.Attributes[field.Name])
 	}
 
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		d.TableName(),
+		quotedTable,
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
 
@@ -119,9 +161,13 @@ func (d *CadDataset) Update(id int, changes *FeatureChanges) error {
 		return err
 	}
 
-	validFields := make(map[string]bool)
+	validFields := make(map[string]string)
 	for _, field := range fields {
-		validFields[field.Name] = true
+		quoted, err := quoteCadIdentifier(field.Name, fmt.Sprintf("CAD field name %q", field.Name))
+		if err != nil {
+			return err
+		}
+		validFields[field.Name] = quoted
 	}
 
 	var setClauses []string
@@ -140,15 +186,28 @@ func (d *CadDataset) Update(id int, changes *FeatureChanges) error {
 		if err != nil {
 			return err
 		}
-		setClauses = append(setClauses, "SmGeoType = ?", "SmGeometry = ?", "SmIndexKey = ?")
+		quotedGeoType, err := quoteCadIdentifier("SmGeoType", "CAD SmGeoType column")
+		if err != nil {
+			return err
+		}
+		quotedGeometry, err := quoteCadIdentifier("SmGeometry", "CAD SmGeometry column")
+		if err != nil {
+			return err
+		}
+		quotedIndexKey, err := quoteCadIdentifier("SmIndexKey", "CAD SmIndexKey column")
+		if err != nil {
+			return err
+		}
+		setClauses = append(setClauses, quotedGeoType+" = ?", quotedGeometry+" = ?", quotedIndexKey+" = ?")
 		values = append(values, cadGeometry.CadGeoType(), geometryBlob, indexKey)
 	}
 
 	for name, value := range changes.Attributes {
-		if !validFields[name] {
+		quoted, ok := validFields[name]
+		if !ok {
 			return errors.FieldNotFound(name)
 		}
-		setClauses = append(setClauses, fmt.Sprintf("%s = ?", name))
+		setClauses = append(setClauses, quoted+" = ?")
 		values = append(values, value)
 	}
 
@@ -156,10 +215,19 @@ func (d *CadDataset) Update(id int, changes *FeatureChanges) error {
 		return nil
 	}
 
+	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
+	if err != nil {
+		return err
+	}
+	quotedID, err := quoteCadIdentifier("SmID", "CAD SmID column")
+	if err != nil {
+		return err
+	}
 	values = append(values, id)
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE SmID = ?",
-		d.TableName(),
-		strings.Join(setClauses, ", "))
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s = ?",
+		quotedTable,
+		strings.Join(setClauses, ", "),
+		quotedID)
 
 	result, err := d.DB().Exec(query, values...)
 	if err != nil {
@@ -176,7 +244,15 @@ func (d *CadDataset) Update(id int, changes *FeatureChanges) error {
 
 // Delete deletes a CAD feature by ID.
 func (d *CadDataset) Delete(id int) error {
-	query := fmt.Sprintf("DELETE FROM %s WHERE SmID = ?", d.TableName())
+	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
+	if err != nil {
+		return err
+	}
+	quotedID, err := quoteCadIdentifier("SmID", "CAD SmID column")
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", quotedTable, quotedID)
 	result, err := d.DB().Exec(query, id)
 	if err != nil {
 		return errors.IOError("failed to delete CAD feature", err)
@@ -191,7 +267,11 @@ func (d *CadDataset) Delete(id int) error {
 }
 
 func (d *CadDataset) scanFeature(row *sql.Row, id int) (*types.Feature, error) {
-	rows, err := d.DB().Query(fmt.Sprintf("SELECT * FROM %s LIMIT 0", d.TableName()))
+	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
+	if err != nil {
+		return nil, err
+	}
+	rows, err := d.DB().Query(fmt.Sprintf("SELECT * FROM %s LIMIT 0", quotedTable))
 	if err != nil {
 		return nil, errors.IOError("failed to get CAD column names", err)
 	}
@@ -264,6 +344,8 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 	geometryColumnFound := false
 	storedGeoType := 0
 	storedGeoTypeFound := false
+	indexKeyColumnFound := false
+	var indexEnvelope *types.BoundingBox
 
 	for index, column := range columns {
 		value := values[index]
@@ -286,7 +368,21 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 				return nil, newSpatialGeometryError("CAD SmGeoType column is not an integer")
 			}
 			storedGeoType = int(geoType)
-		case "SmUserID", "SmIndexKey":
+		case "SmIndexKey":
+			indexKeyColumnFound = true
+			if value == nil {
+				continue
+			}
+			indexKey, ok := value.([]byte)
+			if !ok || len(indexKey) == 0 {
+				return nil, newSpatialGeometryError("CAD SmIndexKey column is not a non-empty BLOB or NULL")
+			}
+			envelope, err := codec.ReadGaiaEnvelope(indexKey)
+			if err != nil {
+				return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode CAD SmIndexKey envelope", err)}
+			}
+			indexEnvelope = &envelope
+		case "SmUserID":
 			continue
 		default:
 			feature.Attributes[column] = value
@@ -295,6 +391,12 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 
 	if !geometryColumnFound {
 		return nil, newSpatialGeometryError("CAD geometry column is missing")
+	}
+	if !storedGeoTypeFound {
+		return nil, newSpatialGeometryError("CAD SmGeoType column is missing")
+	}
+	if !indexKeyColumnFound {
+		return nil, newSpatialGeometryError("CAD SmIndexKey column is missing")
 	}
 	geometry, err := d.cadCodec.Decode(geometryBlob)
 	if err != nil {
@@ -307,26 +409,55 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 			geometry.CadGeoType(),
 		))
 	}
+	if text, ok := geometry.(*types.CadTextGeometry); ok && indexEnvelope != nil {
+		text.BBox = []float64{
+			indexEnvelope.MinX,
+			indexEnvelope.MinY,
+			indexEnvelope.MaxX,
+			indexEnvelope.MaxY,
+		}
+	}
 	feature.Geometry = geometry
 
 	return feature, nil
 }
 
 func (d *CadDataset) encodeGeometry(geometry types.CadGeometry) ([]byte, error) {
-	if text, ok := geometry.(*types.CadTextGeometry); ok {
-		if text == nil || len(text.Anchor) < 2 {
+	switch typed := geometry.(type) {
+	case *types.CadPointGeometry:
+		if typed == nil {
+			return nil, errors.ConstraintError("CAD geometry is required")
+		}
+	case *types.CadLineGeometry:
+		if typed == nil {
+			return nil, errors.ConstraintError("CAD geometry is required")
+		}
+	case *types.CadRegionGeometry:
+		if typed == nil {
+			return nil, errors.ConstraintError("CAD geometry is required")
+		}
+	case *types.CadTextGeometry:
+		if typed == nil {
+			return nil, errors.ConstraintError("CAD geometry is required")
+		}
+		if typed.CadStyleData != nil {
+			return nil, errors.UnsupportedError("CAD Text outer style is unsupported")
+		}
+		if len(typed.Anchor) < 2 {
 			return nil, errors.ConstraintError("CAD Text geometry anchor must contain x and y")
 		}
 		return d.textCodec.Encode(&types.TextGeometry{
 			Type:     "Text",
-			Text:     text.Text,
-			Anchor:   text.Anchor,
-			Rotation: text.Rotation,
-			BBox:     text.BBox,
-			GeoType:  text.CadGeoType(),
-			Style:    text.TextStyle,
-			SubTexts: text.SubTexts,
+			Text:     typed.Text,
+			Anchor:   typed.Anchor,
+			Rotation: typed.Rotation,
+			BBox:     typed.BBox,
+			GeoType:  typed.CadGeoType(),
+			Style:    typed.TextStyle,
+			SubTexts: typed.SubTexts,
 		})
+	default:
+		return nil, errors.UnsupportedError("unsupported CAD geometry")
 	}
 	return d.cadCodec.Encode(geometry)
 }
@@ -338,12 +469,20 @@ func (d *CadDataset) srid() int {
 	return *d.Info().SRID
 }
 
-func (d *CadDataset) buildQuery(opts *types.QueryOptions) (string, []interface{}) {
+func (d *CadDataset) buildQuery(opts *types.QueryOptions) (string, []interface{}, error) {
 	if opts == nil {
 		opts = &types.QueryOptions{}
 	}
 
-	query := fmt.Sprintf("SELECT * FROM %s", d.TableName())
+	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
+	if err != nil {
+		return "", nil, err
+	}
+	quotedID, err := quoteCadIdentifier("SmID", "CAD SmID column")
+	if err != nil {
+		return "", nil, err
+	}
+	query := fmt.Sprintf("SELECT * FROM %s", quotedTable)
 	var args []interface{}
 
 	if len(opts.IDs) > 0 {
@@ -352,10 +491,10 @@ func (d *CadDataset) buildQuery(opts *types.QueryOptions) (string, []interface{}
 			placeholders[index] = "?"
 			args = append(args, id)
 		}
-		query += fmt.Sprintf(" WHERE SmID IN (%s)", strings.Join(placeholders, ", "))
+		query += fmt.Sprintf(" WHERE %s IN (%s)", quotedID, strings.Join(placeholders, ", "))
 	}
 
-	query += " ORDER BY SmID"
+	query += " ORDER BY " + quotedID
 	if opts.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", opts.Limit)
 	}
@@ -363,5 +502,25 @@ func (d *CadDataset) buildQuery(opts *types.QueryOptions) (string, []interface{}
 		query += fmt.Sprintf(" OFFSET %d", opts.Offset)
 	}
 
-	return query, args
+	return query, args, nil
+}
+
+func (d *CadDataset) syncObjectCount() error {
+	count, err := d.Count()
+	if err != nil {
+		return err
+	}
+	if err := d.registerDao.UpdateObjectCount(d.Info().ID, count); err != nil {
+		return err
+	}
+	d.Info().ObjectCount = count
+	return nil
+}
+
+func quoteCadIdentifier(name string, description string) (string, error) {
+	quoted, err := sqliteutil.QuoteIdentifier(name)
+	if err != nil {
+		return "", errors.FormatError("invalid "+description, err)
+	}
+	return quoted, nil
 }
