@@ -156,12 +156,13 @@ export async function runBenchmarkScenario(
   if (staleProbeResult.blankRender) {
     blankRenderCount += 1
   }
+  if (config.temperature === 'cold') {
+    selectAndFitMs += await validateSelection()
+  }
+  await dependencies.waitForCoordinatorIdle?.()
   const coordinatorMetrics = dependencies.getCoordinatorMetrics()
   if (coordinatorMetrics.staleResultsDiscarded < 1) {
     throw new Error('stale viewport probe did not discard an obsolete result')
-  }
-  if (config.temperature === 'cold') {
-    selectAndFitMs += await validateSelection()
   }
 
   return {

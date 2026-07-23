@@ -19,7 +19,7 @@
 - 左侧数据集浏览器支持名称搜索、按类型过滤，并显示轻量“已加入”状态。
 - 采样预览图层会在图层面板和地图区域显示轻量提示。
 - Point、Line、Region 及对应 Z 类型按 OpenLayers 稳定视口查询；首次加入图层时先按有效的数据集声明范围定位，再由 `moveend` 触发当前范围加载。
-- SDK 视口查询支持 RTree 和 DataSource 生命周期包络缓存；Viewer 在缓存预算错误或 Text/CAD 路径生成私有的非空间有界预览，并显示当前范围、截断和降级状态。
+- SDK 视口查询支持 RTree 和 DataSource 生命周期包络缓存，Text/CAD 正常路径与普通矢量共用 `QuerySpatial`、required ID 和视口协调器；Viewer 仅在缓存预算超限或空间索引不可用时生成私有的非空间有界预览，并显示当前范围、截断和降级状态。
 - 点、线、面图层使用内置默认样式渲染，并在内部保留 `LayerStyle` 结构供后续样式设置 UI 使用。
 - 在地图、图层和属性表之间按 `datasetName + SmID` 做单选联动。
 - 点击地图要素或属性表行查看属性摘要。
@@ -30,7 +30,7 @@
 当前不提供：
 
 - 在线底图、投影变换或坐标转换。
-- Text/CAD 视口查询和精确拓扑谓词；Text/CAD 继续使用当前有上界预览。
+- 坐标投影转换和精确拓扑谓词；当前视口查询语义仍是对象 MBR 与视口 MBR 相交。
 - 编辑或保存 UDBX 文件。
 - 空间数据编辑、保存、导出或格式转换。
 - 绕过 `udbx4go` SDK 的系统表或二进制几何解析。
@@ -103,7 +103,7 @@ go test ./...
 - 关闭文件后拒绝继续读取。
 - 打开不存在文件时清理旧数据源状态。
 - 页码小于 1 或大于总页数时归一到有效范围。
-- 视口参数传入 SDK，`rtree | envelope_cache` 成功策略、`hasMore` 和声明范围正确映射；预算错误及 Text/CAD 路径由 Viewer 转换为带降级原因的私有预览 DTO。
+- 视口参数传入 SDK，Point/Line/Region/Z/Text/CAD 的 `rtree | envelope_cache` 成功策略、`hasMore`、required ID 和声明范围正确映射；仅缓存预算超限或空间索引不可用时由 Viewer 转换为带降级原因的私有预览 DTO。
 - 非法视口、context 取消、损坏几何、迟到结果和文件生命周期隔离。
 
 前端测试与构建：
@@ -136,7 +136,7 @@ npm run build
 17. 开启“显示空间预览统计”后，右侧图层面板显示查询策略、耗时、当前范围要素数、顶点数、截断和降级状态。
 18. 使用 henan.udbx 的 weibo 数据验证平移缩放按当前范围加载；放大到结果未截断时，“当前范围 1,000+ 个对象”提示消失。
 19. 使用 henan.udbx 的县级行政区划验证无 RTree 时走包络缓存；属性表第 2 页记录点击后可定位并高亮。
-20. 使用 SampleData.udbx 验证点、线、面按视口更新，CAD 保持有界预览；图层显隐和移除正常。
+20. 使用 SampleData.udbx 验证点、线、面、Text、CAD 按视口更新；图层显隐和移除正常。
 21. 快速连续缩放时不白屏、不回跳到旧范围；单图层查询失败时保留旧图形，其他图层仍可用。
 22. 关闭或切换文件后，旧请求结果不写入新地图。
 ```
@@ -146,7 +146,7 @@ npm run build
 - “空间预览要素上限”默认 1,000，限制一次视口查询的普通候选数。存在更多视口命中对象时显示当前范围截断提示；required ID 不占用该上限。
 - SDK 返回的普通要素必须与请求范围 MBR 相交；只有通过 required ID 补入的选中对象可以位于视口外。
 - “空间预览顶点预算”默认 1,000,000，限制一次响应发送和渲染的普通几何顶点总量，用于控制 Wails 传输和前端渲染成本。它不是数据集对象数或 UDBX 格式限制。
-- 高级预览统计中的 `rtree` 和 `envelope_cache` 是 SDK 成功策略。`bounded_sample` 是 Viewer 捕获 `envelope_cache_budget_exceeded` 错误或处理 Text/CAD 时生成的私有非空间有界预览，不属于 SDK `QuerySpatial` 成功结果。
+- 高级预览统计中的 `rtree` 和 `envelope_cache` 是 SDK 成功策略。`bounded_sample` 仅是 Viewer 捕获 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 后生成的私有非空间有界预览，不属于 SDK `QuerySpatial` 成功结果；正常 Text/CAD 不进入该路径。
 - SDK `SpatialQueryResult` 没有 `DegradedReason`；Viewer `SpatialPreviewDTO` 保留 `degradedReason` 供界面诊断。
 - 当前包络缓存默认策略是单数据集 32 MiB、当前 `DataSource` 合计 64 MiB；关闭或切换文件会释放缓存。完整缓存超预算时 SDK 返回 `envelope_cache_budget_exceeded` 错误。这是当前 SDK/Viewer 资源策略，不是 UDBX 格式限制。
 - `invalid_viewport`、`spatial_index_unavailable`、`envelope_cache_budget_exceeded`、`query_timeout`、`corrupt_geometry`、`unsupported_dataset_kind` 是稳定诊断原因码。
@@ -201,7 +201,7 @@ cd udbx4go
 
 - `henan-weibo-rtree-pan-zoom`：验证 weibo 真实 RTree 的连续视口平移缩放和截断状态。
 - `henan-county-envelope-selection`：验证县级行政区划包络缓存、第二页对象定位、required ID 和高亮。
-- `sampledata-multilayer-viewport`：加载 `BaseMap_P`、`BaseMap_L`、`BaseMap_R` 和 `CADDT`，验证多图层视口、显隐、移除和 CAD 有界预览。
+- `sampledata-multilayer-viewport`：加载 `BaseMap_P`、`BaseMap_L`、`BaseMap_R`、`County_T` 和 `CADDT`，验证普通矢量、Text、CAD 多图层视口查询、显隐和移除；所有视口步骤都要求 `envelope_cache`，任何 `bounded_sample` 都会使 benchmark 失败。
 
 每个场景执行冷 5 轮和热 5 轮，共 10 轮；每套并发包含 30 轮。默认候选阶段依次运行并发 1/2/3，最终重建后再以选中值独立运行 30 轮，候选结果不能代替最终结果。并发 2/3 只有实际观测达到标称并发、所有门禁通过、端到端 P95 至少改善 5% 且峰值 RSS 不超过并发 1 的 110% 时才可入选。没有真实合格数据时最终并发保持 1。
 
@@ -237,7 +237,7 @@ cd udbx4go
 
 1. `henan.udbx/weibo` 平移缩放按当前范围加载，放大后截断提示消失。
 2. 县级行政区划按视口浏览，第二页对象可定位并高亮。
-3. `SampleData.udbx` 点、线、面、CAD 多图层显隐和移除正常，CAD 保持有界预览。
+3. `SampleData.udbx` 点、线、面、Text、CAD 多图层按视口刷新，显隐和移除正常。
 4. 快速连续缩放无白屏、无旧范围回跳。
 
 自动化故障注入：

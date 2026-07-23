@@ -19,7 +19,7 @@ func validBenchmarkConfig(t *testing.T) BenchmarkConfigDTO {
 		Scenario: BenchmarkScenarioDTO{
 			Name:     "sampledata-multilayer",
 			FilePath: sampleDataPath(t),
-			Layers:   []string{"BaseMap_P", "BaseMap_L", "BaseMap_R", "CADDT"},
+			Layers:   []string{"BaseMap_P", "BaseMap_L", "BaseMap_R", "County_T", "CADDT"},
 			Selection: BenchmarkSelectionDTO{
 				DatasetName: "BaseMap_R",
 				Page:        1,
@@ -53,7 +53,7 @@ func TestLoadBenchmarkConfigAcceptsOneScenario(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadBenchmarkConfig() error = %v", err)
 	}
-	if config.RunID != "sampledata-01" || len(config.Scenario.Layers) != 4 {
+	if config.RunID != "sampledata-01" || len(config.Scenario.Layers) != 5 {
 		t.Fatalf("config = %+v", config)
 	}
 }
@@ -206,6 +206,9 @@ func TestBenchmarkSpatialConfigRequiresViewportStepsAndConcurrency(t *testing.T)
 		}, "bounds"},
 		{"invalid concurrency", func(c *BenchmarkConfigDTO) { c.MaxConcurrentQueries = 4 }, "maxConcurrentQueries"},
 		{"invalid temperature", func(c *BenchmarkConfigDTO) { c.Temperature = "lukewarm" }, "temperature"},
+		{"bounded fallback is not an expected success strategy", func(c *BenchmarkConfigDTO) {
+			c.Scenario.ViewportSteps[0].ExpectedStrategy = "bounded_sample"
+		}, "expectedStrategy"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

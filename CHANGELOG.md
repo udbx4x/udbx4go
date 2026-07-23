@@ -9,11 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Added `DataSource.QuerySpatial` and `GetSpatialQueryCapability` for Point, Line, Region, and corresponding Z datasets.
+- Added `DataSource.QuerySpatial` and `GetSpatialQueryCapability` for Point, Line, Region, corresponding Z datasets, Text, and CAD.
 - Added closed-interval MBR queries with stable `hasMore`, required-ID, strategy, and six-reason-code semantics from `udbx4spec`.
 - Added verified RTree querying and DataSource-lifetime envelope caches; cache admission failures return the stable `envelope_cache_budget_exceeded` error.
 - Added context-aware `ListContext` methods for spatial, Text, and CAD datasets.
-- Added Viewer-private non-spatial `bounded_sample` previews for cache-budget failures and Text/CAD paths while retaining `degradedReason` in the Viewer DTO.
+- Added Text/CAD viewport querying through the public spatial-query contract, including envelope-cache filtering from `SmIndexKey`, payload decoding from `SmGeometry`, required IDs, context cancellation, and stable error reasons.
+- Added CAD `SmIndexKey` writes and Text/CAD mutation-driven envelope-cache invalidation so create/update/delete operations cannot publish or reuse stale query state.
+- Added Viewer-private non-spatial `bounded_sample` previews only for `envelope_cache_budget_exceeded` and `spatial_index_unavailable`, while retaining `degradedReason` in the Viewer DTO.
 - Added Viewer viewport coordination, offscreen selection retention, deterministic stale-result probes, canvas-pixel blank-render gates, real-sample automatic tests, the envelope-cache PoC, and transactional macOS benchmark tooling.
 
 ### Changed
@@ -24,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known limitations
 
-- Text and CAD viewport queries, coordinate projection, and exact topology predicates are not implemented; Text and CAD keep bounded preview/list behavior.
+- Coordinate projection and exact topology predicates are not implemented; spatial queries use closed-interval MBR intersection semantics.
 - SDK, Viewer, frontend, specification, and non-GUI benchmark workflow gates are automated. The previous packaged benchmark remains historical evidence because it did not deterministically create a stale request or inspect rendered canvas pixels; the tightened gates require a new packaged run.
 
 ## [0.1.0] - 2026-06-26

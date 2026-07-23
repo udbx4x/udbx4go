@@ -292,7 +292,7 @@ run_suite() {
     for iteration in 1 2 3 4 5; do
       run_iteration "$suite_dir" "$concurrency" "henan-weibo-rtree-pan-zoom" "$henan_data" '["weibo"]' "weibo" 1 "$weibo_steps" "$temperature" "$iteration"
       run_iteration "$suite_dir" "$concurrency" "henan-county-envelope-selection" "$henan_data" '["县级行政区划"]' "县级行政区划" 2 "$county_steps" "$temperature" "$iteration"
-      run_iteration "$suite_dir" "$concurrency" "sampledata-multilayer-viewport" "$sample_data" '["BaseMap_P","BaseMap_L","BaseMap_R","CADDT"]' "BaseMap_R" 1 "$sample_steps" "$temperature" "$iteration"
+      run_iteration "$suite_dir" "$concurrency" "sampledata-multilayer-viewport" "$sample_data" '["BaseMap_P","BaseMap_L","BaseMap_R","County_T","CADDT"]' "BaseMap_R" 1 "$sample_steps" "$temperature" "$iteration"
     done
   done
   node "$script_dir/summarize-viewer-benchmark.mjs" \

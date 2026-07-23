@@ -452,6 +452,21 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
           }
         })()
       },
+      waitForCoordinatorIdle: async () => {
+        const startedAt = performance.now()
+        while (true) {
+          const metrics = coordinator.getMetrics()
+          if (metrics.activeQueries === 0 && metrics.pendingQueries === 0) {
+            return
+          }
+          if (performance.now() - startedAt >= viewportStepTimeoutMs) {
+            throw new Error(
+              `coordinator did not drain after ${viewportStepTimeoutMs}ms; active=${metrics.activeQueries}; pending=${metrics.pendingQueries}`,
+            )
+          }
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 10))
+        }
+      },
       getCoordinatorMetrics: () => coordinator.getMetrics(),
       resetCoordinatorMetrics: () => coordinator.resetMetrics(),
     }

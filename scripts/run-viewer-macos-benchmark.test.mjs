@@ -37,6 +37,22 @@ test('mock workflow measures 1/2/3, selects, rebuilds and runs a separate final 
   assert.equal(finalSummary.maxConcurrentQueries, 2)
   assert.notEqual(finalSummary.environment.appSha256, candidates[0].environment.appSha256)
 
+  const sampleConfig = JSON.parse(fs.readFileSync(
+    path.join(finalDir, 'configs', 'sampledata-multilayer-viewport-cold-1.json'),
+    'utf8',
+  ))
+  assert.deepEqual(sampleConfig.scenario.layers, [
+    'BaseMap_P',
+    'BaseMap_L',
+    'BaseMap_R',
+    'County_T',
+    'CADDT',
+  ])
+  assert.ok(sampleConfig.scenario.viewportSteps.length > 0)
+  assert.ok(sampleConfig.scenario.viewportSteps.every(
+    (step) => step.expectedStrategy === 'envelope_cache',
+  ))
+
   const policy = fs.readFileSync(
     path.join(outputDir, 'mock-workspace', 'frontend', 'src', 'spatial', 'viewportQueryPolicy.ts'),
     'utf8',

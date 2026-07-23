@@ -173,7 +173,7 @@ func validBenchmarkBounds(bounds BoundingBoxDTO) bool {
 
 func validBenchmarkStrategy(strategy string) bool {
 	switch strategy {
-	case "rtree", "envelope_cache", "bounded_sample":
+	case "rtree", "envelope_cache":
 		return true
 	default:
 		return false
