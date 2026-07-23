@@ -127,7 +127,9 @@ func (ds *DataSource) GetSpatialQueryCapability(ctx context.Context, datasetName
 	return capability, nil
 }
 
-// QuerySpatial queries features intersecting a viewport through the dataset RTree.
+// QuerySpatial queries viewport-intersecting features for supported ordinary
+// vector, Text, and CAD datasets, using a verified RTree when available or a
+// DataSource-owned envelope cache otherwise.
 func (ds *DataSource) QuerySpatial(
 	ctx context.Context,
 	datasetName string,
