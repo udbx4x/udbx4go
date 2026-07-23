@@ -14,7 +14,8 @@ import (
 // CadDataset represents a CAD GeoHeader dataset.
 type CadDataset struct {
 	*BaseDataset
-	cadCodec *codec.CadGeometryCodec
+	cadCodec  *codec.CadGeometryCodec
+	textCodec *codec.GeoTextCodec
 }
 
 // NewCadDataset creates a new CAD dataset.
@@ -22,6 +23,7 @@ func NewCadDataset(db *sql.DB, info *types.DatasetInfo) *CadDataset {
 	return &CadDataset{
 		BaseDataset: NewBaseDataset(db, info),
 		cadCodec:    codec.NewCadGeometryCodec(),
+		textCodec:   codec.NewGeoTextCodec(),
 	}
 }
 
@@ -63,19 +65,23 @@ func (d *CadDataset) Insert(feature *types.Feature) error {
 		return errors.ConstraintError("geometry must be CAD GeoHeader geometry")
 	}
 
+	geometryBlob, err := d.encodeGeometry(cadGeometry)
+	if err != nil {
+		return err
+	}
+	indexKey, err := codec.EncodeEnvelopeIndexKey(cadGeometry.GetBBox(), d.srid())
+	if err != nil {
+		return err
+	}
+
 	fields, err := d.GetFields()
 	if err != nil {
 		return err
 	}
 
-	geometryBlob, err := d.cadCodec.Encode(cadGeometry)
-	if err != nil {
-		return err
-	}
-
-	columns := []string{"SmID", "SmGeometry"}
-	placeholders := []string{"?", "?"}
-	values := []interface{}{feature.ID, geometryBlob}
+	columns := []string{"SmID", "SmUserID", "SmGeoType", "SmGeometry", "SmIndexKey"}
+	placeholders := []string{"?", "?", "?", "?", "?"}
+	values := []interface{}{feature.ID, 0, cadGeometry.CadGeoType(), geometryBlob, indexKey}
 
 	for _, field := range fields {
 		columns = append(columns, field.Name)
@@ -126,12 +132,16 @@ func (d *CadDataset) Update(id int, changes *FeatureChanges) error {
 		if !ok {
 			return errors.ConstraintError("geometry must be CAD GeoHeader geometry")
 		}
-		geometryBlob, err := d.cadCodec.Encode(cadGeometry)
+		geometryBlob, err := d.encodeGeometry(cadGeometry)
 		if err != nil {
 			return err
 		}
-		setClauses = append(setClauses, "SmGeometry = ?")
-		values = append(values, geometryBlob)
+		indexKey, err := codec.EncodeEnvelopeIndexKey(cadGeometry.GetBBox(), d.srid())
+		if err != nil {
+			return err
+		}
+		setClauses = append(setClauses, "SmGeoType = ?", "SmGeometry = ?", "SmIndexKey = ?")
+		values = append(values, cadGeometry.CadGeoType(), geometryBlob, indexKey)
 	}
 
 	for name, value := range changes.Attributes {
@@ -252,6 +262,8 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 	feature := &types.Feature{Attributes: make(map[string]interface{})}
 	var geometryBlob []byte
 	geometryColumnFound := false
+	storedGeoType := 0
+	storedGeoTypeFound := false
 
 	for index, column := range columns {
 		value := values[index]
@@ -267,6 +279,15 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 				return nil, newSpatialGeometryError("CAD geometry column is not a non-empty BLOB")
 			}
 			geometryBlob = blob
+		case "SmGeoType":
+			storedGeoTypeFound = true
+			geoType, ok := value.(int64)
+			if !ok {
+				return nil, newSpatialGeometryError("CAD SmGeoType column is not an integer")
+			}
+			storedGeoType = int(geoType)
+		case "SmUserID", "SmIndexKey":
+			continue
 		default:
 			feature.Attributes[column] = value
 		}
@@ -279,9 +300,42 @@ func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*type
 	if err != nil {
 		return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode CAD geometry", err)}
 	}
+	if storedGeoTypeFound && storedGeoType != geometry.CadGeoType() {
+		return nil, newSpatialGeometryError(fmt.Sprintf(
+			"stored CAD SmGeoType %d does not match decoded geometry type %d",
+			storedGeoType,
+			geometry.CadGeoType(),
+		))
+	}
 	feature.Geometry = geometry
 
 	return feature, nil
+}
+
+func (d *CadDataset) encodeGeometry(geometry types.CadGeometry) ([]byte, error) {
+	if text, ok := geometry.(*types.CadTextGeometry); ok {
+		if text == nil || len(text.Anchor) < 2 {
+			return nil, errors.ConstraintError("CAD Text geometry anchor must contain x and y")
+		}
+		return d.textCodec.Encode(&types.TextGeometry{
+			Type:     "Text",
+			Text:     text.Text,
+			Anchor:   text.Anchor,
+			Rotation: text.Rotation,
+			BBox:     text.BBox,
+			GeoType:  text.CadGeoType(),
+			Style:    text.TextStyle,
+			SubTexts: text.SubTexts,
+		})
+	}
+	return d.cadCodec.Encode(geometry)
+}
+
+func (d *CadDataset) srid() int {
+	if d.Info().SRID == nil {
+		return 0
+	}
+	return *d.Info().SRID
 }
 
 func (d *CadDataset) buildQuery(opts *types.QueryOptions) (string, []interface{}) {

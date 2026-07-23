@@ -2,27 +2,42 @@ package dataset
 
 import (
 	"database/sql"
+	"encoding/binary"
+	stderrors "errors"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/udbx4x/udbx4go/internal/codec"
+	"github.com/udbx4x/udbx4go/internal/schema"
 	"github.com/udbx4x/udbx4go/internal/system"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
 func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegisterRecord) {
-	// Task 5 must replace this DDL with DataSource.CreateCadDataset integration
-	// coverage and remove DEFAULT 0 once CadDataset writes SmGeoType/SmIndexKey.
+	return createCadDatasetWithSRID(t, db, 0)
+}
+
+func createCadDatasetWithSRID(t *testing.T, db *sql.DB, srid int) (*CadDataset, *system.SmRegisterRecord) {
+	require.NoError(t, schema.NewInitializer(db).CreateCadDatasetTable("cad_layers", []schema.FieldColumn{
+		{Name: "name", SQLiteType: "TEXT", Nullable: false},
+		{Name: "level", SQLiteType: "INTEGER", Nullable: true},
+	}))
+	// Preserve the existing corruption test's ability to inject a NULL geometry
+	// without weakening the production schema or normal CAD writes.
 	_, err := db.Exec(`
-		CREATE TABLE cad_layers (
-			SmID INTEGER PRIMARY KEY,
-			SmUserID INTEGER DEFAULT 0,
-			SmGeoType INTEGER NOT NULL DEFAULT 0,
-			SmGeometry BLOB,
-			SmIndexKey POLYGON,
-			name TEXT NOT NULL,
-			level INTEGER
-		)
+		CREATE TRIGGER cad_layers_insert_missing_geometry
+		BEFORE INSERT ON cad_layers
+		WHEN NEW.SmGeometry IS NULL AND NEW.SmGeoType IS NULL
+		BEGIN
+			INSERT INTO cad_layers (
+				SmID, SmUserID, SmGeoType, SmGeometry, SmIndexKey, name, level
+			) VALUES (
+				NEW.SmID, NEW.SmUserID, 0, NULL, NEW.SmIndexKey, NEW.name, NEW.level
+			);
+			SELECT RAISE(IGNORE);
+		END
 	`)
 	require.NoError(t, err)
 
@@ -34,7 +49,7 @@ func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegister
 		SmObjectCount: 0,
 		SmIDColName:   sql.NullString{String: "SmID", Valid: true},
 		SmGeoColName:  sql.NullString{String: "SmGeometry", Valid: true},
-		SmSRID:        sql.NullInt32{Int32: 0, Valid: true},
+		SmSRID:        sql.NullInt32{Int32: int32(srid), Valid: true},
 		SmIndexType:   sql.NullInt32{Int32: 0, Valid: true},
 	}
 	err = registerDao.Insert(record)
@@ -44,7 +59,7 @@ func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegister
 		FGeometryColumn:     "SmIndexKey",
 		GeometryType:        3,
 		CoordDimension:      2,
-		SRID:                0,
+		SRID:                srid,
 		SpatialIndexEnabled: 0,
 	}))
 
@@ -63,6 +78,202 @@ func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegister
 	}))
 
 	return NewCadDataset(db, record.ToDatasetInfo()), record
+}
+
+func TestCadDatasetMaintainsGeoTypeAndIndexKey(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDatasetWithSRID(t, db, 3857)
+	tests := []struct {
+		name     string
+		id       int
+		geometry types.CadGeometry
+		geoType  int
+		bbox     types.BoundingBox
+	}{
+		{
+			name:     "point with zero-area negative envelope",
+			id:       1,
+			geometry: &types.CadPointGeometry{XCoord: -3, YCoord: -4},
+			geoType:  1,
+			bbox:     types.BoundingBox{MinX: -3, MinY: -4, MaxX: -3, MaxY: -4},
+		},
+		{
+			name: "line",
+			id:   2,
+			geometry: &types.CadLineGeometry{
+				NumSub:         1,
+				SubPointCounts: []int{2},
+				Coordinates:    [][2]float64{{-8, -2}, {9, 5}},
+			},
+			geoType: 3,
+			bbox:    types.BoundingBox{MinX: -8, MinY: -2, MaxX: 9, MaxY: 5},
+		},
+		{
+			name: "region",
+			id:   3,
+			geometry: &types.CadRegionGeometry{
+				NumSub:         1,
+				SubPointCounts: []int{5},
+				Coordinates:    [][2]float64{{-6, -7}, {4, -7}, {4, 2}, {-6, 2}, {-6, -7}},
+			},
+			geoType: 5,
+			bbox:    types.BoundingBox{MinX: -6, MinY: -7, MaxX: 4, MaxY: 2},
+		},
+		{
+			name: "text",
+			id:   4,
+			geometry: &types.CadTextGeometry{
+				Text:   "CAD text",
+				Anchor: []float64{-2, 3},
+				BBox:   []float64{-5, -1, 6, 8},
+			},
+			geoType: 7,
+			bbox:    types.BoundingBox{MinX: -5, MinY: -1, MaxX: 6, MaxY: 8},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.NoError(t, dataset.Insert(&types.Feature{
+				ID:         tt.id,
+				Geometry:   tt.geometry,
+				Attributes: map[string]interface{}{"name": tt.name},
+			}))
+			assertCadStorage(t, db, dataset.TableName(), tt.id, tt.geoType, 3857, tt.bbox)
+			feature, err := dataset.GetByID(tt.id)
+			require.NoError(t, err)
+			assert.Equal(t, tt.geoType, feature.Geometry.(types.CadGeometry).CadGeoType())
+		})
+	}
+
+	line := &types.CadLineGeometry{
+		NumSub:         1,
+		SubPointCounts: []int{2},
+		Coordinates:    [][2]float64{{-10, 2}, {8, 9}},
+	}
+	require.NoError(t, dataset.Update(1, &FeatureChanges{Geometry: line}))
+	assertCadStorage(t, db, dataset.TableName(), 1, 3, 3857, types.BoundingBox{MinX: -10, MinY: 2, MaxX: 8, MaxY: 9})
+
+	var indexBefore []byte
+	require.NoError(t, db.QueryRow("SELECT SmIndexKey FROM cad_layers WHERE SmID = 1").Scan(&indexBefore))
+	require.NoError(t, dataset.Update(1, &FeatureChanges{Attributes: map[string]interface{}{"name": "renamed"}}))
+	var indexAfter []byte
+	require.NoError(t, db.QueryRow("SELECT SmIndexKey FROM cad_layers WHERE SmID = 1").Scan(&indexAfter))
+	assert.Equal(t, indexBefore, indexAfter)
+
+	feature, err := dataset.GetByID(1)
+	require.NoError(t, err)
+	assert.Equal(t, "renamed", feature.Attributes["name"])
+	assert.NotContains(t, feature.Attributes, "SmUserID")
+	assert.NotContains(t, feature.Attributes, "SmGeoType")
+	assert.NotContains(t, feature.Attributes, "SmIndexKey")
+}
+
+func TestCadDatasetRejectsStoredGeoTypeMismatch(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         1,
+		Geometry:   &types.CadPointGeometry{XCoord: 3, YCoord: 4},
+		Attributes: map[string]interface{}{"name": "point"},
+	}))
+	_, err := db.Exec("UPDATE cad_layers SET SmGeoType = 5 WHERE SmID = 1")
+	require.NoError(t, err)
+
+	_, err = dataset.GetByID(1)
+	require.Error(t, err)
+	var geometryErr *spatialGeometryError
+	assert.True(t, stderrors.As(err, &geometryErr))
+	assert.ErrorContains(t, err, "stored CAD SmGeoType 5 does not match decoded geometry type 1")
+}
+
+func TestCadDatasetGeometryEncodingFailureDoesNotWritePartialData(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	invalidGeometries := []struct {
+		name     string
+		geometry types.CadGeometry
+	}{
+		{name: "non-finite bbox", geometry: &types.CadPointGeometry{XCoord: math.NaN(), YCoord: 1}},
+		{name: "empty bbox", geometry: &types.CadLineGeometry{}},
+		{
+			name:     "text missing anchor",
+			geometry: &types.CadTextGeometry{Text: "invalid", BBox: []float64{1, 2, 3, 4}},
+		},
+	}
+	for index, tt := range invalidGeometries {
+		t.Run(tt.name, func(t *testing.T) {
+			err := dataset.Insert(&types.Feature{
+				ID:         index + 1,
+				Geometry:   tt.geometry,
+				Attributes: map[string]interface{}{"name": tt.name},
+			})
+			require.Error(t, err)
+			var count int
+			require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM cad_layers WHERE SmID = ?", index+1).Scan(&count))
+			assert.Zero(t, count)
+		})
+	}
+
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         10,
+		Geometry:   &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+		Attributes: map[string]interface{}{"name": "before", "level": 1},
+	}))
+	var beforeType int
+	var beforeGeometry, beforeIndex []byte
+	var beforeName string
+	require.NoError(t, db.QueryRow(
+		"SELECT SmGeoType, SmGeometry, SmIndexKey, name FROM cad_layers WHERE SmID = 10",
+	).Scan(&beforeType, &beforeGeometry, &beforeIndex, &beforeName))
+
+	err := dataset.Update(10, &FeatureChanges{
+		Geometry:   &types.CadTextGeometry{Text: "invalid", Anchor: []float64{1, 2}, BBox: []float64{4, 3, 2, 1}},
+		Attributes: map[string]interface{}{"name": "after"},
+	})
+	require.Error(t, err)
+
+	var afterType int
+	var afterGeometry, afterIndex []byte
+	var afterName string
+	require.NoError(t, db.QueryRow(
+		"SELECT SmGeoType, SmGeometry, SmIndexKey, name FROM cad_layers WHERE SmID = 10",
+	).Scan(&afterType, &afterGeometry, &afterIndex, &afterName))
+	assert.Equal(t, beforeType, afterType)
+	assert.Equal(t, beforeGeometry, afterGeometry)
+	assert.Equal(t, beforeIndex, afterIndex)
+	assert.Equal(t, beforeName, afterName)
+}
+
+func assertCadStorage(
+	t *testing.T,
+	db *sql.DB,
+	table string,
+	id int,
+	wantType int,
+	wantSRID int,
+	wantBBox types.BoundingBox,
+) {
+	t.Helper()
+
+	var userID, geoType int
+	var index []byte
+	require.NoError(t, db.QueryRow(
+		"SELECT SmUserID, SmGeoType, SmIndexKey FROM "+table+" WHERE SmID = ?", id,
+	).Scan(&userID, &geoType, &index))
+	assert.Zero(t, userID)
+	assert.Equal(t, wantType, geoType)
+	require.GreaterOrEqual(t, len(index), codec.GaiaHeaderLength)
+	assert.Equal(t, wantSRID, int(int32(binary.LittleEndian.Uint32(index[2:6]))))
+	envelope, err := codec.ReadGaiaEnvelope(index)
+	require.NoError(t, err)
+	assert.Equal(t, wantBBox, envelope)
 }
 
 func TestCadDataset_CRUD(t *testing.T) {
