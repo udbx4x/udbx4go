@@ -90,6 +90,79 @@ func createCadDatasetWithSRID(t *testing.T, db *sql.DB, srid int) (*CadDataset, 
 	return NewCadDataset(db, record.ToDatasetInfo()), record
 }
 
+func addCadSystemFieldMetadata(t *testing.T, db *sql.DB, datasetID int) {
+	t.Helper()
+
+	fieldInfoDao := system.NewSmFieldInfoDao(db)
+	for _, name := range []string{"SmID", "smuserid", "SmGeoType", "SMGEOMETRY", "SmIndexKey"} {
+		require.NoError(t, fieldInfoDao.Insert(&system.SmFieldInfoRecord{
+			SmDatasetID: datasetID,
+			SmFieldName: name,
+			SmFieldType: int(types.FieldTypeGeometry),
+		}))
+	}
+}
+
+func TestCadDatasetFiltersSystemFieldMetadata(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, record := createCadDataset(t, db)
+	addCadSystemFieldMetadata(t, db, record.SmDatasetID)
+
+	fields, err := dataset.GetFields()
+	require.NoError(t, err)
+	require.Len(t, fields, 2)
+	assert.Equal(t, "level", fields[0].Name)
+	assert.Equal(t, "name", fields[1].Name)
+
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:       1,
+		Geometry: &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+		Attributes: map[string]interface{}{
+			"name":  "seed",
+			"level": 3,
+		},
+	}))
+	require.NoError(t, dataset.Update(1, &FeatureChanges{
+		Attributes: map[string]interface{}{"level": 4},
+	}))
+
+	for _, systemField := range []string{"SmID", "smuserid", "SmGeoType", "SMGEOMETRY", "SmIndexKey"} {
+		t.Run(systemField, func(t *testing.T) {
+			err := dataset.Insert(&types.Feature{
+				ID:         2,
+				Geometry:   &types.CadPointGeometry{XCoord: 9, YCoord: 10},
+				Attributes: map[string]interface{}{systemField: "overwrite"},
+			})
+			require.Error(t, err)
+			assert.True(t, udbxerrors.IsNotFound(err))
+			assert.ErrorContains(t, err, "field '")
+
+			err = dataset.Update(1, &FeatureChanges{
+				Geometry: &types.CadLineGeometry{
+					NumSub:         1,
+					SubPointCounts: []int{2},
+					Coordinates:    [][2]float64{{0, 0}, {5, 5}},
+				},
+				Attributes: map[string]interface{}{systemField: "overwrite"},
+			})
+			require.Error(t, err)
+			assert.True(t, udbxerrors.IsNotFound(err))
+
+			feature, err := dataset.GetByID(1)
+			require.NoError(t, err)
+			assert.IsType(t, &types.CadPointGeometry{}, feature.Geometry)
+			assert.Equal(t, "seed", feature.Attributes["name"])
+			assert.EqualValues(t, 4, feature.Attributes["level"])
+		})
+	}
+
+	count, err := dataset.Count()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+}
+
 func TestCadDatasetMaintainsGeoTypeAndIndexKey(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
@@ -495,6 +568,61 @@ func TestCadDatasetRejectsTextOuterCadStyleWithoutWriting(t *testing.T) {
 	feature, err := dataset.GetByID(2)
 	require.NoError(t, err)
 	assert.IsType(t, &types.CadPointGeometry{}, feature.Geometry)
+}
+
+func TestCadDatasetRejectsInvalidTextSubTextsWithoutWriting(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDataset(t, db)
+	require.NoError(t, dataset.Insert(&types.Feature{
+		ID:         100,
+		Geometry:   &types.CadPointGeometry{XCoord: 3, YCoord: 4},
+		Attributes: map[string]interface{}{"name": "seed"},
+	}))
+
+	tests := []struct {
+		name     string
+		subTexts []*types.TextSubText
+	}{
+		{name: "nil item", subTexts: []*types.TextSubText{nil}},
+		{name: "nil anchor", subTexts: []*types.TextSubText{{Text: "label"}}},
+		{name: "short anchor", subTexts: []*types.TextSubText{{Text: "label", Anchor: []float64{1}}}},
+	}
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			geometry := &types.CadTextGeometry{
+				Text:     "label",
+				Anchor:   []float64{1, 2},
+				BBox:     []float64{0, 1, 2, 3},
+				SubTexts: tt.subTexts,
+			}
+
+			err := dataset.Insert(&types.Feature{
+				ID:         index + 1,
+				Geometry:   geometry,
+				Attributes: map[string]interface{}{"name": tt.name},
+			})
+			require.Error(t, err)
+			assert.True(t, udbxerrors.IsConstraintViolation(err))
+
+			err = dataset.Update(100, &FeatureChanges{
+				Geometry:   geometry,
+				Attributes: map[string]interface{}{"name": "changed"},
+			})
+			require.Error(t, err)
+			assert.True(t, udbxerrors.IsConstraintViolation(err))
+
+			feature, err := dataset.GetByID(100)
+			require.NoError(t, err)
+			assert.IsType(t, &types.CadPointGeometry{}, feature.Geometry)
+			assert.Equal(t, "seed", feature.Attributes["name"])
+		})
+	}
+
+	count, err := dataset.Count()
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
 }
 
 func TestCadDatasetRejectsTypedNilGeometry(t *testing.T) {

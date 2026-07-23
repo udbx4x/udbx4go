@@ -28,6 +28,23 @@ func NewCadDataset(db *sql.DB, info *types.DatasetInfo) *CadDataset {
 	}
 }
 
+// GetFields returns user-defined fields, excluding CAD system fields.
+func (d *CadDataset) GetFields() ([]*types.FieldInfo, error) {
+	fields, err := d.BaseDataset.GetFields()
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]*types.FieldInfo, 0, len(fields))
+	for _, field := range fields {
+		if isCadSystemField(field.Name) {
+			continue
+		}
+		filtered = append(filtered, field)
+	}
+	return filtered, nil
+}
+
 // GetByID returns a CAD feature by ID.
 func (d *CadDataset) GetByID(id int) (*types.Feature, error) {
 	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
@@ -103,6 +120,11 @@ func (d *CadDataset) Insert(feature *types.Feature) error {
 	fields, err := d.GetFields()
 	if err != nil {
 		return err
+	}
+	for name := range feature.Attributes {
+		if isCadSystemField(name) {
+			return errors.FieldNotFound(name)
+		}
 	}
 
 	quotedTable, err := quoteCadIdentifier(d.TableName(), "CAD dataset table name")
@@ -446,6 +468,17 @@ func (d *CadDataset) encodeGeometry(geometry types.CadGeometry) ([]byte, error) 
 		if len(typed.Anchor) < 2 {
 			return nil, errors.ConstraintError("CAD Text geometry anchor must contain x and y")
 		}
+		for index, subText := range typed.SubTexts {
+			if subText == nil {
+				return nil, errors.ConstraintError(fmt.Sprintf("CAD Text sub-text at index %d is required", index))
+			}
+			if len(subText.Anchor) < 2 {
+				return nil, errors.ConstraintError(fmt.Sprintf(
+					"CAD Text sub-text at index %d anchor must contain x and y",
+					index,
+				))
+			}
+		}
 		return d.textCodec.Encode(&types.TextGeometry{
 			Type:     "Text",
 			Text:     typed.Text,
@@ -523,4 +556,13 @@ func quoteCadIdentifier(name string, description string) (string, error) {
 		return "", errors.FormatError("invalid "+description, err)
 	}
 	return quoted, nil
+}
+
+func isCadSystemField(name string) bool {
+	switch strings.ToLower(name) {
+	case "smid", "smuserid", "smgeotype", "smgeometry", "smindexkey":
+		return true
+	default:
+		return false
+	}
 }
