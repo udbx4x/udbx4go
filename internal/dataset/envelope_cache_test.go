@@ -761,6 +761,166 @@ func TestEnvelopeCacheInvalidateDatasetCancelsScanAndIsolatesNewGeneration(t *te
 	assert.Equal(t, 2, manager.EntryCount())
 }
 
+func TestEnvelopeCacheInvalidateDatasetRetainsBudgetUntilActiveReaderFinishes(t *testing.T) {
+	charge := testEnvelopeCacheRSSCharge(t, 1)
+	manager := newTestEnvelopeCacheManager(t, charge, charge)
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	retireStarted := make(chan struct{})
+	var scanOnce sync.Once
+	var retireOnce sync.Once
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		beforeCandidateScan: func() {
+			scanOnce.Do(func() { close(scanStarted) })
+			<-releaseScan
+		},
+		beforeCacheRetire: func() {
+			retireOnce.Do(func() { close(retireStarted) })
+		},
+	}
+
+	key := "roads\x00SmID\x00Geometry"
+	oldCache, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(1))
+	require.NoError(t, err)
+	type candidateResult struct {
+		ids []int
+		err error
+	}
+	candidateDone := make(chan candidateResult, 1)
+	go func() {
+		ids, _, candidateErr := oldCache.CandidateIDs(types.BoundingBox{MinX: 0, MinY: 0, MaxX: 2, MaxY: 2}, 1)
+		candidateDone <- candidateResult{ids: ids, err: candidateErr}
+	}()
+	<-scanStarted
+
+	invalidateDone := make(chan struct{})
+	go func() {
+		manager.InvalidateDataset("roads")
+		close(invalidateDone)
+	}()
+	<-retireStarted
+
+	assert.Zero(t, manager.EntryCount(), "detached caches must no longer be discoverable")
+	assert.Equal(t, charge, manager.TotalBytes(), "active readers must keep the old backing array charged")
+	select {
+	case <-invalidateDone:
+		t.Fatal("InvalidateDataset returned before the active reader finished")
+	default:
+	}
+	buildCalled := false
+	rebuilt, err := manager.GetOrBuild(context.Background(), key, 1, func(_ context.Context, buffer *envelopeCacheBuildBuffer) error {
+		buildCalled = true
+		return buffer.Append(envelopeEntry{ID: 2})
+	})
+	assert.Nil(t, rebuilt)
+	assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
+	assert.False(t, buildCalled, "the retained old charge must reject an exact-budget overlap before scanning")
+
+	close(releaseScan)
+	result := <-candidateDone
+	require.NoError(t, result.err)
+	assert.Equal(t, []int{1}, result.ids)
+	<-invalidateDone
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.EntryCount())
+	oldCache.mu.RLock()
+	assert.True(t, oldCache.retired)
+	assert.Nil(t, oldCache.entries)
+	oldCache.mu.RUnlock()
+
+	rebuilt, err = manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(2))
+	require.NoError(t, err)
+	require.NotNil(t, rebuilt)
+	assert.Equal(t, charge, manager.TotalBytes())
+}
+
+func TestEnvelopeCacheInvalidateDatasetRejectsPreviouslyReturnedCachePointer(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 1), testEnvelopeCacheRSSCharge(t, 1))
+	cache, err := manager.GetOrBuild(context.Background(), "roads\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(1))
+	require.NoError(t, err)
+
+	manager.InvalidateDataset("roads")
+
+	ids, hasMore, err := cache.CandidateIDs(types.BoundingBox{}, 1)
+	assert.Nil(t, ids)
+	assert.False(t, hasMore)
+	assert.ErrorIs(t, err, errEnvelopeCacheInvalidated)
+	assert.False(t, cache.Complete())
+	cache.mu.RLock()
+	assert.Nil(t, cache.entries)
+	cache.mu.RUnlock()
+	assert.Zero(t, manager.TotalBytes())
+}
+
+func TestEnvelopeCacheInvalidateDatasetConcurrentCloseAndRebuildKeepsAccountingNonNegative(t *testing.T) {
+	charge := testEnvelopeCacheRSSCharge(t, 1)
+	manager := newTestEnvelopeCacheManager(t, charge, testEnvelopeCacheTotalRSSCharge(t, 1, 1))
+	scanStarted := make(chan struct{})
+	releaseScan := make(chan struct{})
+	retireStarted := make(chan struct{})
+	var scanOnce sync.Once
+	var retireOnce sync.Once
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		beforeCandidateScan: func() {
+			scanOnce.Do(func() { close(scanStarted) })
+			<-releaseScan
+		},
+		beforeCacheRetire: func() {
+			retireOnce.Do(func() { close(retireStarted) })
+		},
+	}
+
+	key := "roads\x00SmID\x00Geometry"
+	oldCache, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(1))
+	require.NoError(t, err)
+	readerDone := make(chan error, 1)
+	go func() {
+		_, _, candidateErr := oldCache.CandidateIDs(types.BoundingBox{}, 1)
+		readerDone <- candidateErr
+	}()
+	<-scanStarted
+
+	invalidateDone := make(chan struct{})
+	go func() {
+		manager.InvalidateDataset("roads")
+		close(invalidateDone)
+	}()
+	<-retireStarted
+
+	newCache, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(2))
+	if err != nil || newCache == nil {
+		close(releaseScan)
+		<-readerDone
+		<-invalidateDone
+		require.NoError(t, err)
+		require.NotNil(t, newCache)
+	}
+	assert.Equal(t, testEnvelopeCacheTotalRSSCharge(t, 1, 1), manager.TotalBytes(), "overlapping generations must both remain charged")
+
+	closeDone := make(chan struct{})
+	go func() {
+		manager.Close()
+		close(closeDone)
+	}()
+	close(releaseScan)
+	require.NoError(t, <-readerDone)
+	<-invalidateDone
+	<-closeDone
+
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Zero(t, manager.EntryCount())
+	_, _, err = oldCache.CandidateIDs(types.BoundingBox{}, 1)
+	assert.ErrorIs(t, err, errEnvelopeCacheInvalidated)
+	_, _, err = newCache.CandidateIDs(types.BoundingBox{}, 1)
+	assert.ErrorIs(t, err, errEnvelopeCacheInvalidated)
+	manager.InvalidateDataset("roads")
+	assert.Zero(t, manager.TotalBytes(), "repeated invalidation after Close must not double-release bytes")
+	cache, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(3))
+	assert.Nil(t, cache)
+	assert.ErrorIs(t, err, errEnvelopeCacheClosed)
+}
+
 func TestEnvelopeCacheRejectsObjectCountOverflow(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, math.MaxInt64, math.MaxInt64)
 	called := false

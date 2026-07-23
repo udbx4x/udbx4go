@@ -17,6 +17,7 @@ var (
 	errEnvelopeCacheBudgetExceeded = stderrors.New("envelope cache budget exceeded")
 	errEnvelopeCacheClosed         = stderrors.New("envelope cache manager is closed")
 	errEnvelopeCacheInvalidContext = stderrors.New("envelope cache build context is unavailable")
+	errEnvelopeCacheInvalidated    = stderrors.New("envelope cache is invalidated")
 	errEnvelopeCacheRowOverflow    = stderrors.New("envelope cache scanned row count overflow")
 )
 
@@ -37,17 +38,33 @@ const (
 )
 
 type envelopeCache struct {
-	entries  []envelopeEntry
-	bytes    int64
-	complete bool
+	mu                  sync.RWMutex
+	entries             []envelopeEntry
+	bytes               int64
+	complete            bool
+	retired             bool
+	beforeCandidateScan func()
 }
 
 func (c *envelopeCache) Complete() bool {
-	return c != nil && c.complete
+	if c == nil {
+		return false
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.complete && !c.retired
 }
 
 func (c *envelopeCache) CandidateIDs(bounds types.BoundingBox, limit int) ([]int, bool, error) {
-	if c == nil || !c.complete {
+	if c == nil {
+		return nil, false, fmt.Errorf("envelope cache is incomplete")
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.retired {
+		return nil, false, errEnvelopeCacheInvalidated
+	}
+	if !c.complete {
 		return nil, false, fmt.Errorf("envelope cache is incomplete")
 	}
 	if err := bounds.Validate(); err != nil {
@@ -55,6 +72,9 @@ func (c *envelopeCache) CandidateIDs(bounds types.BoundingBox, limit int) ([]int
 	}
 	if limit <= 0 || limit == math.MaxInt {
 		return nil, false, fmt.Errorf("envelope cache candidate limit must allow limit + 1")
+	}
+	if c.beforeCandidateScan != nil {
+		c.beforeCandidateScan()
 	}
 
 	ids := make([]int, 0, initialCandidateCapacity(limit))
@@ -73,6 +93,26 @@ func (c *envelopeCache) CandidateIDs(bounds types.BoundingBox, limit int) ([]int
 		}
 	}
 	return ids, false, nil
+}
+
+func (c *envelopeCache) retire(beforeRetire func()) int64 {
+	if c == nil {
+		return 0
+	}
+	if beforeRetire != nil {
+		beforeRetire()
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.retired {
+		return 0
+	}
+	retiredBytes := c.bytes
+	c.entries = nil
+	c.bytes = 0
+	c.complete = false
+	c.retired = true
+	return retiredBytes
 }
 
 type envelopeCacheBuildFunc func(context.Context, *envelopeCacheBuildBuffer) error
@@ -161,13 +201,16 @@ type envelopeCacheBuild struct {
 }
 
 type envelopeCacheManagerTestHooks struct {
-	beforePublish func(context.Context)
-	waiterJoined  func()
+	beforePublish       func(context.Context)
+	waiterJoined        func()
+	beforeCandidateScan func()
+	beforeCacheRetire   func()
 }
 
 // EnvelopeCacheManager owns all envelope caches for one DataSource.
 type EnvelopeCacheManager struct {
 	mu            sync.Mutex
+	retireMu      sync.Mutex
 	policy        types.SpatialQueryPolicy
 	caches        map[string]*envelopeCache
 	builds        map[string]*envelopeCacheBuild
@@ -325,7 +368,16 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 		buildErr = buildCtx.Err()
 	}
 	if buildErr == nil {
-		pending.cache = &envelopeCache{entries: buffer.entries, bytes: actualBytes, complete: true}
+		var beforeCandidateScan func()
+		if m.testHooks != nil {
+			beforeCandidateScan = m.testHooks.beforeCandidateScan
+		}
+		pending.cache = &envelopeCache{
+			entries:             buffer.entries,
+			bytes:               actualBytes,
+			complete:            true,
+			beforeCandidateScan: beforeCandidateScan,
+		}
 		m.caches[key] = pending.cache
 		m.totalBytes += actualBytes
 	}
@@ -344,8 +396,13 @@ func (m *EnvelopeCacheManager) InvalidateDataset(tableName string) {
 	if m == nil {
 		return
 	}
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
+
 	prefix := tableName + "\x00"
 	cancels := make([]context.CancelFunc, 0)
+	retiring := make([]*envelopeCache, 0)
+	var beforeCacheRetire func()
 
 	m.mu.Lock()
 	for key, cache := range m.caches {
@@ -353,7 +410,7 @@ func (m *EnvelopeCacheManager) InvalidateDataset(tableName string) {
 			continue
 		}
 		delete(m.caches, key)
-		m.totalBytes -= cache.bytes
+		retiring = append(retiring, cache)
 	}
 	for key, pending := range m.builds {
 		if !strings.HasPrefix(key, prefix) {
@@ -365,11 +422,21 @@ func (m *EnvelopeCacheManager) InvalidateDataset(tableName string) {
 			cancels = append(cancels, pending.cancel)
 		}
 	}
+	if m.testHooks != nil {
+		beforeCacheRetire = m.testHooks.beforeCacheRetire
+	}
 	m.mu.Unlock()
 
 	for _, cancel := range cancels {
 		cancel()
 	}
+	retiredBytes := retireEnvelopeCaches(retiring, beforeCacheRetire)
+	if retiredBytes == 0 {
+		return
+	}
+	m.mu.Lock()
+	m.totalBytes -= retiredBytes
+	m.mu.Unlock()
 }
 
 func (m *EnvelopeCacheManager) reserveGrowthCapacity(
@@ -495,6 +562,9 @@ func (m *EnvelopeCacheManager) Close() {
 	if m == nil {
 		return
 	}
+	m.retireMu.Lock()
+	defer m.retireMu.Unlock()
+
 	m.mu.Lock()
 	if m.closed {
 		closeDone := m.closeDone
@@ -503,13 +573,28 @@ func (m *EnvelopeCacheManager) Close() {
 		return
 	}
 	m.closed = true
+	retiring := make([]*envelopeCache, 0, len(m.caches))
+	for key, cache := range m.caches {
+		delete(m.caches, key)
+		retiring = append(retiring, cache)
+	}
 	buildsDone := make([]<-chan struct{}, 0, len(m.activeBuilds))
 	for pending := range m.activeBuilds {
 		buildsDone = append(buildsDone, pending.done)
 	}
+	var beforeCacheRetire func()
+	if m.testHooks != nil {
+		beforeCacheRetire = m.testHooks.beforeCacheRetire
+	}
 	m.mu.Unlock()
 
 	m.cancel()
+	retiredBytes := retireEnvelopeCaches(retiring, beforeCacheRetire)
+	if retiredBytes != 0 {
+		m.mu.Lock()
+		m.totalBytes -= retiredBytes
+		m.mu.Unlock()
+	}
 	for _, done := range buildsDone {
 		<-done
 	}
@@ -522,6 +607,14 @@ func (m *EnvelopeCacheManager) Close() {
 	m.reservedBytes = 0
 	close(m.closeDone)
 	m.mu.Unlock()
+}
+
+func retireEnvelopeCaches(caches []*envelopeCache, beforeRetire func()) int64 {
+	var retiredBytes int64
+	for _, cache := range caches {
+		retiredBytes += cache.retire(beforeRetire)
+	}
+	return retiredBytes
 }
 
 func envelopeCacheCapacityBytes(entries []envelopeEntry) (int64, error) {
