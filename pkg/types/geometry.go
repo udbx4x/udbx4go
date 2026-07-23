@@ -256,13 +256,18 @@ type CadGeometry interface {
 type CadPointGeometry struct {
 	XCoord float64
 	YCoord float64
+	SRID   int
+	BBox   []float64
 	Style  CadStyle
 }
 
 func (g *CadPointGeometry) GeometryType() string { return "CadPoint" }
-func (g *CadPointGeometry) GetSRID() int         { return 0 }
+func (g *CadPointGeometry) GetSRID() int         { return g.SRID }
 func (g *CadPointGeometry) HasZ() bool           { return false }
 func (g *CadPointGeometry) GetBBox() []float64 {
+	if len(g.BBox) >= 4 {
+		return g.BBox
+	}
 	return []float64{g.XCoord, g.YCoord, g.XCoord, g.YCoord}
 }
 func (g *CadPointGeometry) CadGeoType() int    { return 1 }
@@ -273,36 +278,51 @@ type CadLineGeometry struct {
 	NumSub         int
 	SubPointCounts []int
 	Coordinates    [][2]float64
+	SRID           int
+	BBox           []float64
 	Style          CadStyle
 }
 
 func (g *CadLineGeometry) GeometryType() string { return "CadLine" }
-func (g *CadLineGeometry) GetSRID() int         { return 0 }
+func (g *CadLineGeometry) GetSRID() int         { return g.SRID }
 func (g *CadLineGeometry) HasZ() bool           { return false }
-func (g *CadLineGeometry) GetBBox() []float64   { return cadBBox(g.Coordinates) }
-func (g *CadLineGeometry) CadGeoType() int      { return 3 }
-func (g *CadLineGeometry) CadStyle() CadStyle   { return g.Style }
+func (g *CadLineGeometry) GetBBox() []float64 {
+	if len(g.BBox) >= 4 {
+		return g.BBox
+	}
+	return cadBBox(g.Coordinates)
+}
+func (g *CadLineGeometry) CadGeoType() int    { return 3 }
+func (g *CadLineGeometry) CadStyle() CadStyle { return g.Style }
 
 // CadRegionGeometry represents a CAD region geometry.
 type CadRegionGeometry struct {
 	NumSub         int
 	SubPointCounts []int
 	Coordinates    [][2]float64
+	SRID           int
+	BBox           []float64
 	Style          CadStyle
 }
 
 func (g *CadRegionGeometry) GeometryType() string { return "CadRegion" }
-func (g *CadRegionGeometry) GetSRID() int         { return 0 }
+func (g *CadRegionGeometry) GetSRID() int         { return g.SRID }
 func (g *CadRegionGeometry) HasZ() bool           { return false }
-func (g *CadRegionGeometry) GetBBox() []float64   { return cadBBox(g.Coordinates) }
-func (g *CadRegionGeometry) CadGeoType() int      { return 5 }
-func (g *CadRegionGeometry) CadStyle() CadStyle   { return g.Style }
+func (g *CadRegionGeometry) GetBBox() []float64 {
+	if len(g.BBox) >= 4 {
+		return g.BBox
+	}
+	return cadBBox(g.Coordinates)
+}
+func (g *CadRegionGeometry) CadGeoType() int    { return 5 }
+func (g *CadRegionGeometry) CadStyle() CadStyle { return g.Style }
 
 // CadTextGeometry represents a CAD text geometry stored in a CAD GeoHeader dataset.
 type CadTextGeometry struct {
 	Text         string
 	Anchor       []float64
 	Rotation     float64
+	SRID         int
 	BBox         []float64
 	TextStyle    *TextStyle
 	SubTexts     []*TextSubText
@@ -310,7 +330,7 @@ type CadTextGeometry struct {
 }
 
 func (g *CadTextGeometry) GeometryType() string { return "CadText" }
-func (g *CadTextGeometry) GetSRID() int         { return 0 }
+func (g *CadTextGeometry) GetSRID() int         { return g.SRID }
 func (g *CadTextGeometry) HasZ() bool           { return false }
 func (g *CadTextGeometry) GetBBox() []float64 {
 	if len(g.BBox) >= 4 {

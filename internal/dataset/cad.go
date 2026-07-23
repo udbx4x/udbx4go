@@ -377,7 +377,7 @@ func (d *CadDataset) scanFeaturesContext(ctx context.Context, rows *sql.Rows) ([
 }
 
 func (d *CadDataset) buildFeature(columns []string, values []interface{}) (*types.Feature, error) {
-	return d.buildFeatureWithMetadata(columns, values, "SmID", "SmGeometry", "SmIndexKey")
+	return d.buildFeatureWithMetadata(columns, values, "SmID", "SmGeometry", "SmIndexKey", "SmGeoType")
 }
 
 func (d *CadDataset) buildFeatureWithMetadata(
@@ -386,6 +386,7 @@ func (d *CadDataset) buildFeatureWithMetadata(
 	idColumn string,
 	payloadColumn string,
 	envelopeColumn string,
+	typeColumn string,
 ) (*types.Feature, error) {
 	feature := &types.Feature{Attributes: make(map[string]interface{})}
 	var geometryBlob []byte
@@ -416,7 +417,7 @@ func (d *CadDataset) buildFeatureWithMetadata(
 				return nil, newSpatialGeometryError("CAD geometry column is not a non-empty BLOB")
 			}
 			geometryBlob = blob
-		case strings.EqualFold(column, "SmGeoType"):
+		case strings.EqualFold(column, typeColumn):
 			storedGeoTypeFound = true
 			geoType, ok := value.(int64)
 			if !ok {
@@ -470,14 +471,7 @@ func (d *CadDataset) buildFeatureWithMetadata(
 			geometry.CadGeoType(),
 		))
 	}
-	if text, ok := geometry.(*types.CadTextGeometry); ok && indexEnvelope != nil {
-		text.BBox = []float64{
-			indexEnvelope.MinX,
-			indexEnvelope.MinY,
-			indexEnvelope.MaxX,
-			indexEnvelope.MaxY,
-		}
-	}
+	setCadGeometrySpatialMetadata(geometry, indexEnvelope, d.srid())
 	feature.Geometry = geometry
 
 	return feature, nil
@@ -489,13 +483,37 @@ func (d *CadDataset) loadFeaturesByIDs(
 	idColumn string,
 	payloadColumn string,
 	envelopeColumn string,
+	typeColumn string,
 ) (map[int]*types.Feature, error) {
 	return loadSpatialFeaturesByIDs(ctx, d.DB(), d.TableName(), idColumn, ids, func(
 		columns []string,
 		values []interface{},
 	) (*types.Feature, error) {
-		return d.buildFeatureWithMetadata(columns, values, idColumn, payloadColumn, envelopeColumn)
+		return d.buildFeatureWithMetadata(columns, values, idColumn, payloadColumn, envelopeColumn, typeColumn)
 	})
+}
+
+func setCadGeometrySpatialMetadata(geometry types.CadGeometry, envelope *types.BoundingBox, srid int) {
+	var bbox []float64
+	if envelope != nil {
+		bbox = []float64{envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY}
+	}
+	switch typed := geometry.(type) {
+	case *types.CadPointGeometry:
+		typed.SRID = srid
+		typed.BBox = bbox
+	case *types.CadLineGeometry:
+		typed.SRID = srid
+		typed.BBox = bbox
+	case *types.CadRegionGeometry:
+		typed.SRID = srid
+		typed.BBox = bbox
+	case *types.CadTextGeometry:
+		typed.SRID = srid
+		if bbox != nil {
+			typed.BBox = bbox
+		}
+	}
 }
 
 func (d *CadDataset) encodeGeometry(geometry types.CadGeometry) ([]byte, error) {

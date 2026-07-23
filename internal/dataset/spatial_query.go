@@ -2,6 +2,7 @@ package dataset
 
 import (
 	"context"
+	"database/sql"
 	stderrors "errors"
 	"fmt"
 
@@ -105,7 +106,7 @@ func (q *SpatialQuerier) loadFeaturesByIDs(
 		)
 	case types.DatasetKindCAD:
 		return NewCadDataset(q.db, q.info).loadFeaturesByIDs(
-			ctx, ids, detected.IDColumn, detected.PayloadColumn, detected.EnvelopeColumn,
+			ctx, ids, detected.IDColumn, detected.PayloadColumn, detected.EnvelopeColumn, detected.CADTypeColumn,
 		)
 	default:
 		return NewVectorDataset(q.db, q.info).loadFeaturesByIDs(
@@ -294,6 +295,9 @@ func (q *SpatialQuerier) queryRTreeCandidateIDs(
 	detected *detectedSpatialCapability,
 	options types.SpatialQueryOptions,
 ) ([]int, bool, error) {
+	if err := q.validateNullableSpatialRows(ctx, detected); err != nil {
+		return nil, false, err
+	}
 	quotedRTree, err := sqliteutil.QuoteIdentifier(detected.RTreeName)
 	if err != nil {
 		return nil, false, udbxerrors.IOError("failed to quote spatial index name", err)
@@ -378,6 +382,55 @@ func (q *SpatialQuerier) queryRTreeCandidateIDs(
 		ids = ids[:options.Limit]
 	}
 	return ids, hasMore, nil
+}
+
+func (q *SpatialQuerier) validateNullableSpatialRows(
+	ctx context.Context,
+	detected *detectedSpatialCapability,
+) error {
+	if q.info.Kind != types.DatasetKindText && q.info.Kind != types.DatasetKindCAD {
+		return nil
+	}
+	quotedTable, err := sqliteutil.QuoteIdentifier(q.info.TableName)
+	if err != nil {
+		return udbxerrors.IOError("failed to quote dataset table name", err)
+	}
+	quotedID, err := sqliteutil.QuoteIdentifier(detected.IDColumn)
+	if err != nil {
+		return udbxerrors.IOError("failed to quote feature ID column", err)
+	}
+	quotedPayload, err := sqliteutil.QuoteIdentifier(detected.PayloadColumn)
+	if err != nil {
+		return udbxerrors.IOError("failed to quote payload column", err)
+	}
+	quotedEnvelope, err := sqliteutil.QuoteIdentifier(detected.EnvelopeColumn)
+	if err != nil {
+		return udbxerrors.IOError("failed to quote envelope column", err)
+	}
+
+	query := "SELECT " + quotedPayload + " IS NOT NULL, " + quotedEnvelope + " IS NOT NULL" +
+		" FROM " + quotedTable +
+		" WHERE (" + quotedPayload + " IS NULL AND " + quotedEnvelope + " IS NOT NULL)" +
+		" OR (" + quotedPayload + " IS NOT NULL AND " + quotedEnvelope + " IS NULL)" +
+		" ORDER BY " + quotedID + " LIMIT 1"
+	var payloadPresent, envelopePresent int
+	err = q.db.QueryRowContext(ctx, query).Scan(&payloadPresent, &envelopePresent)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return udbxerrors.IOError("failed to validate spatial payload metadata", err)
+	}
+	if payloadPresent != 0 && envelopePresent == 0 {
+		return spatialQueryFailure(
+			types.SpatialQueryReasonSpatialIndexUnavailable,
+			udbxerrors.UnsupportedError("spatial payload is missing its SmIndexKey envelope"),
+		)
+	}
+	return newSpatialGeometryError("SmIndexKey envelope exists without a spatial payload")
 }
 
 func initialCandidateCapacity(limit int) int {

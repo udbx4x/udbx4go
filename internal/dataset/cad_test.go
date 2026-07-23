@@ -254,6 +254,40 @@ func TestCadDatasetMaintainsGeoTypeAndIndexKey(t *testing.T) {
 	assert.NotContains(t, feature.Attributes, "SmIndexKey")
 }
 
+func TestCadDatasetListUsesIndexEnvelopeAndDatasetSRID(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, _ := createCadDatasetWithSRID(t, db, 3857)
+	geometries := []types.CadGeometry{
+		&types.CadPointGeometry{XCoord: 1, YCoord: 2},
+		&types.CadLineGeometry{NumSub: 1, SubPointCounts: []int{2}, Coordinates: [][2]float64{{1, 2}, {3, 4}}},
+		&types.CadRegionGeometry{NumSub: 1, SubPointCounts: []int{5}, Coordinates: [][2]float64{{0, 0}, {4, 0}, {4, 4}, {0, 4}, {0, 0}}},
+		&types.CadTextGeometry{Text: "label", Anchor: []float64{1, 2}, BBox: []float64{0, 0, 2, 3}},
+	}
+	wantBBox := []float64{100, 200, 300, 400}
+	indexKey, err := codec.EncodeEnvelopeIndexKey(wantBBox, 4326)
+	require.NoError(t, err)
+	for index, geometry := range geometries {
+		id := index + 1
+		require.NoError(t, dataset.Insert(&types.Feature{
+			ID:         id,
+			Geometry:   geometry,
+			Attributes: map[string]interface{}{"name": geometry.GeometryType()},
+		}))
+		_, err := db.Exec("UPDATE cad_layers SET SmIndexKey = ? WHERE SmID = ?", indexKey, id)
+		require.NoError(t, err)
+	}
+
+	features, err := dataset.List(nil)
+	require.NoError(t, err)
+	require.Len(t, features, len(geometries))
+	for _, feature := range features {
+		assert.Equal(t, wantBBox, feature.Geometry.GetBBox())
+		assert.Equal(t, 3857, feature.Geometry.GetSRID())
+	}
+}
+
 func TestCadDatasetRejectsStoredGeoTypeMismatch(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()

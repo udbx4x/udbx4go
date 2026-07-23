@@ -260,6 +260,30 @@ func TestDetectSpatialCapabilityUsesIndexKeyForTextAndCAD(t *testing.T) {
 	}
 }
 
+func TestDetectSpatialCapabilityRejectsCADWithoutGeoTypeColumn(t *testing.T) {
+	db, info, record := createTextCADSpatialCapabilityFixture(t, types.DatasetKindCAD, "features")
+	defer db.Close()
+	replaceTextCADSpatialTable(t, db, info.TableName, "SmID INTEGER PRIMARY KEY, SmGeometry BLOB, SmIndexKey POLYGON")
+
+	detected, err := NewSpatialQuerier(db, info, record).detectCapability(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, &types.SpatialQueryCapability{
+		Supported:        true,
+		DiagnosticReason: types.SpatialQueryReasonSpatialIndexUnavailable,
+	}, detected.Capability)
+}
+
+func TestDetectSpatialCapabilityPreservesPhysicalCADGeoTypeColumn(t *testing.T) {
+	db, info, record := createTextCADSpatialCapabilityFixture(t, types.DatasetKindCAD, "features")
+	defer db.Close()
+	_, err := db.Exec(`ALTER TABLE features RENAME COLUMN SmGeoType TO sMgEoTyPe`)
+	require.NoError(t, err)
+
+	detected, err := NewSpatialQuerier(db, info, record).detectCapability(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "sMgEoTyPe", detected.CADTypeColumn)
+}
+
 func TestDetectSpatialCapabilityAcceptsTextAndCADGeometryRegistration(t *testing.T) {
 	registrations := []sql.NullString{
 		{},
@@ -613,10 +637,11 @@ func createTextCADSpatialCapabilityFixture(
 
 	quotedTable, err := sqliteutil.QuoteIdentifier(tableName)
 	require.NoError(t, err)
-	_, err = db.Exec(fmt.Sprintf(
-		"CREATE TABLE %s (SmID INTEGER PRIMARY KEY, SmGeometry BLOB, SmIndexKey POLYGON)",
-		quotedTable,
-	))
+	columns := "SmID INTEGER PRIMARY KEY, SmGeometry BLOB, SmIndexKey POLYGON"
+	if kind == types.DatasetKindCAD {
+		columns = "SmID INTEGER PRIMARY KEY, SmGeoType INTEGER, SmGeometry BLOB, SmIndexKey POLYGON"
+	}
+	_, err = db.Exec(fmt.Sprintf("CREATE TABLE %s (%s)", quotedTable, columns))
 	require.NoError(t, err)
 
 	record := &system.SmRegisterRecord{

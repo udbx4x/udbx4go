@@ -156,6 +156,43 @@ func TestSpatialQueryTextAndCADRTreeMatchesEnvelopeCache(t *testing.T) {
 	}
 }
 
+func TestSpatialQueryTextAndCADRTreeRejectsPayloadWithoutIndexBeforeRequiredIDs(t *testing.T) {
+	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
+		t.Run(kind.String(), func(t *testing.T) {
+			fixture := createSpatialTextCADQueryFixture(t, kind, true)
+			defer fixture.db.Close()
+			fixture.insertFeature(t, 1, 1, 1, "missing-index")
+			_, err := fixture.db.Exec(
+				"UPDATE " + mustQuoteSpatialIdentifier(t, fixture.tableName) + " SET SmIndexKey = NULL WHERE SmID = 1",
+			)
+			require.NoError(t, err)
+
+			_, err = fixture.querier.Query(context.Background(), types.SpatialQueryOptions{
+				Bounds:      types.BoundingBox{MinX: 100, MinY: 100, MaxX: 101, MaxY: 101},
+				Limit:       10,
+				RequiredIDs: []int{1},
+			})
+			assertSpatialQueryError(t, err, types.SpatialQueryReasonSpatialIndexUnavailable, udbxerrors.CodeUnsupported)
+		})
+	}
+}
+
+func TestSpatialQueryTextAndCADRTreeRejectsOrphanIndexOutsideViewport(t *testing.T) {
+	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
+		t.Run(kind.String(), func(t *testing.T) {
+			fixture := createSpatialTextCADQueryFixture(t, kind, true)
+			defer fixture.db.Close()
+			fixture.insertRaw(t, 1, nil, mustSpatialEnvelopeIndex(t, 100, 100), 1)
+
+			_, err := fixture.querier.Query(context.Background(), types.SpatialQueryOptions{
+				Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 1, MaxY: 1},
+				Limit:  10,
+			})
+			assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+		})
+	}
+}
+
 func TestSpatialQueryTextAndCADRequiredIDsPreserveOrderAndDecode(t *testing.T) {
 	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
 		t.Run(kind.String(), func(t *testing.T) {
@@ -235,14 +272,28 @@ func TestSpatialQueryTextAndCADFilterEnvelopeButDecodePayload(t *testing.T) {
 					geometry := result.Features[0].Geometry.(*types.TextGeometry)
 					assert.Equal(t, []float64{50, 50}, geometry.Anchor)
 					assert.Equal(t, []float64{1, 1, 1, 1}, geometry.BBox)
+					assert.Equal(t, 4326, geometry.GetSRID())
 				} else {
 					geometry := result.Features[0].Geometry.(*types.CadPointGeometry)
 					assert.Equal(t, 50.0, geometry.XCoord)
 					assert.Equal(t, 50.0, geometry.YCoord)
+					assert.Equal(t, []float64{1, 1, 1, 1}, geometry.GetBBox())
+					assert.Equal(t, 4326, geometry.GetSRID())
 				}
 			})
 		}
 	}
+}
+
+func TestTextDatasetListPropagatesDatasetSRID(t *testing.T) {
+	db, querier := createSpatialTextQueryFixture(t)
+	defer db.Close()
+	insertSpatialTextFeature(t, db, querier, 1, 10, 20, "srid")
+
+	features, err := NewTextDataset(db, querier.info).List(nil)
+	require.NoError(t, err)
+	require.Len(t, features, 1)
+	assert.Equal(t, 4326, features[0].Geometry.GetSRID())
 }
 
 func TestSpatialQueryTextAndCADCancellationReturnsTimeout(t *testing.T) {

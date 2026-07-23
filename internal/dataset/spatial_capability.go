@@ -26,6 +26,7 @@ type detectedSpatialCapability struct {
 	IDColumn       string
 	EnvelopeColumn string
 	PayloadColumn  string
+	CADTypeColumn  string
 	RTreeName      string
 	Capability     *types.SpatialQueryCapability
 }
@@ -146,11 +147,20 @@ func (q *SpatialQuerier) detectSpatialColumns(ctx context.Context) (*detectedSpa
 	if !idFound || !envelopeFound || !payloadFound {
 		return nil, nil, nil
 	}
+	var physicalCADTypeColumn string
+	if q.info.Kind == types.DatasetKindCAD {
+		var typeFound bool
+		physicalCADTypeColumn, typeFound = physicalColumnName(tableColumns, "SmGeoType")
+		if !typeFound {
+			return nil, nil, nil
+		}
+	}
 
 	return &detectedSpatialCapability{
 		IDColumn:       physicalIDColumn,
 		EnvelopeColumn: physicalEnvelopeColumn,
 		PayloadColumn:  physicalPayloadColumn,
+		CADTypeColumn:  physicalCADTypeColumn,
 	}, geometryRecord, nil
 }
 

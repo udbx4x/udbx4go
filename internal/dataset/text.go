@@ -373,6 +373,7 @@ func (d *TextDataset) buildFeatureWithMetadata(
 			indexEnvelope.MaxY,
 		}
 	}
+	geometry.SRID = d.srid()
 	feature.Geometry = geometry
 
 	return feature, nil
