@@ -79,6 +79,10 @@ func TestInitialCandidateCapacityIsBounded(t *testing.T) {
 	assert.Equal(t, 1024, initialCandidateCapacity(math.MaxInt-1))
 }
 
+func TestSpatialEnvelopeCacheKeyUsesEnvelopeColumn(t *testing.T) {
+	assert.Equal(t, "features\x00SmID\x00SmIndexKey", spatialEnvelopeCacheKey("features", "SmID", "SmIndexKey"))
+}
+
 func TestSpatialQueryHugeLimitDoesNotPreallocateRequestedCapacity(t *testing.T) {
 	db, querier := createSpatialQueryFixture(t, "empty_points", "FeatureID", "Geometry")
 	defer db.Close()
@@ -293,9 +297,13 @@ func TestEnvelopeCacheSQLiteBuildStopsBeforeUnderreportedObjectCountExceedsBudge
 	removeSpatialRTree(t, db, querier)
 	setSpatialObjectCount(querier, 1)
 	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 4), testEnvelopeCacheRSSCharge(t, 4))
-	idColumn, geometryColumn, err := querier.detectEnvelopeColumns(context.Background())
+	idColumn, envelopeColumn, payloadColumn, err := querier.detectEnvelopeColumns(context.Background())
 	require.NoError(t, err)
-	detected := &detectedSpatialCapability{IDColumn: idColumn, GeometryColumn: geometryColumn}
+	detected := &detectedSpatialCapability{
+		IDColumn:       idColumn,
+		EnvelopeColumn: envelopeColumn,
+		PayloadColumn:  payloadColumn,
+	}
 
 	cache, err := manager.GetOrBuild(context.Background(), "points", 1, func(
 		ctx context.Context,
@@ -380,7 +388,7 @@ func TestSpatialQueryTypedNilCacheManagerUsesDefaultPolicy(t *testing.T) {
 }
 
 func TestSpatialQueryRejectsUnsupportedDatasetKinds(t *testing.T) {
-	for _, kind := range []types.DatasetKind{types.DatasetKindTabular, types.DatasetKindText, types.DatasetKindCAD} {
+	for _, kind := range []types.DatasetKind{types.DatasetKindTabular, types.DatasetKind(999)} {
 		t.Run(kind.String(), func(t *testing.T) {
 			db, info, record := createSpatialCapabilityFixture(t, kind, "features", "SmGeometry")
 			defer db.Close()

@@ -23,10 +23,11 @@ type SpatialQuerier struct {
 }
 
 type detectedSpatialCapability struct {
-	Capability     *types.SpatialQueryCapability
-	RTreeName      string
-	GeometryColumn string
 	IDColumn       string
+	EnvelopeColumn string
+	PayloadColumn  string
+	RTreeName      string
+	Capability     *types.SpatialQueryCapability
 }
 
 type sqliteColumnInfo struct {
@@ -54,55 +55,37 @@ func (q *SpatialQuerier) Capability(ctx context.Context) (*types.SpatialQueryCap
 }
 
 func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatialCapability, error) {
-	if !supportsRTreeSpatialQuery(q.info.Kind) {
+	if !supportsSpatialQuery(q.info.Kind) {
 		return &detectedSpatialCapability{Capability: &types.SpatialQueryCapability{
 			DiagnosticReason: types.SpatialQueryReasonUnsupportedDatasetKind,
 		}}, nil
 	}
 
-	unavailable := func(fallbackAvailable bool) *detectedSpatialCapability {
-		return &detectedSpatialCapability{Capability: &types.SpatialQueryCapability{
+	unavailable := func(detected *detectedSpatialCapability, fallbackAvailable bool) *detectedSpatialCapability {
+		if detected == nil {
+			detected = &detectedSpatialCapability{}
+		}
+		detected.Capability = &types.SpatialQueryCapability{
 			Supported:         true,
 			FallbackAvailable: fallbackAvailable,
 			DiagnosticReason:  types.SpatialQueryReasonSpatialIndexUnavailable,
-		}}
+		}
+		return detected
 	}
 
-	records, err := q.geoColsDao.ListByTableNameContext(ctx, q.info.TableName)
+	detected, geometryRecord, err := q.detectSpatialColumns(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if len(records) != 1 || !strings.EqualFold(records[0].FTableName, q.info.TableName) {
-		return unavailable(false), nil
-	}
-
-	geometryRecord := records[0]
-	geometryColumn := geometryRecord.FGeometryColumn
-	if geometryColumn == "" {
-		return unavailable(false), nil
-	}
-	if registeredGeometryColumn(q.record) != "" && !strings.EqualFold(registeredGeometryColumn(q.record), geometryColumn) {
-		return unavailable(false), nil
-	}
-
-	tableColumns, err := sqliteTableInfo(ctx, q.db, q.info.TableName)
-	if err != nil {
-		return nil, err
-	}
-	if !hasColumn(tableColumns, geometryColumn) {
-		return unavailable(false), nil
-	}
-
-	idColumn := registeredIDColumn(q.record)
-	if !hasColumn(tableColumns, idColumn) {
-		return unavailable(false), nil
+	if detected == nil {
+		return unavailable(nil, false), nil
 	}
 
 	if geometryRecord.SpatialIndexEnabled != 1 {
-		return unavailable(true), nil
+		return unavailable(detected, true), nil
 	}
 
-	rtreeName := spatialRTreeName(q.info.TableName, geometryColumn)
+	rtreeName := spatialRTreeName(q.info.TableName, detected.EnvelopeColumn)
 	var physicalRTreeName string
 	var definition sql.NullString
 	err = q.db.QueryRowContext(
@@ -111,13 +94,13 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		rtreeName,
 	).Scan(&physicalRTreeName, &definition)
 	if err == sql.ErrNoRows {
-		return unavailable(true), nil
+		return unavailable(detected, true), nil
 	}
 	if err != nil {
 		return nil, errors.IOError("failed to inspect spatial index definition", err)
 	}
 	if !definition.Valid || !rtreeDefinitionPattern.MatchString(definition.String) {
-		return unavailable(true), nil
+		return unavailable(detected, true), nil
 	}
 
 	rtreeColumns, err := sqliteTableInfo(ctx, q.db, physicalRTreeName)
@@ -125,29 +108,95 @@ func (q *SpatialQuerier) detectCapability(ctx context.Context) (*detectedSpatial
 		return nil, err
 	}
 	if !validRTreeColumns(rtreeColumns) {
-		return unavailable(true), nil
+		return unavailable(detected, true), nil
+	}
+
+	detected.RTreeName = physicalRTreeName
+	detected.Capability = &types.SpatialQueryCapability{
+		Supported:         true,
+		RTreeAvailable:    true,
+		FallbackAvailable: true,
+	}
+	return detected, nil
+}
+
+func (q *SpatialQuerier) detectSpatialColumns(ctx context.Context) (*detectedSpatialCapability, *system.GeometryColumnsRecord, error) {
+	records, err := q.geoColsDao.ListByTableNameContext(ctx, q.info.TableName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(records) != 1 || !strings.EqualFold(records[0].FTableName, q.info.TableName) {
+		return nil, nil, nil
+	}
+
+	geometryRecord := records[0]
+	idColumn := registeredIDColumn(q.record)
+	envelopeColumn, payloadColumn, valid := spatialColumnRoles(q.info.Kind, q.record, geometryRecord)
+	if !valid {
+		return nil, nil, nil
+	}
+
+	tableColumns, err := sqliteTableInfo(ctx, q.db, q.info.TableName)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !hasColumn(tableColumns, idColumn) ||
+		!hasColumn(tableColumns, envelopeColumn) ||
+		!hasColumn(tableColumns, payloadColumn) {
+		return nil, nil, nil
 	}
 
 	return &detectedSpatialCapability{
-		Capability: &types.SpatialQueryCapability{
-			Supported:         true,
-			RTreeAvailable:    true,
-			FallbackAvailable: true,
-		},
-		RTreeName:      physicalRTreeName,
-		GeometryColumn: geometryColumn,
 		IDColumn:       idColumn,
-	}, nil
+		EnvelopeColumn: envelopeColumn,
+		PayloadColumn:  payloadColumn,
+	}, geometryRecord, nil
 }
 
-func supportsRTreeSpatialQuery(kind types.DatasetKind) bool {
+func spatialColumnRoles(
+	kind types.DatasetKind,
+	record *system.SmRegisterRecord,
+	geometryRecord *system.GeometryColumnsRecord,
+) (string, string, bool) {
+	geometryColumn := geometryRecord.FGeometryColumn
+	if kind == types.DatasetKindText || kind == types.DatasetKindCAD {
+		if !strings.EqualFold(geometryColumn, "SmIndexKey") ||
+			geometryRecord.GeometryType != 3 ||
+			geometryRecord.CoordDimension != kind.CoordDimension() ||
+			!spatialSRIDMatches(record, geometryRecord.SRID) {
+			return "", "", false
+		}
+		registeredColumn := registeredGeometryColumn(record)
+		if registeredColumn != "" && !strings.EqualFold(registeredColumn, "SmGeometry") {
+			return "", "", false
+		}
+		return geometryColumn, "SmGeometry", true
+	}
+
+	if geometryColumn == "" {
+		return "", "", false
+	}
+	registeredColumn := registeredGeometryColumn(record)
+	if registeredColumn != "" && !strings.EqualFold(registeredColumn, geometryColumn) {
+		return "", "", false
+	}
+	return geometryColumn, geometryColumn, true
+}
+
+func spatialSRIDMatches(record *system.SmRegisterRecord, srid int) bool {
+	return record == nil || !record.SmSRID.Valid || int(record.SmSRID.Int32) == srid
+}
+
+func supportsSpatialQuery(kind types.DatasetKind) bool {
 	switch kind {
 	case types.DatasetKindPoint,
 		types.DatasetKindLine,
 		types.DatasetKindRegion,
+		types.DatasetKindText,
 		types.DatasetKindPointZ,
 		types.DatasetKindLineZ,
-		types.DatasetKindRegionZ:
+		types.DatasetKindRegionZ,
+		types.DatasetKindCAD:
 		return true
 	default:
 		return false
@@ -170,8 +219,8 @@ func registeredIDColumn(record *system.SmRegisterRecord) string {
 	return "SmID"
 }
 
-func spatialRTreeName(tableName, geometryColumn string) string {
-	return "idx_" + tableName + "_" + geometryColumn
+func spatialRTreeName(tableName, envelopeColumn string) string {
+	return "idx_" + tableName + "_" + envelopeColumn
 }
 
 func sqliteTableInfo(ctx context.Context, db *sql.DB, tableName string) ([]sqliteColumnInfo, error) {
