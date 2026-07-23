@@ -435,7 +435,7 @@ func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, 
 	if err != nil {
 		return nil, err
 	}
-	summary.ViewportQuerySupported = capability.Supported
+	summary.ViewportQuerySupported = capability.RTreeAvailable || capability.FallbackAvailable
 	summary.RTreeAvailable = capability.RTreeAvailable
 	summary.QueryDiagnosticReason = string(capability.DiagnosticReason)
 	return summary, nil
@@ -501,10 +501,10 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 			RequiredIDs: request.RequiredIDs,
 		})
 		if queryErr != nil {
-			reason, ok := udbxerrors.SpatialQueryReasonOf(queryErr)
-			if !ok || reason != types.SpatialQueryReasonEnvelopeCacheBudgetExceeded {
+			if !viewerCanUseBoundedFallback(queryErr) {
 				return nil, queryErr
 			}
+			reason, _ := udbxerrors.SpatialQueryReasonOf(queryErr)
 			features, hasMore, err = a.loadBoundedPreviewFeatures(
 				queryContext,
 				ds,
@@ -825,6 +825,15 @@ func mapViewerPreviewError(ctx context.Context, err error) error {
 	return err
 }
 
+func viewerCanUseBoundedFallback(err error) bool {
+	reason, ok := udbxerrors.SpatialQueryReasonOf(err)
+	if !ok {
+		return false
+	}
+	return reason == types.SpatialQueryReasonEnvelopeCacheBudgetExceeded ||
+		reason == types.SpatialQueryReasonSpatialIndexUnavailable
+}
+
 func newViewerSpatialError(reason types.SpatialQueryReason, cause error) error {
 	spatialErr, err := udbx4go.NewSpatialQueryError(reason, cause)
 	if err != nil {
@@ -866,9 +875,11 @@ func supportsViewportSpatialQuery(kind types.DatasetKind) bool {
 	case types.DatasetKindPoint,
 		types.DatasetKindLine,
 		types.DatasetKindRegion,
+		types.DatasetKindText,
 		types.DatasetKindPointZ,
 		types.DatasetKindLineZ,
-		types.DatasetKindRegionZ:
+		types.DatasetKindRegionZ,
+		types.DatasetKindCAD:
 		return true
 	default:
 		return false

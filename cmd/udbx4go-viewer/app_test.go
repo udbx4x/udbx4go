@@ -772,41 +772,147 @@ func TestViewerSpatialBoundedPreviewPreservesMinimumFeatureLimit(t *testing.T) {
 	}
 }
 
-func TestViewerSpatialReasonTextAndCADIgnoreViewportQuery(t *testing.T) {
+func TestViewerSpatialReasonTextAndCADUseViewportQueryCapability(t *testing.T) {
 	app := NewApp()
 	if _, err := app.OpenUDBXFile(sampleDataPath(t)); err != nil {
 		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
 	}
 
-	invalidViewport := &BoundingBoxDTO{MinX: 10, MinY: 10, MaxX: -10, MaxY: -10}
 	for _, datasetName := range []string{"County_T", "CADDT"} {
 		t.Run(datasetName, func(t *testing.T) {
 			summary, err := app.GetDatasetSpatialSummary(datasetName)
 			if err != nil {
 				t.Fatalf("GetDatasetSpatialSummary(%s) error = %v", datasetName, err)
 			}
-			if !summary.PreviewSupported || summary.ViewportQuerySupported || summary.RTreeAvailable {
+			if !summary.PreviewSupported || !summary.ViewportQuerySupported || summary.Extent == nil {
 				t.Fatalf("summary(%s) = %+v", datasetName, summary)
 			}
-			if summary.QueryDiagnosticReason != string(types.SpatialQueryReasonUnsupportedDatasetKind) {
-				t.Fatalf("QueryDiagnosticReason = %q, want unsupported_dataset_kind", summary.QueryDiagnosticReason)
+
+			dataSource, _, queryContext, release, err := app.acquireDataSource()
+			if err != nil {
+				t.Fatalf("acquireDataSource() error = %v", err)
+			}
+			capability, err := dataSource.GetSpatialQueryCapability(queryContext, datasetName)
+			release()
+			if err != nil {
+				t.Fatalf("GetSpatialQueryCapability(%s) error = %v", datasetName, err)
+			}
+			if summary.RTreeAvailable != capability.RTreeAvailable {
+				t.Fatalf("RTreeAvailable = %v, want SDK capability %v", summary.RTreeAvailable, capability.RTreeAvailable)
+			}
+			if summary.QueryDiagnosticReason != string(capability.DiagnosticReason) {
+				t.Fatalf("QueryDiagnosticReason = %q, want SDK reason %q", summary.QueryDiagnosticReason, capability.DiagnosticReason)
 			}
 
 			preview, err := app.LoadSpatialPreview(datasetName, SpatialPreviewRequestDTO{
-				Viewport: invalidViewport,
+				Viewport: summary.Extent,
 				Limit:    100,
 			})
 			if err != nil {
 				t.Fatalf("LoadSpatialPreview(%s) error = %v", datasetName, err)
 			}
-			if preview.QueriedBounds != nil {
-				t.Fatalf("QueriedBounds = %+v, want nil for ignored viewport", preview.QueriedBounds)
+			if len(preview.Features) == 0 {
+				t.Fatalf("LoadSpatialPreview(%s) returned no features", datasetName)
 			}
-			if preview.Strategy != "bounded_sample" {
-				t.Fatalf("Strategy = %q, want bounded_sample", preview.Strategy)
+			if preview.QueriedBounds == nil || *preview.QueriedBounds != *summary.Extent {
+				t.Fatalf("QueriedBounds = %+v, want summary extent %+v", preview.QueriedBounds, summary.Extent)
 			}
-			if preview.DegradedReason != string(types.SpatialQueryReasonUnsupportedDatasetKind) {
-				t.Fatalf("DegradedReason = %q, want unsupported_dataset_kind", preview.DegradedReason)
+			if preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) {
+				t.Fatalf("Strategy = %q, want envelope_cache", preview.Strategy)
+			}
+			if preview.DegradedReason != "" {
+				t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
+			}
+		})
+	}
+}
+
+func TestViewerSpatialReasonLegacyCADUsesBoundedFallbackWhenIndexUnavailable(t *testing.T) {
+	path := createViewerLegacyCADFixture(t, 150)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	summary, err := app.GetDatasetSpatialSummary("CADDT")
+	if err != nil {
+		t.Fatalf("GetDatasetSpatialSummary(CADDT) error = %v", err)
+	}
+	if summary.Extent == nil || summary.ViewportQuerySupported || summary.RTreeAvailable {
+		t.Fatalf("summary(CADDT) = %+v", summary)
+	}
+	if summary.QueryDiagnosticReason != string(types.SpatialQueryReasonSpatialIndexUnavailable) {
+		t.Fatalf("QueryDiagnosticReason = %q, want spatial_index_unavailable", summary.QueryDiagnosticReason)
+	}
+
+	preview, err := app.LoadSpatialPreview("CADDT", SpatialPreviewRequestDTO{
+		Viewport: summary.Extent,
+		Limit:    100,
+	})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview(CADDT) error = %v", err)
+	}
+	if len(preview.Features) == 0 || len(preview.Features) > 100 {
+		t.Fatalf("len(Features) = %d, want bounded result in [1, 100]", len(preview.Features))
+	}
+	if !preview.HasMore {
+		t.Fatal("HasMore = false, want true for fixture larger than the fallback limit")
+	}
+	if preview.Strategy != spatialPreviewStrategyBoundedSample {
+		t.Fatalf("Strategy = %q, want bounded_sample", preview.Strategy)
+	}
+	if preview.DegradedReason != string(types.SpatialQueryReasonSpatialIndexUnavailable) {
+		t.Fatalf("DegradedReason = %q, want spatial_index_unavailable", preview.DegradedReason)
+	}
+	if preview.QueriedBounds == nil || *preview.QueriedBounds != *summary.Extent {
+		t.Fatalf("QueriedBounds = %+v, want summary extent %+v", preview.QueriedBounds, summary.Extent)
+	}
+}
+
+func TestViewerSpatialReasonBoundedFallbackWhitelist(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "envelope cache budget exceeded",
+			err: newViewerSpatialError(
+				types.SpatialQueryReasonEnvelopeCacheBudgetExceeded,
+				stderrors.New("cache budget exceeded"),
+			),
+			want: true,
+		},
+		{
+			name: "spatial index unavailable",
+			err: newViewerSpatialError(
+				types.SpatialQueryReasonSpatialIndexUnavailable,
+				stderrors.New("index unavailable"),
+			),
+			want: true,
+		},
+		{
+			name: "corrupt geometry",
+			err: newViewerSpatialError(
+				types.SpatialQueryReasonCorruptGeometry,
+				stderrors.New("corrupt geometry"),
+			),
+		},
+		{
+			name: "query timeout",
+			err: newViewerSpatialError(
+				types.SpatialQueryReasonQueryTimeout,
+				context.DeadlineExceeded,
+			),
+		},
+		{name: "context cancellation", err: context.Canceled},
+		{name: "unclassified error", err: stderrors.New("query failed")},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := viewerCanUseBoundedFallback(test.err); got != test.want {
+				t.Fatalf("viewerCanUseBoundedFallback() = %v, want %v", got, test.want)
 			}
 		})
 	}
@@ -899,11 +1005,11 @@ func TestViewerSpatialLifecycleFileSwitchCancelsAndWaitsForRealPreview(t *testin
 		},
 		{name: "text bounded preview", path: samplePath, datasetName: "County_T"},
 		{
-			name:        "cad bounded preview",
+			name:        "cad viewport preview",
 			path:        samplePath,
 			datasetName: "CADDT",
 			request: SpatialPreviewRequestDTO{
-				Viewport: &BoundingBoxDTO{MinX: 10, MinY: 10, MaxX: -10, MaxY: -10},
+				Viewport: &BoundingBoxDTO{MinX: -180, MinY: -90, MaxX: 180, MaxY: 90},
 			},
 		},
 	}
@@ -1383,6 +1489,69 @@ func copySampleDataFixture(t *testing.T) string {
 	path := filepath.Join(t.TempDir(), "SampleData.udbx")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("copy sample fixture: %v", err)
+	}
+	return path
+}
+
+func createViewerLegacyCADFixture(t *testing.T, duplicateCount int) string {
+	t.Helper()
+	path := copySampleDataFixture(t)
+	db := openViewerFixtureDB(t, path)
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'CADDT'`)
+	if err != nil {
+		t.Fatalf("list CAD fixture triggers: %v", err)
+	}
+	var triggerNames []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			t.Fatalf("scan CAD fixture trigger: %v", err)
+		}
+		triggerNames = append(triggerNames, name)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatalf("close CAD fixture trigger rows: %v", err)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate CAD fixture triggers: %v", err)
+	}
+	for _, name := range triggerNames {
+		if _, err := db.Exec(fmt.Sprintf(`DROP TRIGGER %q`, name)); err != nil {
+			t.Fatalf("drop CAD fixture trigger %s: %v", name, err)
+		}
+	}
+	for _, column := range []string{"SmIndexKey", "SmGeoType"} {
+		if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE CADDT DROP COLUMN %q`, column)); err != nil {
+			t.Fatalf("drop CAD fixture column %s: %v", column, err)
+		}
+	}
+
+	if duplicateCount > 0 {
+		var maxID int
+		if err := db.QueryRow(`SELECT MAX(SmID) FROM CADDT`).Scan(&maxID); err != nil {
+			t.Fatalf("read CAD fixture max ID: %v", err)
+		}
+		if _, err := db.Exec(`
+			WITH RECURSIVE seq(n) AS (
+				VALUES(1)
+				UNION ALL
+				SELECT n + 1 FROM seq WHERE n < ?
+			), seed AS (
+				SELECT SmUserID, SmGeometry FROM CADDT ORDER BY SmID LIMIT 1
+			)
+			INSERT INTO CADDT (SmID, SmUserID, SmGeometry)
+			SELECT ? + seq.n, seed.SmUserID, seed.SmGeometry FROM seq CROSS JOIN seed`, duplicateCount, maxID); err != nil {
+			t.Fatalf("expand legacy CAD fixture: %v", err)
+		}
+	}
+	if _, err := db.Exec(`
+		UPDATE SmRegister
+		SET SmObjectCount = (SELECT COUNT(*) FROM CADDT)
+		WHERE SmDatasetName = 'CADDT'`); err != nil {
+		t.Fatalf("update legacy CAD fixture object count: %v", err)
 	}
 	return path
 }
