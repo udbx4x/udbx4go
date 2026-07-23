@@ -106,6 +106,7 @@ export class ViewportQueryCoordinator {
       })
 
     this.debouncedViewport = { bounds, layers: scheduledLayers, fileGeneration }
+    this.pendingPeak = Math.max(this.pendingPeak, this.pendingCount())
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer)
     }
@@ -228,12 +229,26 @@ export class ViewportQueryCoordinator {
   }
 
   private pendingCount(): number {
-    let count = this.readyQueue.length
+    let count = 0
     this.layerStates.forEach((state) => {
-      if (state.pending && !this.queuedLayers.has(state.pending.datasetName)) {
+      if (state.pending && this.canStart(state, state.pending)) {
         count += 1
       }
     })
+
+    const scheduled = this.debouncedViewport
+    if (scheduled && this.dependencies.getFileGeneration() === scheduled.fileGeneration) {
+      scheduled.layers.forEach((layer) => {
+        const state = this.layerStates.get(layer.datasetName)
+        if (
+          state &&
+          state.nextVersion === layer.version &&
+          this.dependencies.getLayer(layer.datasetName)?.visible
+        ) {
+          count += 1
+        }
+      })
+    }
     return count
   }
 

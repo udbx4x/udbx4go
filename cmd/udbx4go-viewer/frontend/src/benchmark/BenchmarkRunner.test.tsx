@@ -409,6 +409,47 @@ describe('BenchmarkRunner', () => {
     expect(probeError).toEqual(new Error('benchmark runner unmounted'))
   })
 
+  it('等待协调器 idle 时不会越过 debounce 中尚未发布的视口查询', async () => {
+    const adapter = createAdapter()
+    const response = createDeferred<main.SpatialPreviewDTO>()
+    vi.mocked(LoadSpatialPreview).mockClear()
+    vi.mocked(LoadSpatialPreview).mockImplementationOnce(() => response.promise)
+    let idleResolved = false
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      dependencies.setLayer(queryablePointLayer())
+      const viewportStep = dependencies.runViewportStep(config.scenario.viewportSteps[0], [])
+      await dependencies.waitForCoordinatorIdle?.()
+      idleResolved = true
+      await viewportStep
+      return passedResult
+    })
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={() => adapter}
+        runScenario={runScenario}
+        saveResult={saveResult}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(idleResolved).toBe(false)
+    expect(LoadSpatialPreview).not.toHaveBeenCalled()
+
+    await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledOnce())
+    expect(idleResolved).toBe(false)
+    const request = vi.mocked(LoadSpatialPreview).mock.calls[0][1]
+    response.resolve(spatialPreview(request.viewport!, 9))
+
+    await waitFor(() => expect(saveResult).toHaveBeenCalledWith(passedResult))
+    expect(idleResolved).toBe(true)
+  })
+
   it('并发为 1 时等待所有可查询空间层完成本轮请求范围', async () => {
     const adapter = createAdapter()
     const first = createDeferred<main.SpatialPreviewDTO>()
