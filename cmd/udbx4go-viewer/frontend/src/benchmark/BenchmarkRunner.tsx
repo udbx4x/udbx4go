@@ -16,6 +16,7 @@ import {
   ViewportQueryCoordinator,
 } from '../spatial/ViewportQueryCoordinator'
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
+import { isDegradedSpatialPreview } from '../spatial/spatialPreviewDegradation'
 import { runBenchmarkScenario as defaultRunBenchmarkScenario } from './runBenchmarkScenario'
 import type {
   BenchmarkConfig,
@@ -246,7 +247,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
           publishLayer({
             ...layer,
             preview,
-            queryStatus: preview.degradedReason ? 'degraded' : 'ready',
+            queryStatus: isDegradedSpatialPreview(preview) ? 'degraded' : 'ready',
             queryError: null,
             lastQueriedBounds: preview.queriedBounds,
           })
@@ -327,7 +328,13 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         for (const datasetName of step.showLayers ?? []) {
           const layer = layerStates.get(datasetName)
           if (layer) {
-            publishLayer({ ...layer, visible: true, queryStatus: layer.preview ? 'ready' : 'idle' })
+            publishLayer({
+              ...layer,
+              visible: true,
+              queryStatus: layer.preview
+                ? (isDegradedSpatialPreview(layer.preview) ? 'degraded' : 'ready')
+                : 'idle',
+            })
             adapter.setLayerVisible(datasetName, true)
           }
         }

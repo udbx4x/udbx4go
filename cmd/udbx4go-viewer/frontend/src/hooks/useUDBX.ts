@@ -13,6 +13,7 @@ import {
 import { main } from '../../wailsjs/go/models'
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
 import { isLocatableFeature, isValidBounds } from '../spatial/featureLocation'
+import { isDegradedSpatialPreview } from '../spatial/spatialPreviewDegradation'
 import {
   ViewportQueryCoordinator,
   type ViewportQueryJob,
@@ -55,6 +56,7 @@ export function useUDBX(options: UseUDBXOptions) {
   const activeTableRequestIDRef = useRef<number | null>(null)
   const fileGenerationRef = useRef(0)
   const lastViewportRef = useRef<BoundingBox | null>(null)
+  const layerLoadTokensRef = useRef(new Map<string, symbol>())
   const optionsRef = useRef(options)
 
   optionsRef.current = options
@@ -90,7 +92,7 @@ export function useUDBX(options: UseUDBXOptions) {
             ? {
                 ...layer,
                 preview: nextPreview,
-                queryStatus: isDegradedViewportPreview(nextPreview) ? 'degraded' : 'ready',
+                queryStatus: isDegradedSpatialPreview(nextPreview) ? 'degraded' : 'ready',
                 queryError: null,
                 lastQueriedBounds: nextPreview.queriedBounds,
               }
@@ -130,6 +132,7 @@ export function useUDBX(options: UseUDBXOptions) {
 
   const resetFileState = useCallback((fileGeneration?: number) => {
     coordinatorRef.current?.invalidateAll()
+    layerLoadTokensRef.current.clear()
     fileGenerationRef.current = fileGeneration ?? fileGenerationRef.current + 1
     setSelectedDataset(null)
     setActiveTableDataset(null)
@@ -211,10 +214,15 @@ export function useUDBX(options: UseUDBXOptions) {
     if (mapLayersRef.current.some((layer) => layer.datasetName === datasetName)) {
       return
     }
+    const loadToken = Symbol(datasetName)
+    layerLoadTokensRef.current.set(datasetName, loadToken)
     setMapLayers((layers) => [...layers, createPendingLayer(datasetName)])
 
     try {
       const summary: SpatialSummary = await GetDatasetSpatialSummary(datasetName)
+      if (!isCurrentLayerLoad(layerLoadTokensRef.current, datasetName, loadToken)) {
+        return
+      }
       if (!summary.previewSupported) {
         setMapLayers((layers) => layers.map((layer) => layer.datasetName === datasetName
           ? {
@@ -250,6 +258,9 @@ export function useUDBX(options: UseUDBXOptions) {
       }
 
       const preview = await loadBoundedPreview(datasetName, optionsRef.current)
+      if (!isCurrentLayerLoad(layerLoadTokensRef.current, datasetName, loadToken)) {
+        return
+      }
       setMapLayers((layers) => layers.map((layer) => layer.datasetName === datasetName
         ? {
             ...layer,
@@ -260,6 +271,9 @@ export function useUDBX(options: UseUDBXOptions) {
         : layer,
       ))
     } catch (err) {
+      if (!isCurrentLayerLoad(layerLoadTokensRef.current, datasetName, loadToken)) {
+        return
+      }
       setMapLayers((layers) => layers.map((layer) => layer.datasetName === datasetName
         ? { ...layer, loading: false, error: errorMessage(err, '加载空间图层失败') }
         : layer,
@@ -310,6 +324,7 @@ export function useUDBX(options: UseUDBXOptions) {
 
   const removeMapLayer = useCallback((datasetName: string) => {
     coordinatorRef.current?.invalidateLayer(datasetName)
+    layerLoadTokensRef.current.delete(datasetName)
     setMapLayers((layers) => layers.filter((layer) => layer.datasetName !== datasetName))
     if (selectedMapFeatureRef.current?.datasetName === datasetName) {
       setSelectedMapFeature(null)
@@ -455,18 +470,19 @@ function selectionRequestMatches(
   return requestToken === currentToken && selectionMatches(selection, datasetName, featureID)
 }
 
-function isDegradedViewportPreview(preview: SpatialPreview): boolean {
-  return preview.strategy === 'bounded_sample' && (
-    preview.degradedReason === 'envelope_cache_budget_exceeded' ||
-    preview.degradedReason === 'spatial_index_unavailable'
-  )
-}
-
 function stableQueryStatus(preview: SpatialPreview | null): MapLayerState['queryStatus'] {
   if (!preview) {
     return 'idle'
   }
-  return isDegradedViewportPreview(preview) ? 'degraded' : 'ready'
+  return isDegradedSpatialPreview(preview) ? 'degraded' : 'ready'
+}
+
+function isCurrentLayerLoad(
+  tokens: Map<string, symbol>,
+  datasetName: string,
+  token: symbol,
+): boolean {
+  return tokens.get(datasetName) === token
 }
 
 function withViewportFeatureCount(preview: SpatialPreview): SpatialPreview {

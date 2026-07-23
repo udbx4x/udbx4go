@@ -155,6 +155,63 @@ describe('LayerPanel', () => {
     expect(screen.getByText('bounded_sample · 0 ms · 要素 0 · 顶点 50000')).toBeInTheDocument()
   })
 
+  it('loading 优先于旧 hasMore 和 sampled，完成后恢复 degraded 与采样提示', () => {
+    const loadingLayer: MapLayerState = {
+      ...mapLayerFixtures[0],
+      queryStatus: 'loading',
+      preview: createSpatialPreviewFixture({
+        strategy: 'bounded_sample',
+        hasMore: true,
+        sampled: true,
+        sampleReason: '旧采样原因',
+      }),
+    }
+    const { rerender } = renderLayerPanel({ layers: [loadingLayer], showPreviewStats: true })
+
+    expect(screen.getByText('加载当前范围')).toBeInTheDocument()
+    expect(screen.queryByText(/当前范围 .*\+ 个对象/)).not.toBeInTheDocument()
+    expect(screen.queryByText('旧采样原因')).not.toBeInTheDocument()
+    expect(screen.queryByText(/bounded_sample ·/)).not.toBeInTheDocument()
+
+    const completedLayer: MapLayerState = {
+      ...loadingLayer,
+      queryStatus: 'degraded',
+      preview: {
+        ...createDegradedSpatialPreviewFixture('spatial_index_unavailable'),
+        sampled: true,
+        sampleReason: '新采样原因',
+      },
+    }
+    rerender(
+      <ThemeProvider theme={viewerTheme}>
+        <LayerPanel
+          layers={[completedLayer]}
+          showPreviewStats
+          onVisibleChange={vi.fn()}
+          onRemoveLayer={vi.fn()}
+        />
+      </ThemeProvider>,
+    )
+
+    expect(screen.getByText('范围索引不可用，显示有界预览')).toBeInTheDocument()
+    expect(screen.getByText('新采样原因')).toBeInTheDocument()
+    expect(screen.getByText(/bounded_sample ·/)).toBeInTheDocument()
+  })
+
+  it('error 优先于旧 sampled 并隐藏旧预览辅助提示', () => {
+    const layer: MapLayerState = {
+      ...sampledMapLayerFixture,
+      queryStatus: 'error',
+      queryError: '当前请求失败',
+    }
+
+    renderLayerPanel({ layers: [layer], showPreviewStats: true })
+
+    expect(screen.getByText('当前请求失败')).toBeInTheDocument()
+    expect(screen.queryByText('预览达到要素上限')).not.toBeInTheDocument()
+    expect(screen.queryByText(/bounded_sample ·/)).not.toBeInTheDocument()
+  })
+
   it.each([
     ['error', 'backend details'],
     ['degraded', '范围索引不可用，显示有界预览'],

@@ -7,13 +7,7 @@ import type {
   SelectedMapFeature,
   SpatialPreview,
 } from '../types'
-
-export const spatialPreviewDegradedReasons = [
-  'envelope_cache_budget_exceeded',
-  'spatial_index_unavailable',
-] as const
-
-export type SpatialPreviewDegradedReason = typeof spatialPreviewDegradedReasons[number]
+import type { SpatialPreviewDegradedReason } from '../spatial/spatialPreviewDegradation'
 
 export function createSpatialPreviewFixture(
   overrides: Partial<SpatialPreview> = {},

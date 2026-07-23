@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createSpatialPreviewFixture } from '../test/fixtures'
 import { runBenchmarkScenario } from './runBenchmarkScenario'
 import type { BenchmarkConfig, BenchmarkDependencies } from './types'
 
@@ -149,6 +150,34 @@ function setMeasuredStepStrategies(
 }
 
 describe('runBenchmarkScenario', () => {
+  it('未知 preview reason 不把初始有界图层标记为 degraded', async () => {
+    const dependencies = createDependencies([])
+    const setLayer = vi.fn()
+    dependencies.getSpatialSummary = async (datasetName) => ({
+      datasetName,
+      kind: 'region',
+      objectCount: 1,
+      estimatedVertexCount: 1,
+      previewSupported: true,
+      viewportQuerySupported: false,
+      rtreeAvailable: false,
+    })
+    dependencies.loadSpatialPreview = async (datasetName) => createSpatialPreviewFixture({
+      datasetName,
+      kind: 'region',
+      strategy: 'bounded_sample',
+      degradedReason: 'future_backend_reason',
+    })
+    dependencies.setLayer = setLayer
+
+    await runBenchmarkScenario(config, dependencies)
+
+    expect(setLayer).toHaveBeenCalledWith(expect.objectContaining({
+      queryStatus: 'idle',
+      preview: expect.objectContaining({ degradedReason: 'future_backend_reason' }),
+    }))
+  })
+
   it('stale probe 拒绝只有一个 viewport step 的场景且不启动副作用', async () => {
     const calls: string[] = []
     const singleStepConfig: BenchmarkConfig = {

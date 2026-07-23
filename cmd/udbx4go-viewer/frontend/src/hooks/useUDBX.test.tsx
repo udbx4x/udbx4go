@@ -4,8 +4,8 @@ import type { BoundingBox, SpatialPreview } from '../types'
 import {
   createDegradedSpatialPreviewFixture,
   createSpatialPreviewFixture,
-  spatialPreviewDegradedReasons,
 } from '../test/fixtures'
+import { spatialPreviewDegradedReasons } from '../spatial/spatialPreviewDegradation'
 import { useUDBX } from './useUDBX'
 
 const mocks = vi.hoisted(() => ({
@@ -226,6 +226,108 @@ describe('useUDBX viewport spatial previews', () => {
 
     expect(result.current.mapLayers[0].error).toBe('cad decode failed')
   })
+
+  it('旧 summary 晚于新同名图层完成时不再启动旧有界预览', async () => {
+    const oldSummary = createDeferred<ReturnType<typeof boundedSummary>>()
+    const newPreview = preview({ datasetName: 'CADDT', kind: 'cad', sampleReason: 'new layer' })
+    mocks.GetDatasetSpatialSummary
+      .mockImplementationOnce(() => oldSummary.promise)
+      .mockResolvedValueOnce(boundedSummary())
+    mocks.LoadSpatialPreview.mockResolvedValue(newPreview)
+    const { result } = renderViewerHook()
+
+    let oldAdd!: Promise<void>
+    act(() => {
+      oldAdd = result.current.addDatasetToMap('CADDT')
+    })
+    await act(flushPromises)
+    expect(mocks.LoadSpatialPreview).not.toHaveBeenCalled()
+
+    act(() => result.current.removeMapLayer('CADDT'))
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+    expect(result.current.mapLayers[0].preview).toBe(newPreview)
+
+    oldSummary.resolve(boundedSummary())
+    await act(async () => oldAdd)
+
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledTimes(1)
+    expect(result.current.mapLayers[0].preview).toBe(newPreview)
+  })
+
+  it.each(['close', 'switch'] as const)(
+    '%s 文件后旧 summary 不再启动有界预览',
+    async (action) => {
+      const oldSummary = createDeferred<ReturnType<typeof boundedSummary>>()
+      mocks.GetDatasetSpatialSummary.mockImplementationOnce(() => oldSummary.promise)
+      const { result } = renderViewerHook()
+
+      let oldAdd!: Promise<void>
+      act(() => {
+        oldAdd = result.current.addDatasetToMap('CADDT')
+      })
+      await act(flushPromises)
+
+      if (action === 'close') {
+        await act(async () => result.current.closeFile())
+      } else {
+        mocks.OpenFileDialog.mockResolvedValue('/tmp/next.udbx')
+        mocks.OpenUDBXFile.mockResolvedValue({
+          path: '/tmp/next.udbx',
+          datasetCount: 0,
+          fileGeneration: 2,
+        })
+        await act(async () => result.current.openFileDialog())
+      }
+
+      oldSummary.resolve(boundedSummary())
+      await act(async () => oldAdd)
+
+      expect(mocks.LoadSpatialPreview).not.toHaveBeenCalled()
+      expect(result.current.mapLayers).toEqual([])
+    },
+  )
+
+  it.each(['resolve', 'reject'] as const)(
+    '移除并重加同名图层后旧有界预览 %s 不污染新图层',
+    async (outcome) => {
+      const oldPreviewRequest = createDeferred<SpatialPreview>()
+      const oldPreview = preview({ datasetName: 'CADDT', kind: 'cad', sampleReason: 'old layer' })
+      const newPreview = preview({ datasetName: 'CADDT', kind: 'cad', sampleReason: 'new layer' })
+      mocks.GetDatasetSpatialSummary.mockResolvedValue(boundedSummary())
+      mocks.LoadSpatialPreview
+        .mockImplementationOnce(() => oldPreviewRequest.promise)
+        .mockResolvedValueOnce(newPreview)
+      const { result } = renderViewerHook()
+
+      let oldAdd!: Promise<void>
+      act(() => {
+        oldAdd = result.current.addDatasetToMap('CADDT')
+      })
+      await act(flushPromises)
+      expect(mocks.LoadSpatialPreview).toHaveBeenCalledTimes(1)
+
+      act(() => result.current.removeMapLayer('CADDT'))
+      await act(async () => result.current.addDatasetToMap('CADDT'))
+      expect(result.current.mapLayers[0]).toMatchObject({
+        error: null,
+        queryStatus: 'ready',
+      })
+      expect(result.current.mapLayers[0].preview).toBe(newPreview)
+
+      if (outcome === 'resolve') {
+        oldPreviewRequest.resolve(oldPreview)
+      } else {
+        oldPreviewRequest.reject('stale bounded preview failed')
+      }
+      await act(async () => oldAdd)
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        error: null,
+        queryStatus: 'ready',
+      })
+      expect(result.current.mapLayers[0].preview).toBe(newPreview)
+    },
+  )
 
   it.each(spatialPreviewDegradedReasons)(
     '非视口图层返回 %s 时标记为降级并保留原因',
@@ -813,6 +915,15 @@ function vectorSummary() {
     previewSupported: true,
     viewportQuerySupported: true,
     rtreeAvailable: true,
+  }
+}
+
+function boundedSummary() {
+  return {
+    ...vectorSummary(),
+    datasetName: 'CADDT',
+    kind: 'cad',
+    viewportQuerySupported: false,
   }
 }
 

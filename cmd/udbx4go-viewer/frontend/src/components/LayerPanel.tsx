@@ -19,6 +19,10 @@ import {
   Tune as TuneIcon,
   WarningAmber as WarningAmberIcon,
 } from '@mui/icons-material'
+import {
+  isDegradedSpatialPreview,
+  spatialPreviewDegradedStatusMessages,
+} from '../spatial/spatialPreviewDegradation'
 import type { MapLayerState } from '../types'
 
 interface LayerPanelProps {
@@ -44,6 +48,12 @@ function getLayerStatus(layer: MapLayerState): string {
   if (layer.error || layer.queryStatus === 'error') {
     return layer.error || layer.queryError || '当前范围加载失败'
   }
+  if (layer.queryStatus === 'loading') {
+    return '加载当前范围'
+  }
+  if (layer.loading) {
+    return '加载中'
+  }
   const degradedStatus = getDegradedStatus(layer)
   if (degradedStatus) {
     return degradedStatus
@@ -51,29 +61,25 @@ function getLayerStatus(layer: MapLayerState): string {
   if (layer.preview?.hasMore) {
     return `当前范围 ${layer.preview.viewportFeatureCount ?? layer.preview.features.length}+ 个对象，请继续放大`
   }
-  if (layer.queryStatus === 'loading') {
-    return '加载当前范围'
-  }
-  if (layer.loading) {
-    return '加载中'
-  }
-
   return `${layer.kind} · ${layer.preview?.features.length ?? 0} 个预览要素`
 }
 
 function getDegradedStatus(layer: MapLayerState): string | null {
-  if (layer.queryStatus !== 'degraded' || layer.preview?.strategy !== 'bounded_sample') {
+  if (
+    layer.queryStatus !== 'degraded' ||
+    !layer.preview ||
+    !isDegradedSpatialPreview(layer.preview)
+  ) {
     return null
   }
+  return spatialPreviewDegradedStatusMessages[layer.preview.degradedReason]
+}
 
-  switch (layer.preview.degradedReason) {
-    case 'envelope_cache_budget_exceeded':
-      return '缓存预算不足，显示有界预览'
-    case 'spatial_index_unavailable':
-      return '范围索引不可用，显示有界预览'
-    default:
-      return null
-  }
+function shouldShowPreviewDetails(layer: MapLayerState): boolean {
+  return !layer.error &&
+    !layer.loading &&
+    layer.queryStatus !== 'loading' &&
+    layer.queryStatus !== 'error'
 }
 
 export const LayerPanel: React.FC<LayerPanelProps> = ({
@@ -183,7 +189,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                     >
                       {getLayerStatus(layer)}
                     </Typography>
-                    {layer.preview?.sampled && (
+                    {shouldShowPreviewDetails(layer) && layer.preview?.sampled && (
                       <Stack direction="row" spacing={0.5} sx={{ mt: 0.5, alignItems: 'center' }}>
                         <WarningAmberIcon fontSize="inherit" color="warning" />
                         <Typography variant="caption" color="warning.main">
@@ -191,7 +197,7 @@ export const LayerPanel: React.FC<LayerPanelProps> = ({
                         </Typography>
                       </Stack>
                     )}
-                    {showPreviewStats && layer.preview && (
+                    {shouldShowPreviewDetails(layer) && showPreviewStats && layer.preview && (
                       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
                         {formatPreviewStats(layer)}
                       </Typography>
@@ -241,7 +247,7 @@ function formatPreviewStats(layer: MapLayerState): string {
     `要素 ${preview.features.length}`,
     `顶点 ${preview.estimatedVertexCount}`,
   ]
-  if (preview.degradedReason) {
+  if (isDegradedSpatialPreview(preview)) {
     parts.push(preview.degradedReason)
   }
   return parts.join(' · ')

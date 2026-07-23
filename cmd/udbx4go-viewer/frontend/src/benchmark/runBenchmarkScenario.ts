@@ -1,5 +1,6 @@
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
 import { featureGeometryKind, isValidBounds } from '../spatial/featureLocation'
+import { isDegradedSpatialPreview } from '../spatial/spatialPreviewDegradation'
 import type { BoundingBox, MapLayerState } from '../types'
 import type { BenchmarkConfig, BenchmarkDependencies, BenchmarkResult } from './types'
 
@@ -53,7 +54,7 @@ export async function runBenchmarkScenario(
       error: null,
       summary,
       preview,
-      queryStatus: preview?.degradedReason ? 'degraded' : 'idle',
+      queryStatus: preview && isDegradedSpatialPreview(preview) ? 'degraded' : 'idle',
       queryError: null,
     }
     dependencies.setLayer(layer)
