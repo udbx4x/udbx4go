@@ -689,17 +689,37 @@ func TestDataSourceCadSpatialQueryAfterReopen(t *testing.T) {
 		{Name: "name", FieldType: types.FieldTypeText, Nullable: true},
 	})
 	require.NoError(t, err)
+
+	// CreateCadDataset currently has no SRID parameter. Configure the empty
+	// dataset before any feature write, then reopen so the public writer uses
+	// the persisted non-zero dataset SRID when creating SmIndexKey values.
+	_, err = ds.db.Exec("UPDATE SmRegister SET SmSRID = ? WHERE SmDatasetName = ?", 3857, cad.Info().Name)
+	require.NoError(t, err)
+	_, err = ds.db.Exec("UPDATE geometry_columns SET srid = ? WHERE lower(f_table_name) = lower(?)", 3857, cad.Info().TableName)
+	require.NoError(t, err)
+	require.NoError(t, ds.Close())
+
+	ds, err = Open(path)
+	require.NoError(t, err)
+	cad, err = ds.GetCadDataset("cad")
+	require.NoError(t, err)
+	require.NotNil(t, cad.Info().SRID)
+	assert.Equal(t, 3857, *cad.Info().SRID)
 	require.NoError(t, cad.InsertMany([]*types.Feature{
-		{ID: 1, Geometry: &types.CadPointGeometry{XCoord: 1, YCoord: 1}, Attributes: map[string]interface{}{"name": "point"}},
+		{ID: 1, Geometry: &types.CadPointGeometry{
+			XCoord: 1, YCoord: 1, BBox: []float64{0, 0, 2, 2},
+		}, Attributes: map[string]interface{}{"name": "point"}},
 		{ID: 2, Geometry: &types.CadLineGeometry{
 			NumSub: 1, SubPointCounts: []int{2}, Coordinates: [][2]float64{{10, 10}, {12, 12}},
+			BBox: []float64{9, 9, 13, 13},
 		}, Attributes: map[string]interface{}{"name": "line"}},
 		{ID: 3, Geometry: &types.CadRegionGeometry{
 			NumSub: 1, SubPointCounts: []int{5},
 			Coordinates: [][2]float64{{20, 20}, {24, 20}, {24, 24}, {20, 24}, {20, 20}},
+			BBox:        []float64{19, 19, 25, 25},
 		}, Attributes: map[string]interface{}{"name": "region"}},
 		{ID: 4, Geometry: &types.CadTextGeometry{
-			Text: "label", Anchor: []float64{41, 41}, BBox: []float64{40, 40, 42, 42},
+			Text: "label", Anchor: []float64{41, 41}, BBox: []float64{39, 39, 43, 43},
 		}, Attributes: map[string]interface{}{"name": "text"}},
 	}))
 
@@ -724,15 +744,15 @@ func TestDataSourceCadSpatialQueryAfterReopen(t *testing.T) {
 		4: &types.CadTextGeometry{},
 	}
 	expectedBBoxes := map[int][]float64{
-		1: {1, 1, 1, 1},
-		2: {10, 10, 12, 12},
-		3: {20, 20, 24, 24},
-		4: {40, 40, 42, 42},
+		1: {0, 0, 2, 2},
+		2: {9, 9, 13, 13},
+		3: {19, 19, 25, 25},
+		4: {39, 39, 43, 43},
 	}
 	for _, feature := range result.Features {
 		assert.IsType(t, expectedTypes[feature.ID], feature.Geometry)
 		assert.Equal(t, expectedBBoxes[feature.ID], feature.Geometry.GetBBox())
-		assert.Zero(t, feature.Geometry.GetSRID())
+		assert.Equal(t, 3857, feature.Geometry.GetSRID())
 	}
 }
 

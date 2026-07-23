@@ -27,18 +27,28 @@ func TestUdbx4SpecUdbx4JRoundtripDatabaseRead(t *testing.T) {
 	assertComplianceDatabaseReadable(t, udbx4SpecFixturePath(t, "compliance", "roundtrip", "udbx4j-roundtrip.udbx"))
 }
 
-func TestUdbx4SpecTextAndCadSpatialQueryContract(t *testing.T) {
+func TestUdbx4SpecReadableTextAndCadFixturesBecomeSpatiallyQueryableAfterGoWriterRoundtrip(t *testing.T) {
 	source, err := Open(udbx4SpecFixturePath(t, "compliance", "compliance.udbx"))
 	require.NoError(t, err)
 	defer source.Close()
 
 	datasetNames := []string{"test_text", "test_cad"}
 	snapshots := make(map[string]*datasetSnapshot, len(datasetNames))
-	targetPath := filepath.Join(t.TempDir(), "text-cad-spatial-contract.udbx")
+	// The source fixtures establish payload readability. test_cad predates
+	// SmGeoType, SmIndexKey, and geometry_columns spatial metadata, so it is not
+	// itself a spatial-query fixture.
+	for _, datasetName := range datasetNames {
+		snapshots[datasetName] = snapshotDataset(t, source, datasetName)
+	}
+	cadCapability, err := source.GetSpatialQueryCapability(context.Background(), "test_cad")
+	require.NoError(t, err)
+	assert.False(t, cadCapability.RTreeAvailable)
+	assert.False(t, cadCapability.FallbackAvailable)
+
+	targetPath := filepath.Join(t.TempDir(), "text-cad-writer-roundtrip-spatial-contract.udbx")
 	target, err := Create(targetPath)
 	require.NoError(t, err)
 	for _, datasetName := range datasetNames {
-		snapshots[datasetName] = snapshotDataset(t, source, datasetName)
 		copySnapshotToDataSource(t, target, snapshots[datasetName])
 	}
 	require.NoError(t, target.Close())
@@ -49,7 +59,12 @@ func TestUdbx4SpecTextAndCadSpatialQueryContract(t *testing.T) {
 
 	for _, datasetName := range datasetNames {
 		t.Run(datasetName, func(t *testing.T) {
-			expected := snapshots[datasetName].records.([]*types.Feature)
+			expectedSnapshot := snapshots[datasetName]
+			expected := expectedSnapshot.records.([]*types.Feature)
+			actualSnapshot := snapshotDataset(t, reopened, datasetName)
+			assertPayloadRecordsEquivalent(t, datasetName, expectedSnapshot.records, actualSnapshot.records)
+			assertDerivedSpatialMetadata(t, actualSnapshot.info, actualSnapshot.records.([]*types.Feature))
+
 			result, err := reopened.QuerySpatial(context.Background(), datasetName, SpatialQueryOptions{
 				Bounds: complianceFeatureBounds(t, expected),
 				Limit:  len(expected) + 1,
@@ -58,10 +73,8 @@ func TestUdbx4SpecTextAndCadSpatialQueryContract(t *testing.T) {
 			assert.Equal(t, SpatialQueryStrategyEnvelopeCache, result.Strategy)
 			assert.False(t, result.HasMore)
 			require.Len(t, result.Features, len(expected))
-			for index := range expected {
-				assert.Equal(t, expected[index].ID, result.Features[index].ID)
-				assert.Equal(t, expected[index].Geometry.GeometryType(), result.Features[index].Geometry.GeometryType())
-			}
+			assertPayloadRecordsEquivalent(t, datasetName, expected, result.Features)
+			assertDerivedSpatialMetadata(t, actualSnapshot.info, result.Features)
 		})
 	}
 }
@@ -470,8 +483,28 @@ func assertSnapshotEquivalent(t *testing.T, expected, actual *datasetSnapshot) {
 	assert.Equal(t, expected.info.ObjectCount, actual.info.ObjectCount)
 	assert.Equal(t, normalizeSRID(expected.info.SRID), normalizeSRID(actual.info.SRID))
 	assert.Equal(t, normalizeFieldsForCompare(expected.fields), normalizeFieldsForCompare(actual.fields))
-	assert.Equal(t, normalizeRecordsForCompare(expected.records), normalizeRecordsForCompare(actual.records),
-		"dataset %s records differ after roundtrip", expected.info.Name)
+	assertPayloadRecordsEquivalent(t, expected.info.Name, expected.records, actual.records)
+	if expected.info.Kind == types.DatasetKindText || expected.info.Kind == types.DatasetKindCAD {
+		assertDerivedSpatialMetadata(t, actual.info, actual.records.([]*types.Feature))
+	}
+}
+
+func assertPayloadRecordsEquivalent(t *testing.T, datasetName string, expected, actual interface{}) {
+	t.Helper()
+	assert.Equal(t, normalizePayloadRecordsForCompare(expected), normalizePayloadRecordsForCompare(actual),
+		"dataset %s payload records differ after roundtrip", datasetName)
+}
+
+func assertDerivedSpatialMetadata(t *testing.T, info *types.DatasetInfo, features []*types.Feature) {
+	t.Helper()
+	expectedSRID := normalizeSRID(info.SRID)
+	for _, feature := range features {
+		bbox := feature.Geometry.GetBBox()
+		require.Lenf(t, bbox, 4, "dataset %s feature %d must expose writer-derived bbox", info.Name, feature.ID)
+		assert.NoError(t, (types.BoundingBox{MinX: bbox[0], MinY: bbox[1], MaxX: bbox[2], MaxY: bbox[3]}).Validate())
+		assert.Equalf(t, expectedSRID, feature.Geometry.GetSRID(),
+			"dataset %s feature %d must restore dataset SRID", info.Name, feature.ID)
+	}
 }
 
 func normalizeSRID(srid *int) int {
@@ -494,14 +527,14 @@ func normalizeFieldsForCompare(fields []*types.FieldInfo) []map[string]interface
 	return normalized
 }
 
-func normalizeRecordsForCompare(records interface{}) interface{} {
+func normalizePayloadRecordsForCompare(records interface{}) interface{} {
 	switch typedRecords := records.(type) {
 	case []*types.Feature:
 		normalized := make([]map[string]interface{}, len(typedRecords))
 		for i, feature := range typedRecords {
 			normalized[i] = map[string]interface{}{
 				"id":         feature.ID,
-				"geometry":   normalizeGeometryForCompare(feature.Geometry),
+				"geometry":   normalizeGeometryPayloadForCompare(feature.Geometry),
 				"attributes": normalizedAttributes(feature.Attributes),
 			}
 		}
@@ -520,7 +553,10 @@ func normalizeRecordsForCompare(records interface{}) interface{} {
 	}
 }
 
-func normalizeGeometryForCompare(geometry types.Geometry) types.Geometry {
+// Text/CAD bbox values are derived from SmIndexKey rather than the geometry
+// payload. Payload equality intentionally excludes bbox; callers separately
+// assert writer-derived bbox validity and restored dataset SRID.
+func normalizeGeometryPayloadForCompare(geometry types.Geometry) types.Geometry {
 	switch typed := geometry.(type) {
 	case *types.TextGeometry:
 		clone := *typed
