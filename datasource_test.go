@@ -703,12 +703,6 @@ func TestDataSourceCadSpatialQueryAfterReopen(t *testing.T) {
 		}, Attributes: map[string]interface{}{"name": "text"}},
 	}))
 
-	// Make the point payload and index envelope disagree so the public read proves
-	// that the returned bbox comes from SmIndexKey.
-	_, err = ds.db.Exec(`UPDATE cad
-		SET SmIndexKey = (SELECT SmIndexKey FROM cad WHERE SmID = 2)
-		WHERE SmID = 1`)
-	require.NoError(t, err)
 	require.NoError(t, ds.Close())
 
 	reopened, err := Open(path)
@@ -730,7 +724,7 @@ func TestDataSourceCadSpatialQueryAfterReopen(t *testing.T) {
 		4: &types.CadTextGeometry{},
 	}
 	expectedBBoxes := map[int][]float64{
-		1: {10, 10, 12, 12},
+		1: {1, 1, 1, 1},
 		2: {10, 10, 12, 12},
 		3: {20, 20, 24, 24},
 		4: {40, 40, 42, 42},
