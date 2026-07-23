@@ -92,7 +92,7 @@ func (ds *DataSource) GetSpatialQueryCapability(
 ) (*SpatialQueryCapability, error)
 ```
 
-报告数据集是否支持视口查询、是否存在经过结构校验的 RTree，以及是否可以尝试内存回退路径。
+报告数据集类型是否属于视口查询契约、是否存在经过结构校验的 RTree，以及是否可以尝试内存回退路径。`Supported` 描述数据集类型是否纳入契约；调用方还必须检查执行路径标志和 `DiagnosticReason`。
 
 #### QuerySpatial
 
@@ -104,7 +104,7 @@ func (ds *DataSource) QuerySpatial(
 ) (*SpatialQueryResult, error)
 ```
 
-按视口 MBR 查询 Point、Line、Region、PointZ、LineZ 或 RegionZ 要素。完整示例和结果语义见[视口空间查询](#视口空间查询)。
+按视口 MBR 查询 Point、Line、Region、PointZ、LineZ、RegionZ、Text 或 CAD 要素。完整示例和结果语义见[视口空间查询](#视口空间查询)。
 
 #### GetDataset
 
@@ -312,7 +312,7 @@ func main() {
 | 值 | 含义 |
 |----|------|
 | `rtree` | 使用经过结构校验的 UDBX RTree 生成视口候选。 |
-| `envelope_cache` | 数据集没有可用 RTree，使用内存 GAIA 包络缓存生成候选。 |
+| `envelope_cache` | 数据集没有可用 RTree，使用内存包络缓存生成候选。 |
 
 以上是 SDK 成功结果仅有的两种策略。`SpatialQueryResult` 没有 `DegradedReason` 字段。查询错误和 capability 诊断使用以下六个稳定原因码：
 
@@ -322,12 +322,16 @@ func main() {
 | `spatial_index_unavailable` | 必需的空间元数据或可用索引路径不存在。 |
 | `envelope_cache_budget_exceeded` | 构建完整包络缓存超过当前资源策略。 |
 | `query_timeout` | context 被取消或超过截止时间。 |
-| `corrupt_geometry` | GAIA 头部或完整几何损坏。 |
+| `corrupt_geometry` | 包络或解码后的几何载荷损坏。 |
 | `unsupported_dataset_kind` | 数据集类型不在视口查询范围内。 |
+
+Text 与 CAD 使用 `SmIndexKey` 中的 GAIA 包络进行 RTree 或包络缓存候选过滤，再从 `SmGeometry` 解码每个命中的业务对象；候选过滤不会解码视口外的 Text/CAD 载荷。
 
 包络缓存只属于当前打开的一个 `DataSource`，不会写入 UDBX 文件，也不会跨进程共享；`Close` 会释放缓存。当前默认策略为单数据集 32 MiB、单个 `DataSource` 合计 64 MiB，构建超时 500 ms。预算按 PoC 拟合的稳定 RSS charge 计费：每个数据集固定约 4 MiB，再按 cache capacity 的每个 entry 约 80 bytes 计费；它不是 `unsafe.Sizeof` slice 大小，也不是对象数硬阈值。完整缓存无法准入时，`QuerySpatial` 返回原因为 `envelope_cache_budget_exceeded` 的错误，不会把非空间采样作为 SDK 成功结果返回。这些数值是基于测量的 SDK 当前资源默认值，可以随实测调整，不是 UDBX 格式限制。
 
-本版本的 Text、CAD 和 Tabular 数据集不支持 `QuerySpatial`；Text 和 CAD 继续通过有上界的 `List`/`ListContext` 预览路径读取。Wails Viewer 可以捕获缓存预算错误，或在 Text/CAD 路径生成私有的非空间 `bounded_sample` 预览。该 Viewer 预览不是 SDK `QuerySpatial` 成功结果；其 DTO 可以保留 `degradedReason` 供界面诊断。
+Text 与 CAD 在必需列和空间元数据有效时参与公共 `QuerySpatial` 契约。数据表必须具有已注册 ID、`SmIndexKey` 和 `SmGeometry` 列，CAD 还必须具有 `SmGeoType`；`geometry_columns` 必须把 `SmIndexKey` 有效注册为包络几何。缺少 `SmIndexKey` 或有效 `geometry_columns` 注册的 legacy CAD 仍是已识别的 CAD 类型，但 `GetSpatialQueryCapability` 会返回 `Supported: true`、无可用执行路径以及 `DiagnosticReason: spatial_index_unavailable`，`QuerySpatial` 则返回相同原因的错误。`List`、`ListContext` 等非空间 API 与该 capability 边界相互独立。Tabular 数据集返回 `unsupported_dataset_kind`。
+
+Wails Viewer 只在捕获 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 后生成私有的非空间 `bounded_sample` 预览。正常 Text/CAD 查询以 `rtree` 或 `envelope_cache` 成功，不进入该 Viewer fallback。`bounded_sample` 和 Viewer DTO 的 `degradedReason` 都不是 SDK `SpatialQueryResult` 字段或 SDK 成功策略。
 
 ## 数据集类型
 

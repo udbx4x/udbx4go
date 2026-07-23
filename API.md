@@ -92,7 +92,7 @@ func (ds *DataSource) GetSpatialQueryCapability(
 ) (*SpatialQueryCapability, error)
 ```
 
-Reports whether a dataset supports viewport queries, whether a verified RTree is available, and whether the in-memory fallback can be attempted.
+Reports whether a dataset kind participates in the viewport-query contract, whether a verified RTree is available, and whether the in-memory fallback can be attempted. `Supported` describes the dataset kind; callers must also inspect the execution-path flags and `DiagnosticReason`.
 
 #### QuerySpatial
 
@@ -104,7 +104,7 @@ func (ds *DataSource) QuerySpatial(
 ) (*SpatialQueryResult, error)
 ```
 
-Queries Point, Line, Region, PointZ, LineZ, or RegionZ features by viewport MBR. See [Viewport Spatial Queries](#viewport-spatial-queries) for a complete example and result semantics.
+Queries Point, Line, Region, PointZ, LineZ, RegionZ, Text, or CAD features by viewport MBR. See [Viewport Spatial Queries](#viewport-spatial-queries) for a complete example and result semantics.
 
 #### GetDataset
 
@@ -312,7 +312,7 @@ func main() {
 | Value | Meaning |
 |-------|---------|
 | `rtree` | A verified UDBX RTree produced viewport candidates. |
-| `envelope_cache` | An in-memory GAIA envelope cache produced candidates for a dataset without a usable RTree. |
+| `envelope_cache` | An in-memory envelope cache produced candidates for a dataset without a usable RTree. |
 
 These are the only successful SDK strategies. `SpatialQueryResult` has no `DegradedReason` field. Query errors and capability diagnostics use these six stable reason codes:
 
@@ -322,12 +322,16 @@ These are the only successful SDK strategies. `SpatialQueryResult` has no `Degra
 | `spatial_index_unavailable` | Required spatial metadata or a usable index path is unavailable. |
 | `envelope_cache_budget_exceeded` | Building the complete envelope cache exceeded the active resource policy. |
 | `query_timeout` | The context was canceled or its deadline expired. |
-| `corrupt_geometry` | A GAIA header or full geometry is malformed. |
+| `corrupt_geometry` | An envelope or decoded geometry payload is malformed. |
 | `unsupported_dataset_kind` | The dataset kind is outside the viewport-query scope. |
+
+Text and CAD use the GAIA envelope in `SmIndexKey` for RTree or envelope-cache candidate filtering, then decode each matched business object from `SmGeometry`. Candidate filtering does not decode offscreen Text/CAD payloads.
 
 The envelope cache belongs to one open `DataSource`. It is never written to the UDBX file or shared across processes, and `Close` releases it. The current default policy allows 32 MiB for one dataset and 64 MiB across one `DataSource`, with a 500 ms build timeout. Budgets charge an empirical stable-RSS model fitted from the PoC: roughly 4 MiB fixed per dataset plus 80 bytes per cache-capacity entry. This is neither the slice's `unsafe.Sizeof` footprint nor a hard object-count threshold. If a complete cache cannot be admitted, `QuerySpatial` returns an error whose reason is `envelope_cache_budget_exceeded`; it never returns a non-spatial sample as a successful SDK result. These values are measured SDK resource defaults and may evolve; they are not UDBX format limits.
 
-Text, CAD, and Tabular datasets do not support `QuerySpatial` in this release. Text and CAD remain available through bounded `List`/`ListContext` preview paths. The Wails Viewer may catch the cache-budget error, or use the Text/CAD path, and produce a private non-spatial `bounded_sample` preview. That Viewer preview is not an SDK `QuerySpatial` success result; its DTO may retain `degradedReason` for UI diagnostics.
+Text and CAD participate in the public `QuerySpatial` contract when their required columns and spatial metadata are valid. In particular, the dataset table must expose the registered ID, `SmIndexKey`, and `SmGeometry` columns, CAD also requires `SmGeoType`, and `geometry_columns` must validly register `SmIndexKey` as the envelope geometry. A legacy CAD dataset that lacks `SmIndexKey` or a valid `geometry_columns` registration remains a recognized CAD kind, but `GetSpatialQueryCapability` reports `Supported: true`, no available execution path, and `DiagnosticReason: spatial_index_unavailable`; `QuerySpatial` returns the same reason as an error. Non-spatial APIs such as `List` and `ListContext` remain separate from that capability boundary. Tabular datasets return `unsupported_dataset_kind`.
+
+The Wails Viewer may produce its private non-spatial `bounded_sample` preview only after catching `envelope_cache_budget_exceeded` or `spatial_index_unavailable`. A normal Text/CAD query succeeds with `rtree` or `envelope_cache` and does not enter that Viewer fallback. `bounded_sample` and the Viewer DTO's `degradedReason` are not SDK `SpatialQueryResult` fields or successful SDK strategies.
 
 ## Dataset Types
 

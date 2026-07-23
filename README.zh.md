@@ -14,7 +14,7 @@ UDBX（通用空间数据库扩展）读写库的 Go 语言实现。UDBX 是一�
 - ✅ 核心 UDBX 读写能力已实现，包含 Text / GeoText 与 CAD 最小 GeoHeader 基线。
 - ✅ 已实现数据集类型：点、线、面、三维点、三维线、三维面、属性表、文本、CAD。
 - ✅ `TextDataset` 支持最小 GeoText 读写 CRUD；`CadDataset` 支持最小 GeoHeader `GeoPoint` / `GeoLine` / `GeoRegion`。
-- ✅ Point、Line、Region 及对应 Z 类型支持带 context 的视口 MBR 查询，并提供经过校验的 RTree 和包络缓存策略。
+- ✅ Point、Line、Region、对应 Z 类型、Text 与 CAD 支持带 context 的视口 MBR 查询，并提供经过校验的 RTree 和包络缓存策略。
 - ✅ 14 种字段类型，支持正确的类型映射
 - ✅ 类 GeoJSON 几何模型
 - ✅ 流式和批量操作
@@ -93,7 +93,7 @@ result, err := ds.QuerySpatial(ctx, "weibo", udbx4go.SpatialQueryOptions{
 
 MBR 相交采用闭区间，所有普通要素都必须与请求范围 MBR 相交。`HasMore` 只描述普通视口命中对象；必含 ID 会去重，不占用 `Limit`，也是唯一可以保留在视口外的要素。SDK 成功结果的策略只有 `rtree` 或 `envelope_cache`，`SpatialQueryResult` 没有 `DegradedReason` 字段。包络缓存只在当前 `DataSource` 生命周期存在，调用 `Close` 时释放。
 
-当前单数据集 32 MiB、单个 `DataSource` 合计 64 MiB 是经过测量的缓存资源默认策略，按“每数据集约 4 MiB 固定 charge + 每 capacity entry 约 80 bytes”的稳定 RSS 模型计费，不是对象数或 UDBX 格式限制。完整缓存超出该策略时，SDK 返回 `envelope_cache_budget_exceeded` 错误。视口查询当前覆盖 Point、Line、Region、PointZ、LineZ 和 RegionZ；Text 与 CAD 保持有上界的预览/列表行为。Viewer 可以把预算错误或 Text/CAD 路径转换为私有的非空间 `bounded_sample` 预览，其 DTO 可保留 `degradedReason`；这不是 SDK 成功策略。可运行完整程序、六个原因码和 `ListContext` 取消语义见 [API.zh.md](./API.zh.md#视口空间查询)。
+当前单数据集 32 MiB、单个 `DataSource` 合计 64 MiB 是经过测量的缓存资源默认策略，按“每数据集约 4 MiB 固定 charge + 每 capacity entry 约 80 bytes”的稳定 RSS 模型计费，不是对象数或 UDBX 格式限制。完整缓存超出该策略时，SDK 返回 `envelope_cache_budget_exceeded` 错误。Text 与 CAD 使用 `SmIndexKey` 过滤包络候选，再从 `SmGeometry` 解码命中的业务对象；该路径要求存在包络列和有效空间元数据。缺少 `SmIndexKey` 或有效 `geometry_columns` 注册的 legacy CAD 不会通过非空间路径伪装成查询成功，而是报告 `spatial_index_unavailable`。Viewer 只在捕获 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 后生成私有的非空间 `bounded_sample` 预览；其 DTO 可以保留 `degradedReason`，但二者都不属于 SDK 成功结果。可运行完整程序、六个原因码和 `ListContext` 取消语义见 [API.zh.md](./API.zh.md#视口空间查询)。
 
 ### 创建新的 UDBX 文件
 
