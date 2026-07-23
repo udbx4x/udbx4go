@@ -1,6 +1,7 @@
 package dataset
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	stderrors "errors"
@@ -515,7 +516,70 @@ func TestCadDatasetValidatesStoredIndexKey(t *testing.T) {
 	assert.IsType(t, &types.CadPointGeometry{}, features[0].Geometry)
 }
 
-func TestCadDatasetRequiresStrictMetadataColumns(t *testing.T) {
+func TestCadDatasetReadsPayloadWithoutSmIndexKeyColumn(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset, record := createCadDatasetWithSRID(t, db, 3857)
+	require.NoError(t, dataset.InsertMany([]*types.Feature{
+		{
+			ID:       1,
+			Geometry: &types.CadPointGeometry{XCoord: 1, YCoord: 2},
+			Attributes: map[string]interface{}{
+				"name":  "point",
+				"level": 1,
+			},
+		},
+		{
+			ID: 2,
+			Geometry: &types.CadLineGeometry{
+				NumSub:         1,
+				SubPointCounts: []int{2},
+				Coordinates:    [][2]float64{{3, 4}, {5, 6}},
+			},
+			Attributes: map[string]interface{}{
+				"name":  "line",
+				"level": 2,
+			},
+		},
+	}))
+	_, err := db.Exec(`DROP TRIGGER cad_layers_insert_missing_geometry`)
+	require.NoError(t, err)
+	_, err = db.Exec(`ALTER TABLE cad_layers DROP COLUMN SmIndexKey`)
+	require.NoError(t, err)
+
+	feature, err := dataset.GetByID(1)
+	require.NoError(t, err)
+	point, ok := feature.Geometry.(*types.CadPointGeometry)
+	require.True(t, ok)
+	assert.Equal(t, 3857, point.SRID)
+	assert.Equal(t, []float64{1, 2, 1, 2}, point.GetBBox())
+	assert.Equal(t, "point", feature.Attributes["name"])
+
+	features, err := dataset.ListContext(context.Background(), &types.QueryOptions{IDs: []int{2}, Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, features, 1)
+	assert.Equal(t, 2, features[0].ID)
+	line, ok := features[0].Geometry.(*types.CadLineGeometry)
+	require.True(t, ok)
+	assert.Equal(t, 3857, line.SRID)
+	assert.Equal(t, []float64{3, 4, 5, 6}, line.GetBBox())
+
+	querier := NewSpatialQuerier(db, record.ToDatasetInfo(), record)
+	capability, err := querier.Capability(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, &types.SpatialQueryCapability{
+		Supported:        true,
+		DiagnosticReason: types.SpatialQueryReasonSpatialIndexUnavailable,
+	}, capability)
+	_, err = querier.Query(context.Background(), types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 10, MaxY: 10},
+		Limit:  1,
+	})
+	assertSpatialQueryError(t, err, types.SpatialQueryReasonSpatialIndexUnavailable, udbxerrors.CodeUnsupported)
+}
+
+func TestCadDatasetRequiresReliableMetadataColumns(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
@@ -538,16 +602,16 @@ func TestCadDatasetRequiresStrictMetadataColumns(t *testing.T) {
 			wantDetail: "CAD SmGeoType column is missing",
 		},
 		{
-			name:       "missing SmIndexKey",
-			columns:    []string{"SmID", "SmGeoType", "SmGeometry"},
-			values:     []interface{}{int64(1), int64(1), geometryBlob},
-			wantDetail: "CAD SmIndexKey column is missing",
-		},
-		{
 			name:       "non-integer SmGeoType",
 			columns:    []string{"SmID", "SmGeoType", "SmGeometry", "SmIndexKey"},
 			values:     []interface{}{int64(1), "1", geometryBlob, indexKey},
 			wantDetail: "CAD SmGeoType column is not an integer",
+		},
+		{
+			name:       "mismatched SmGeoType without SmIndexKey",
+			columns:    []string{"SmID", "SmGeoType", "SmGeometry"},
+			values:     []interface{}{int64(1), int64(5), geometryBlob},
+			wantDetail: "stored CAD SmGeoType 5 does not match decoded geometry type 1",
 		},
 	}
 	for _, tt := range tests {
