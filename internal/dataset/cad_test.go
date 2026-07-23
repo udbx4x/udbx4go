@@ -11,8 +11,8 @@ import (
 )
 
 func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegisterRecord) {
-	// Task 5 will make CadDataset write SmGeoType. This shared Task 4 fixture uses
-	// a test-only default so existing CRUD and malformed-row tests can still insert.
+	// Task 5 must replace this DDL with DataSource.CreateCadDataset integration
+	// coverage and remove DEFAULT 0 once CadDataset writes SmGeoType/SmIndexKey.
 	_, err := db.Exec(`
 		CREATE TABLE cad_layers (
 			SmID INTEGER PRIMARY KEY,

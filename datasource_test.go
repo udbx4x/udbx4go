@@ -196,6 +196,41 @@ func TestDataSourceCreateCadDatasetWritesWhitepaperSchema(t *testing.T) {
 	assert.Equal(t, sql.NullString{String: alias, Valid: true}, fieldRecords[1].SmFieldCaption)
 }
 
+func TestDataSourceCreateCadDatasetQuotesMaliciousFieldName(t *testing.T) {
+	ds, err := Create(filepath.Join(t.TempDir(), "cad-quoted-field.udbx"))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	fieldName := "name]); DROP TABLE SmRegister;--"
+	cad, err := ds.CreateCadDataset("cad quoted field", []*types.FieldInfo{
+		{Name: fieldName, FieldType: types.FieldTypeText, Nullable: true},
+	})
+	require.NoError(t, err)
+
+	columns, err := sqliteTableColumns(ds.db, cad.Info().TableName)
+	require.NoError(t, err)
+	assert.Contains(t, columns, fieldName)
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM SmRegister", 1)
+}
+
+func TestDataSourceCreateCadDatasetRollsBackOnNULFieldName(t *testing.T) {
+	ds, err := Create(filepath.Join(t.TempDir(), "cad-nul-field.udbx"))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	_, err = ds.CreateCadDataset("cad nul field", []*types.FieldInfo{
+		{Name: "name\x00archive", FieldType: types.FieldTypeText, Nullable: true},
+	})
+	require.Error(t, err)
+	assert.True(t, IsIOError(err))
+	assert.Contains(t, err.Error(), "NUL")
+
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", 0, "cad_nul_field")
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM SmRegister", 0)
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM geometry_columns", 0)
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM SmFieldInfo", 0)
+}
+
 func TestDataSourceCreateCadDatasetRollsBackOnFieldMetadataFailure(t *testing.T) {
 	ds, err := Create(filepath.Join(t.TempDir(), "cad-rollback.udbx"))
 	require.NoError(t, err)

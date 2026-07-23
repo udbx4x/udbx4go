@@ -2,12 +2,14 @@ package schema
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 )
 
 func setupTestDB(t *testing.T) *sql.DB {
@@ -196,6 +198,124 @@ func TestInitializer_CreateCadDatasetTable(t *testing.T) {
 	assert.Equal(t, tableColumn{Name: "level", Type: "INTEGER"}, columns[6])
 }
 
+func TestInitializer_CreateCadDatasetTableQuotesFieldNames(t *testing.T) {
+	tests := []struct {
+		name      string
+		fieldName string
+	}{
+		{name: "SQL fragment", fieldName: "name]); DROP TABLE SmRegister;--"},
+		{name: "embedded double quote", fieldName: `display"name`},
+		{name: "Chinese", fieldName: "名称"},
+	}
+
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupTestDB(t)
+			defer db.Close()
+			require.NoError(t, NewInitializer(db).Initialize())
+
+			tableName := fmt.Sprintf("cad_fields_%d", index)
+			err := NewInitializer(db).CreateCadDatasetTable(tableName, []FieldColumn{
+				{Name: tt.fieldName, SQLiteType: "TEXT", Nullable: true},
+			})
+			require.NoError(t, err)
+
+			columns := readTableColumns(t, db, tableName)
+			require.Len(t, columns, 6)
+			assert.Equal(t, tt.fieldName, columns[5].Name)
+			assertTableExists(t, db, "SmRegister", true)
+		})
+	}
+}
+
+func TestInitializer_CreateCadDatasetTableQuotesTableName(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	require.NoError(t, NewInitializer(db).Initialize())
+
+	tableName := `cad"; DROP TABLE SmRegister;--`
+	err := NewInitializer(db).CreateCadDatasetTable(tableName, nil)
+	require.NoError(t, err)
+
+	columns := readTableColumns(t, db, tableName)
+	require.Len(t, columns, 5)
+	assertTableExists(t, db, tableName, true)
+	assertTableExists(t, db, "SmRegister", true)
+}
+
+func TestInitializer_CreateCadDatasetTableAcceptsFieldTypeSQLiteTypes(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	err := NewInitializer(db).CreateCadDatasetTable("cad_types", []FieldColumn{
+		{Name: "integer_value", SQLiteType: "INTEGER", Nullable: true},
+		{Name: "real_value", SQLiteType: "REAL", Nullable: true},
+		{Name: "blob_value", SQLiteType: "BLOB", Nullable: true},
+		{Name: "text_value", SQLiteType: "TEXT", Nullable: true},
+	})
+	require.NoError(t, err)
+
+	columns := readTableColumns(t, db, "cad_types")
+	require.Len(t, columns, 9)
+	assert.Equal(t, "INTEGER", columns[5].Type)
+	assert.Equal(t, "REAL", columns[6].Type)
+	assert.Equal(t, "BLOB", columns[7].Type)
+	assert.Equal(t, "TEXT", columns[8].Type)
+}
+
+func TestInitializer_CreateCadDatasetTableRejectsNULIdentifiers(t *testing.T) {
+	tests := []struct {
+		name      string
+		tableName string
+		fieldName string
+	}{
+		{name: "table name", tableName: "cad\x00archive", fieldName: "name"},
+		{name: "field name", tableName: "cad_nul_field", fieldName: "name\x00archive"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupTestDB(t)
+			defer db.Close()
+
+			err := NewInitializer(db).CreateCadDatasetTable(tt.tableName, []FieldColumn{
+				{Name: tt.fieldName, SQLiteType: "TEXT", Nullable: true},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "NUL")
+			if tt.tableName == "cad_nul_field" {
+				assertTableExists(t, db, tt.tableName, false)
+			}
+		})
+	}
+}
+
+func TestInitializer_CreateCadDatasetTableRejectsUnknownSQLiteTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		sqliteType string
+	}{
+		{name: "unknown", sqliteType: "VARCHAR"},
+		{name: "trailing whitespace", sqliteType: "TEXT "},
+		{name: "SQL fragment", sqliteType: "TEXT); DROP TABLE SmRegister;--"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := setupTestDB(t)
+			defer db.Close()
+			require.NoError(t, NewInitializer(db).Initialize())
+
+			err := NewInitializer(db).CreateCadDatasetTable("cad_invalid_type", []FieldColumn{
+				{Name: "name", SQLiteType: tt.sqliteType, Nullable: true},
+			})
+			require.Error(t, err)
+			assertTableExists(t, db, "cad_invalid_type", false)
+			assertTableExists(t, db, "SmRegister", true)
+		})
+	}
+}
+
 type tableColumn struct {
 	Name       string
 	Type       string
@@ -207,7 +327,9 @@ type tableColumn struct {
 func readTableColumns(t *testing.T, db *sql.DB, tableName string) []tableColumn {
 	t.Helper()
 
-	rows, err := db.Query("PRAGMA table_info(" + tableName + ")")
+	quotedTableName, err := sqliteutil.QuoteIdentifier(tableName)
+	require.NoError(t, err)
+	rows, err := db.Query("PRAGMA table_info(" + quotedTableName + ")")
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -231,6 +353,17 @@ func readTableColumns(t *testing.T, db *sql.DB, tableName string) []tableColumn 
 	}
 	require.NoError(t, rows.Err())
 	return columns
+}
+
+func assertTableExists(t *testing.T, db *sql.DB, tableName string, expected bool) {
+	t.Helper()
+
+	var count int
+	require.NoError(t, db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+		tableName,
+	).Scan(&count))
+	assert.Equal(t, expected, count == 1)
 }
 
 func TestInitializer_DropDatasetTable(t *testing.T) {
