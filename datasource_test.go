@@ -680,6 +680,124 @@ func TestDataSourceMutationAfterCloseReturnsErrorWithoutPanic(t *testing.T) {
 	})
 }
 
+func TestDataSourceCadSpatialQueryAfterReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cad-spatial-reopen.udbx")
+	ds, err := Create(path)
+	require.NoError(t, err)
+
+	cad, err := ds.CreateCadDataset("cad", []*types.FieldInfo{
+		{Name: "name", FieldType: types.FieldTypeText, Nullable: true},
+	})
+	require.NoError(t, err)
+	require.NoError(t, cad.InsertMany([]*types.Feature{
+		{ID: 1, Geometry: &types.CadPointGeometry{XCoord: 1, YCoord: 1}, Attributes: map[string]interface{}{"name": "point"}},
+		{ID: 2, Geometry: &types.CadLineGeometry{
+			NumSub: 1, SubPointCounts: []int{2}, Coordinates: [][2]float64{{10, 10}, {12, 12}},
+		}, Attributes: map[string]interface{}{"name": "line"}},
+		{ID: 3, Geometry: &types.CadRegionGeometry{
+			NumSub: 1, SubPointCounts: []int{5},
+			Coordinates: [][2]float64{{20, 20}, {24, 20}, {24, 24}, {20, 24}, {20, 20}},
+		}, Attributes: map[string]interface{}{"name": "region"}},
+		{ID: 4, Geometry: &types.CadTextGeometry{
+			Text: "label", Anchor: []float64{41, 41}, BBox: []float64{40, 40, 42, 42},
+		}, Attributes: map[string]interface{}{"name": "text"}},
+	}))
+
+	// Make the point payload and index envelope disagree so the public read proves
+	// that the returned bbox comes from SmIndexKey.
+	_, err = ds.db.Exec(`UPDATE cad
+		SET SmIndexKey = (SELECT SmIndexKey FROM cad WHERE SmID = 2)
+		WHERE SmID = 1`)
+	require.NoError(t, err)
+	require.NoError(t, ds.Close())
+
+	reopened, err := Open(path)
+	require.NoError(t, err)
+	defer reopened.Close()
+	result, err := reopened.QuerySpatial(context.Background(), "cad", types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 50, MaxY: 50},
+		Limit:  5,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, types.SpatialQueryStrategyEnvelopeCache, result.Strategy)
+	assert.False(t, result.HasMore)
+	require.Len(t, result.Features, 4)
+
+	expectedTypes := map[int]interface{}{
+		1: &types.CadPointGeometry{},
+		2: &types.CadLineGeometry{},
+		3: &types.CadRegionGeometry{},
+		4: &types.CadTextGeometry{},
+	}
+	expectedBBoxes := map[int][]float64{
+		1: {10, 10, 12, 12},
+		2: {10, 10, 12, 12},
+		3: {20, 20, 24, 24},
+		4: {40, 40, 42, 42},
+	}
+	for _, feature := range result.Features {
+		assert.IsType(t, expectedTypes[feature.ID], feature.Geometry)
+		assert.Equal(t, expectedBBoxes[feature.ID], feature.Geometry.GetBBox())
+		assert.Zero(t, feature.Geometry.GetSRID())
+	}
+}
+
+func TestDataSourceTextAndCadSpatialQueryInvalidatesCacheAfterUpdate(t *testing.T) {
+	tests := []struct {
+		name   string
+		create func(*testing.T, *DataSource) (string, func() error)
+	}{
+		{
+			name: "Text",
+			create: func(t *testing.T, ds *DataSource) (string, func() error) {
+				text, err := ds.CreateTextDataset("labels", 4326, nil)
+				require.NoError(t, err)
+				require.NoError(t, text.Insert(dataSourceTextFeature(1, 0, 0)))
+				return text.Info().Name, func() error {
+					return text.Update(1, &FeatureChanges{Geometry: &types.TextGeometry{Text: "label", Anchor: []float64{100, 100}}})
+				}
+			},
+		},
+		{
+			name: "CAD",
+			create: func(t *testing.T, ds *DataSource) (string, func() error) {
+				cad, err := ds.CreateCadDataset("cad", nil)
+				require.NoError(t, err)
+				require.NoError(t, cad.Insert(dataSourceCadFeature(1, 0, 0)))
+				return cad.Info().Name, func() error {
+					return cad.Update(1, &FeatureChanges{Geometry: &types.CadPointGeometry{XCoord: 100, YCoord: 100}})
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ds, err := Create(filepath.Join(t.TempDir(), "spatial-cache-update.udbx"))
+			require.NoError(t, err)
+			defer ds.Close()
+
+			datasetName, update := tt.create(t, ds)
+			oldBounds := types.BoundingBox{MinX: -1, MinY: -1, MaxX: 1, MaxY: 1}
+			newBounds := types.BoundingBox{MinX: 99, MinY: 99, MaxX: 101, MaxY: 101}
+			oldResult, err := ds.QuerySpatial(context.Background(), datasetName, types.SpatialQueryOptions{Bounds: oldBounds, Limit: 10})
+			require.NoError(t, err)
+			require.Len(t, oldResult.Features, 1)
+			require.Equal(t, 1, oldResult.Features[0].ID)
+			require.Equal(t, types.SpatialQueryStrategyEnvelopeCache, oldResult.Strategy)
+
+			require.NoError(t, update())
+			oldResult, err = ds.QuerySpatial(context.Background(), datasetName, types.SpatialQueryOptions{Bounds: oldBounds, Limit: 10})
+			require.NoError(t, err)
+			assert.Empty(t, oldResult.Features)
+			newResult, err := ds.QuerySpatial(context.Background(), datasetName, types.SpatialQueryOptions{Bounds: newBounds, Limit: 10})
+			require.NoError(t, err)
+			require.Len(t, newResult.Features, 1)
+			assert.Equal(t, 1, newResult.Features[0].ID)
+		})
+	}
+}
+
 func buildDataSourceEnvelopeCacheForSpatialDataset(t *testing.T, ds *DataSource, info *types.DatasetInfo) {
 	t.Helper()
 	_, err := ds.db.Exec(

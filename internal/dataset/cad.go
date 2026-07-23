@@ -454,10 +454,10 @@ func (d *CadDataset) buildFeatureWithMetadata(
 	if !geometryColumnFound {
 		return nil, newSpatialGeometryError("CAD geometry column is missing")
 	}
-	if !storedGeoTypeFound {
-		return nil, newSpatialGeometryError("CAD SmGeoType column is missing")
-	}
-	if !indexKeyColumnFound {
+	if storedGeoTypeFound != indexKeyColumnFound {
+		if !storedGeoTypeFound {
+			return nil, newSpatialGeometryError("CAD SmGeoType column is missing")
+		}
 		return nil, newSpatialGeometryError("CAD SmIndexKey column is missing")
 	}
 	geometry, err := d.cadCodec.Decode(geometryBlob)

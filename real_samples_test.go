@@ -57,7 +57,23 @@ func TestExternalFixtureAvailabilityPolicy(t *testing.T) {
 
 func sampleDataFixturePath(t testing.TB) string {
 	t.Helper()
-	return requireExternalFixturePath(t, filepath.Join("..", "data", "SampleData.udbx"))
+	path := os.Getenv("UDBX_SAMPLE_DATA_PATH")
+	required := os.Getenv("UDBX_REAL_SAMPLES") == "1"
+	if path == "" {
+		if required {
+			t.Fatal("UDBX_SAMPLE_DATA_PATH is required when UDBX_REAL_SAMPLES=1")
+		}
+		t.Skip("set UDBX_SAMPLE_DATA_PATH to run SampleData tests")
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatalf("UDBX_SAMPLE_DATA_PATH must be absolute: %s", path)
+	}
+	available, err := externalFixtureAvailable(path, required)
+	require.NoError(t, err, "SampleData fixture is required when UDBX_REAL_SAMPLES=1")
+	if !available {
+		t.Skipf("SampleData fixture is unavailable: %s", path)
+	}
+	return path
 }
 
 func henanFixturePath(t testing.TB) string {
@@ -331,6 +347,110 @@ func TestRealSampleDataCadDataset(t *testing.T) {
 	assert.True(t, geometryTypes["CadLine"])
 	assert.True(t, geometryTypes["CadRegion"])
 	assert.True(t, geometryTypes["CadText"])
+}
+
+func TestRealSampleDataTextAndCadSpatialQueries(t *testing.T) {
+	ds, err := Open(sampleDataFixturePath(t))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	tests := []struct {
+		name         string
+		datasetName  string
+		limit        int
+		featureCount int
+	}{
+		{name: "Text", datasetName: "County_T", limit: 16, featureCount: 15},
+		{name: "CAD", datasetName: "CADDT", limit: 93, featureCount: 92},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dataset, err := ds.GetDataset(tt.datasetName)
+			require.NoError(t, err)
+			require.NotNil(t, dataset.Info().Extent)
+
+			result, err := ds.QuerySpatial(context.Background(), tt.datasetName, SpatialQueryOptions{
+				Bounds: *dataset.Info().Extent,
+				Limit:  tt.limit,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, SpatialQueryStrategyEnvelopeCache, result.Strategy)
+			assert.Len(t, result.Features, tt.featureCount)
+			assert.False(t, result.HasMore)
+		})
+	}
+}
+
+func TestRealSampleDataTextAndCadSpatialQueryRequiredIDs(t *testing.T) {
+	ds, err := Open(sampleDataFixturePath(t))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	for _, datasetName := range []string{"County_T", "CADDT"} {
+		t.Run(datasetName, func(t *testing.T) {
+			dataset, err := ds.GetDataset(datasetName)
+			require.NoError(t, err)
+			features, err := listSpatialSampleFeatures(dataset)
+			require.NoError(t, err)
+			bounds, requiredID := sampleSmallViewportAndOutsideID(t, features)
+
+			ordinary, err := ds.QuerySpatial(context.Background(), datasetName, SpatialQueryOptions{
+				Bounds: bounds,
+				Limit:  1,
+			})
+			require.NoError(t, err)
+			require.NotEmpty(t, ordinary.Features)
+
+			required, err := ds.QuerySpatial(context.Background(), datasetName, SpatialQueryOptions{
+				Bounds:      bounds,
+				Limit:       1,
+				RequiredIDs: []int{requiredID},
+			})
+			require.NoError(t, err)
+			require.Len(t, required.Features, len(ordinary.Features)+1)
+			for index := range ordinary.Features {
+				assert.Equal(t, ordinary.Features[index].ID, required.Features[index].ID)
+			}
+			assert.Equal(t, requiredID, required.Features[len(required.Features)-1].ID)
+			assert.Equal(t, ordinary.HasMore, required.HasMore)
+			assert.False(t, bounds.Intersects(featureBoundingBox(t, required.Features[len(required.Features)-1])))
+		})
+	}
+}
+
+func listSpatialSampleFeatures(value dataset.Dataset) ([]*Feature, error) {
+	switch typed := value.(type) {
+	case *dataset.TextDataset:
+		return typed.List(nil)
+	case *dataset.CadDataset:
+		return typed.List(nil)
+	default:
+		return nil, nil
+	}
+}
+
+func sampleSmallViewportAndOutsideID(t *testing.T, features []*Feature) (BoundingBox, int) {
+	t.Helper()
+	require.NotEmpty(t, features)
+
+	for _, candidate := range features {
+		bbox := featureBoundingBox(t, candidate)
+		bounds := BoundingBox{
+			MinX: (bbox.MinX + bbox.MaxX) / 2,
+			MinY: (bbox.MinY + bbox.MaxY) / 2,
+			MaxX: (bbox.MinX + bbox.MaxX) / 2,
+			MaxY: (bbox.MinY + bbox.MaxY) / 2,
+		}
+		for _, feature := range features {
+			if !bounds.Intersects(featureBoundingBox(t, feature)) {
+				return bounds, feature.ID
+			}
+		}
+	}
+
+	t.Fatal("expected SampleData to contain a feature outside a small viewport")
+	return BoundingBox{}, 0
 }
 
 func TestRealSampleDataLineAndRegionDatasets(t *testing.T) {

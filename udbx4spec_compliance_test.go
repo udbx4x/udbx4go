@@ -1,8 +1,8 @@
 package udbx4go
 
 import (
+	"context"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,19 +12,88 @@ import (
 )
 
 func TestUdbx4SpecComplianceDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "compliance.udbx")))
+	assertComplianceDatabaseReadable(t, udbx4SpecFixturePath(t, "compliance", "compliance.udbx"))
 }
 
 func TestUdbx4SpecUdbx4TsRoundtripDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4ts-roundtrip.udbx")))
+	assertComplianceDatabaseReadable(t, udbx4SpecFixturePath(t, "compliance", "roundtrip", "udbx4ts-roundtrip.udbx"))
 }
 
 func TestUdbx4SpecUdbx4GoRoundtripDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4go-roundtrip.udbx")))
+	assertComplianceDatabaseReadable(t, udbx4SpecFixturePath(t, "compliance", "roundtrip", "udbx4go-roundtrip.udbx"))
 }
 
 func TestUdbx4SpecUdbx4JRoundtripDatabaseRead(t *testing.T) {
-	assertComplianceDatabaseReadable(t, requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "roundtrip", "udbx4j-roundtrip.udbx")))
+	assertComplianceDatabaseReadable(t, udbx4SpecFixturePath(t, "compliance", "roundtrip", "udbx4j-roundtrip.udbx"))
+}
+
+func TestUdbx4SpecTextAndCadSpatialQueryContract(t *testing.T) {
+	source, err := Open(udbx4SpecFixturePath(t, "compliance", "compliance.udbx"))
+	require.NoError(t, err)
+	defer source.Close()
+
+	datasetNames := []string{"test_text", "test_cad"}
+	snapshots := make(map[string]*datasetSnapshot, len(datasetNames))
+	targetPath := filepath.Join(t.TempDir(), "text-cad-spatial-contract.udbx")
+	target, err := Create(targetPath)
+	require.NoError(t, err)
+	for _, datasetName := range datasetNames {
+		snapshots[datasetName] = snapshotDataset(t, source, datasetName)
+		copySnapshotToDataSource(t, target, snapshots[datasetName])
+	}
+	require.NoError(t, target.Close())
+
+	reopened, err := Open(targetPath)
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	for _, datasetName := range datasetNames {
+		t.Run(datasetName, func(t *testing.T) {
+			expected := snapshots[datasetName].records.([]*types.Feature)
+			result, err := reopened.QuerySpatial(context.Background(), datasetName, SpatialQueryOptions{
+				Bounds: complianceFeatureBounds(t, expected),
+				Limit:  len(expected) + 1,
+			})
+			require.NoError(t, err)
+			assert.Equal(t, SpatialQueryStrategyEnvelopeCache, result.Strategy)
+			assert.False(t, result.HasMore)
+			require.Len(t, result.Features, len(expected))
+			for index := range expected {
+				assert.Equal(t, expected[index].ID, result.Features[index].ID)
+				assert.Equal(t, expected[index].Geometry.GeometryType(), result.Features[index].Geometry.GeometryType())
+			}
+		})
+	}
+}
+
+func complianceFeatureBounds(t *testing.T, features []*types.Feature) BoundingBox {
+	t.Helper()
+	require.NotEmpty(t, features)
+
+	first := featureBoundingBox(t, features[0])
+	bounds := first
+	for _, feature := range features[1:] {
+		bbox := featureBoundingBox(t, feature)
+		bounds.MinX = min(bounds.MinX, bbox.MinX)
+		bounds.MinY = min(bounds.MinY, bbox.MinY)
+		bounds.MaxX = max(bounds.MaxX, bbox.MaxX)
+		bounds.MaxY = max(bounds.MaxY, bbox.MaxY)
+	}
+	return bounds
+}
+
+func udbx4SpecFixturePath(t testing.TB, elements ...string) string {
+	t.Helper()
+	for _, root := range []string{
+		filepath.Join("..", "udbx4spec"),
+		filepath.Join("..", "..", "..", "udbx4spec"),
+	} {
+		path := filepath.Join(append([]string{root}, elements...)...)
+		if available, _ := externalFixtureAvailable(path, false); available {
+			return path
+		}
+	}
+	return requireExternalFixturePath(t, filepath.Join(append([]string{"..", "udbx4spec"}, elements...)...))
 }
 
 func assertComplianceDatabaseReadable(t *testing.T, path string) {
@@ -247,7 +316,7 @@ func assertComplianceDatabaseReadable(t *testing.T, path string) {
 }
 
 func TestUdbx4SpecComplianceDatabaseSemanticRoundtrip(t *testing.T) {
-	source, err := Open(requireExternalFixturePath(t, filepath.Join("..", "udbx4spec", "compliance", "compliance.udbx")))
+	source, err := Open(udbx4SpecFixturePath(t, "compliance", "compliance.udbx"))
 	require.NoError(t, err)
 	defer source.Close()
 
@@ -401,7 +470,8 @@ func assertSnapshotEquivalent(t *testing.T, expected, actual *datasetSnapshot) {
 	assert.Equal(t, expected.info.ObjectCount, actual.info.ObjectCount)
 	assert.Equal(t, normalizeSRID(expected.info.SRID), normalizeSRID(actual.info.SRID))
 	assert.Equal(t, normalizeFieldsForCompare(expected.fields), normalizeFieldsForCompare(actual.fields))
-	assert.True(t, reflect.DeepEqual(normalizeRecordsForCompare(expected.records), normalizeRecordsForCompare(actual.records)))
+	assert.Equal(t, normalizeRecordsForCompare(expected.records), normalizeRecordsForCompare(actual.records),
+		"dataset %s records differ after roundtrip", expected.info.Name)
 }
 
 func normalizeSRID(srid *int) int {
@@ -431,7 +501,7 @@ func normalizeRecordsForCompare(records interface{}) interface{} {
 		for i, feature := range typedRecords {
 			normalized[i] = map[string]interface{}{
 				"id":         feature.ID,
-				"geometry":   feature.Geometry,
+				"geometry":   normalizeGeometryForCompare(feature.Geometry),
 				"attributes": normalizedAttributes(feature.Attributes),
 			}
 		}
@@ -447,6 +517,33 @@ func normalizeRecordsForCompare(records interface{}) interface{} {
 		return normalized
 	default:
 		return records
+	}
+}
+
+func normalizeGeometryForCompare(geometry types.Geometry) types.Geometry {
+	switch typed := geometry.(type) {
+	case *types.TextGeometry:
+		clone := *typed
+		clone.BBox = nil
+		return &clone
+	case *types.CadPointGeometry:
+		clone := *typed
+		clone.BBox = nil
+		return &clone
+	case *types.CadLineGeometry:
+		clone := *typed
+		clone.BBox = nil
+		return &clone
+	case *types.CadRegionGeometry:
+		clone := *typed
+		clone.BBox = nil
+		return &clone
+	case *types.CadTextGeometry:
+		clone := *typed
+		clone.BBox = nil
+		return &clone
+	default:
+		return geometry
 	}
 }
 
