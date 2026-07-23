@@ -180,9 +180,9 @@ func (ds *DataSource) GetDataset(name string) (dataset.Dataset, error) {
 	case types.DatasetKindRegionZ:
 		return dataset.NewRegionZDataset(ds.db, info), nil
 	case types.DatasetKindText:
-		return dataset.NewTextDataset(ds.db, info), nil
+		return ds.newTextDataset(info), nil
 	case types.DatasetKindCAD:
-		return dataset.NewCadDataset(ds.db, info), nil
+		return ds.newCadDataset(info), nil
 	default:
 		return nil, errors.UnsupportedError(fmt.Sprintf("dataset kind '%s' is not supported", info.Kind.String()))
 	}
@@ -584,7 +584,7 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 		return nil, errors.IOError("failed to commit CAD dataset transaction", err)
 	}
 
-	return dataset.NewCadDataset(ds.db, record.ToDatasetInfo()), nil
+	return ds.newCadDataset(record.ToDatasetInfo()), nil
 }
 
 func (ds *DataSource) createTextDatasetInternal(name string, srid int, fields []*types.FieldInfo) (*dataset.TextDataset, error) {
@@ -664,7 +664,26 @@ func (ds *DataSource) createTextDatasetInternal(name string, srid int, fields []
 		}
 	}
 
-	return dataset.NewTextDataset(ds.db, record.ToDatasetInfo()), nil
+	return ds.newTextDataset(record.ToDatasetInfo()), nil
+}
+
+func (ds *DataSource) newTextDataset(info *types.DatasetInfo) *dataset.TextDataset {
+	text := dataset.NewTextDataset(ds.db, info)
+	ds.attachSpatialMutationHook(text.BaseDataset)
+	return text
+}
+
+func (ds *DataSource) newCadDataset(info *types.DatasetInfo) *dataset.CadDataset {
+	cad := dataset.NewCadDataset(ds.db, info)
+	ds.attachSpatialMutationHook(cad.BaseDataset)
+	return cad
+}
+
+func (ds *DataSource) attachSpatialMutationHook(base *dataset.BaseDataset) {
+	tableName := base.TableName()
+	base.SetSpatialMutationHook(func() {
+		ds.envelopeCacheManager.InvalidateDataset(tableName)
+	})
 }
 
 // generateTableName generates a safe table name from dataset name.

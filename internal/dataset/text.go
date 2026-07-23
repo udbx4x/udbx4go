@@ -111,8 +111,16 @@ func (d *TextDataset) Insert(feature *types.Feature) error {
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
 
-	if _, err := d.DB().Exec(query, values...); err != nil {
+	result, err := d.DB().Exec(query, values...)
+	if err != nil {
 		return errors.IOError("failed to insert Text feature", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read inserted Text row count", err)
+	}
+	if rowsAffected > 0 {
+		d.notifySpatialMutation()
 	}
 
 	return d.syncObjectCount()
@@ -182,10 +190,14 @@ func (d *TextDataset) Update(id int, changes *FeatureChanges) error {
 		return errors.IOError("failed to update Text feature", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read updated Text row count", err)
+	}
 	if rowsAffected == 0 {
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
+	d.notifySpatialMutation()
 
 	return d.syncObjectCount()
 }
@@ -198,10 +210,14 @@ func (d *TextDataset) Delete(id int) error {
 		return errors.IOError("failed to delete Text feature", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read deleted Text row count", err)
+	}
 	if rowsAffected == 0 {
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
+	d.notifySpatialMutation()
 
 	return d.syncObjectCount()
 }

@@ -537,6 +537,156 @@ func TestDataSourceQuerySpatialMapsClosedEnvelopeCacheToLifecycleError(t *testin
 	assert.False(t, hasReason)
 }
 
+func TestDataSourceAttachesSpatialMutationHookOnCreate(t *testing.T) {
+	tests := []struct {
+		name   string
+		create func(*testing.T, *DataSource) (internaldataset.Dataset, func() error)
+	}{
+		{
+			name: "Text",
+			create: func(t *testing.T, ds *DataSource) (internaldataset.Dataset, func() error) {
+				text, err := ds.CreateTextDataset("labels", 4326, nil)
+				require.NoError(t, err)
+				require.NoError(t, text.Insert(dataSourceTextFeature(1, 1, 1)))
+				return text, func() error { return text.Insert(dataSourceTextFeature(2, 2, 2)) }
+			},
+		},
+		{
+			name: "CAD",
+			create: func(t *testing.T, ds *DataSource) (internaldataset.Dataset, func() error) {
+				cad, err := ds.CreateCadDataset("cad", nil)
+				require.NoError(t, err)
+				require.NoError(t, cad.Insert(dataSourceCadFeature(1, 1, 1)))
+				return cad, func() error { return cad.Insert(dataSourceCadFeature(2, 2, 2)) }
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ds, err := Create(filepath.Join(t.TempDir(), "mutation.udbx"))
+			require.NoError(t, err)
+			defer ds.Close()
+
+			created, mutate := tt.create(t, ds)
+			buildDataSourceEnvelopeCacheForSpatialDataset(t, ds, created.Info())
+			require.Equal(t, 1, ds.envelopeCacheManager.EntryCount())
+
+			require.NoError(t, mutate())
+			assert.Zero(t, ds.envelopeCacheManager.EntryCount())
+		})
+	}
+}
+
+func TestDataSourceAttachesSpatialMutationHookOnGet(t *testing.T) {
+	tests := []struct {
+		name   string
+		create func(*testing.T, *DataSource) *types.DatasetInfo
+		get    func(*testing.T, *DataSource) func() error
+	}{
+		{
+			name: "Text",
+			create: func(t *testing.T, ds *DataSource) *types.DatasetInfo {
+				text, err := ds.CreateTextDataset("labels", 4326, nil)
+				require.NoError(t, err)
+				require.NoError(t, text.Insert(dataSourceTextFeature(1, 1, 1)))
+				return text.Info()
+			},
+			get: func(t *testing.T, ds *DataSource) func() error {
+				text, err := ds.GetTextDataset("labels")
+				require.NoError(t, err)
+				return func() error { return text.Insert(dataSourceTextFeature(2, 2, 2)) }
+			},
+		},
+		{
+			name: "CAD",
+			create: func(t *testing.T, ds *DataSource) *types.DatasetInfo {
+				cad, err := ds.CreateCadDataset("cad", nil)
+				require.NoError(t, err)
+				require.NoError(t, cad.Insert(dataSourceCadFeature(1, 1, 1)))
+				return cad.Info()
+			},
+			get: func(t *testing.T, ds *DataSource) func() error {
+				cad, err := ds.GetCadDataset("cad")
+				require.NoError(t, err)
+				return func() error { return cad.Insert(dataSourceCadFeature(2, 2, 2)) }
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ds, err := Create(filepath.Join(t.TempDir(), "mutation.udbx"))
+			require.NoError(t, err)
+			defer ds.Close()
+
+			info := tt.create(t, ds)
+			buildDataSourceEnvelopeCacheForSpatialDataset(t, ds, info)
+			require.Equal(t, 1, ds.envelopeCacheManager.EntryCount())
+			mutate := tt.get(t, ds)
+
+			require.NoError(t, mutate())
+			assert.Zero(t, ds.envelopeCacheManager.EntryCount())
+		})
+	}
+}
+
+func TestDataSourceMutationAfterCloseReturnsErrorWithoutPanic(t *testing.T) {
+	ds, err := Create(filepath.Join(t.TempDir(), "closed-mutation.udbx"))
+	require.NoError(t, err)
+	text, err := ds.CreateTextDataset("labels", 4326, nil)
+	require.NoError(t, err)
+	cad, err := ds.CreateCadDataset("cad", nil)
+	require.NoError(t, err)
+	require.NoError(t, ds.Close())
+
+	assert.NotPanics(t, func() {
+		assert.Error(t, text.Insert(dataSourceTextFeature(1, 1, 1)))
+	})
+	assert.NotPanics(t, func() {
+		assert.Error(t, cad.Insert(dataSourceCadFeature(1, 1, 1)))
+	})
+}
+
+func buildDataSourceEnvelopeCacheForSpatialDataset(t *testing.T, ds *DataSource, info *types.DatasetInfo) {
+	t.Helper()
+	_, err := ds.db.Exec(
+		`UPDATE SmRegister
+		 SET SmDatasetType = ?, SmIDColName = ?, SmGeoColName = ?
+		 WHERE SmDatasetName = ?`,
+		int(types.DatasetKindPoint), "SmID", "SmIndexKey", info.Name,
+	)
+	require.NoError(t, err)
+
+	result, err := ds.QuerySpatial(context.Background(), info.Name, types.SpatialQueryOptions{
+		Bounds: types.BoundingBox{MinX: 1000, MinY: 1000, MaxX: 1001, MaxY: 1001},
+		Limit:  10,
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Features)
+	require.Equal(t, types.SpatialQueryStrategyEnvelopeCache, result.Strategy)
+
+	_, err = ds.db.Exec(
+		`UPDATE SmRegister SET SmDatasetType = ?, SmGeoColName = ? WHERE SmDatasetName = ?`,
+		int(info.Kind), "SmGeometry", info.Name,
+	)
+	require.NoError(t, err)
+}
+
+func dataSourceTextFeature(id int, x, y float64) *types.Feature {
+	return &types.Feature{
+		ID:       id,
+		Geometry: &types.TextGeometry{Text: "label", Anchor: []float64{x, y}},
+	}
+}
+
+func dataSourceCadFeature(id int, x, y float64) *types.Feature {
+	return &types.Feature{
+		ID:       id,
+		Geometry: &types.CadPointGeometry{XCoord: x, YCoord: y},
+	}
+}
+
 func assertPublicSpatialTimeout(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)

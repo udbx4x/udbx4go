@@ -158,8 +158,16 @@ func (d *CadDataset) Insert(feature *types.Feature) error {
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
 
-	if _, err := d.DB().Exec(query, values...); err != nil {
+	result, err := d.DB().Exec(query, values...)
+	if err != nil {
 		return errors.IOError("failed to insert CAD feature", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read inserted CAD row count", err)
+	}
+	if rowsAffected > 0 {
+		d.notifySpatialMutation()
 	}
 
 	return d.syncObjectCount()
@@ -256,10 +264,14 @@ func (d *CadDataset) Update(id int, changes *FeatureChanges) error {
 		return errors.IOError("failed to update CAD feature", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read updated CAD row count", err)
+	}
 	if rowsAffected == 0 {
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
+	d.notifySpatialMutation()
 
 	return d.syncObjectCount()
 }
@@ -280,10 +292,14 @@ func (d *CadDataset) Delete(id int) error {
 		return errors.IOError("failed to delete CAD feature", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read deleted CAD row count", err)
+	}
 	if rowsAffected == 0 {
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
+	d.notifySpatialMutation()
 
 	return d.syncObjectCount()
 }

@@ -4,6 +4,7 @@ package dataset
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 
 	"github.com/udbx4x/udbx4go/internal/system"
 	"github.com/udbx4x/udbx4go/pkg/errors"
@@ -50,6 +51,9 @@ type BaseDataset struct {
 	info        *types.DatasetInfo
 	fieldDao    *system.SmFieldInfoDao
 	registerDao *system.SmRegisterDao
+
+	spatialMutationMu   sync.RWMutex
+	spatialMutationHook func()
 }
 
 // NewBaseDataset creates a new base dataset.
@@ -100,6 +104,22 @@ func (d *BaseDataset) DB() *sql.DB {
 // TableName returns the dataset table name.
 func (d *BaseDataset) TableName() string {
 	return d.info.TableName
+}
+
+// SetSpatialMutationHook sets the callback invoked after an affected spatial write.
+func (d *BaseDataset) SetSpatialMutationHook(hook func()) {
+	d.spatialMutationMu.Lock()
+	d.spatialMutationHook = hook
+	d.spatialMutationMu.Unlock()
+}
+
+func (d *BaseDataset) notifySpatialMutation() {
+	d.spatialMutationMu.RLock()
+	hook := d.spatialMutationHook
+	d.spatialMutationMu.RUnlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 // syncObjectCount refreshes SmRegister.SmObjectCount from the actual table row count.
