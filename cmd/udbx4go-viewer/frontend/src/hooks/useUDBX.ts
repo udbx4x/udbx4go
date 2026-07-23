@@ -13,7 +13,10 @@ import {
 import { main } from '../../wailsjs/go/models'
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
 import { isLocatableFeature, isValidBounds } from '../spatial/featureLocation'
-import { isDegradedSpatialPreview } from '../spatial/spatialPreviewDegradation'
+import {
+  isDegradedSpatialPreview,
+  isSpatialPreviewDegradedReason,
+} from '../spatial/spatialPreviewDegradation'
 import {
   ViewportQueryCoordinator,
   type ViewportQueryJob,
@@ -257,7 +260,10 @@ export function useUDBX(options: UseUDBXOptions) {
         return
       }
 
-      const preview = await loadBoundedPreview(datasetName, optionsRef.current)
+      const preview = withSummaryDegradation(
+        await loadBoundedPreview(datasetName, optionsRef.current),
+        summary,
+      )
       if (!isCurrentLayerLoad(layerLoadTokensRef.current, datasetName, loadToken)) {
         return
       }
@@ -475,6 +481,20 @@ function stableQueryStatus(preview: SpatialPreview | null): MapLayerState['query
     return 'idle'
   }
   return isDegradedSpatialPreview(preview) ? 'degraded' : 'ready'
+}
+
+function withSummaryDegradation(
+  preview: SpatialPreview,
+  summary: SpatialSummary,
+): SpatialPreview {
+  if (
+    preview.strategy !== 'bounded_sample' ||
+    preview.degradedReason !== undefined ||
+    !isSpatialPreviewDegradedReason(summary.queryDiagnosticReason)
+  ) {
+    return preview
+  }
+  return { ...preview, degradedReason: summary.queryDiagnosticReason }
 }
 
 function isCurrentLayerLoad(

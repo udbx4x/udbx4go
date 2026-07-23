@@ -212,6 +212,81 @@ describe('useUDBX viewport spatial previews', () => {
     })
   })
 
+  it('缺少范围索引的初始有界预览继承 summary 降级原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      datasetName: 'CADDT',
+      kind: 'cad',
+      queriedBounds: undefined,
+      strategy: 'bounded_sample',
+      degradedReason: undefined,
+    }))
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'degraded',
+      preview: {
+        strategy: 'bounded_sample',
+        degradedReason: 'spatial_index_unavailable',
+      },
+    })
+  })
+
+  it.each([
+    ['future_summary_reason', 'bounded_sample'],
+    ['spatial_index_unavailable', 'full_scan'],
+  ] as const)(
+    'summary 原因 %s 不传播到 %s 初始预览',
+    async (queryDiagnosticReason, strategy) => {
+      mocks.GetDatasetSpatialSummary.mockResolvedValue({
+        ...boundedSummary(),
+        queryDiagnosticReason,
+      })
+      mocks.LoadSpatialPreview.mockResolvedValue(preview({
+        datasetName: 'CADDT',
+        kind: 'cad',
+        queriedBounds: undefined,
+        strategy,
+        degradedReason: undefined,
+      }))
+      const { result } = renderViewerHook()
+
+      await act(async () => result.current.addDatasetToMap('CADDT'))
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'ready',
+        preview: { strategy },
+      })
+      expect(result.current.mapLayers[0].preview?.degradedReason).toBeUndefined()
+    },
+  )
+
+  it('summary 降级原因不覆盖初始预览已有原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    const backendPreview = createDegradedSpatialPreviewFixture(
+      'envelope_cache_budget_exceeded',
+      { datasetName: 'CADDT', kind: 'cad', queriedBounds: undefined },
+    )
+    mocks.LoadSpatialPreview.mockResolvedValue(backendPreview)
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'degraded',
+      preview: { degradedReason: 'envelope_cache_budget_exceeded' },
+    })
+    expect(result.current.mapLayers[0].preview).toBe(backendPreview)
+  })
+
   it('有界预览失败时保留 Wails 字符串错误原因', async () => {
     mocks.GetDatasetSpatialSummary.mockResolvedValue({
       ...vectorSummary(),
