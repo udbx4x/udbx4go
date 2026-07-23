@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func setupTestDB(t *testing.T) *sql.DB {
@@ -173,6 +173,64 @@ func TestInitializer_CreateDatasetTable_NoFields(t *testing.T) {
 	err = db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='empty'").Scan(&count)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count)
+}
+
+func TestInitializer_CreateCadDatasetTable(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	err := NewInitializer(db).CreateCadDatasetTable("cad_layers", []FieldColumn{
+		{Name: "name", SQLiteType: "TEXT", Nullable: false},
+		{Name: "level", SQLiteType: "INTEGER", Nullable: true},
+	})
+	require.NoError(t, err)
+
+	columns := readTableColumns(t, db, "cad_layers")
+	require.Len(t, columns, 7)
+	assert.Equal(t, tableColumn{Name: "SmID", Type: "INTEGER", PrimaryKey: 1}, columns[0])
+	assert.Equal(t, tableColumn{Name: "SmUserID", Type: "INTEGER", Default: "0"}, columns[1])
+	assert.Equal(t, tableColumn{Name: "SmGeoType", Type: "INTEGER", NotNull: 1}, columns[2])
+	assert.Equal(t, tableColumn{Name: "SmGeometry", Type: "BLOB"}, columns[3])
+	assert.Equal(t, tableColumn{Name: "SmIndexKey", Type: "POLYGON"}, columns[4])
+	assert.Equal(t, tableColumn{Name: "name", Type: "TEXT", NotNull: 1}, columns[5])
+	assert.Equal(t, tableColumn{Name: "level", Type: "INTEGER"}, columns[6])
+}
+
+type tableColumn struct {
+	Name       string
+	Type       string
+	NotNull    int
+	Default    string
+	PrimaryKey int
+}
+
+func readTableColumns(t *testing.T, db *sql.DB, tableName string) []tableColumn {
+	t.Helper()
+
+	rows, err := db.Query("PRAGMA table_info(" + tableName + ")")
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var columns []tableColumn
+	for rows.Next() {
+		var column tableColumn
+		var cid int
+		var defaultValue sql.NullString
+		require.NoError(t, rows.Scan(
+			&cid,
+			&column.Name,
+			&column.Type,
+			&column.NotNull,
+			&defaultValue,
+			&column.PrimaryKey,
+		))
+		if defaultValue.Valid {
+			column.Default = defaultValue.String
+		}
+		columns = append(columns, column)
+	}
+	require.NoError(t, rows.Err())
+	return columns
 }
 
 func TestInitializer_DropDatasetTable(t *testing.T) {

@@ -6,17 +6,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/udbx4x/udbx4go/internal/schema"
 	"github.com/udbx4x/udbx4go/internal/system"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
 
 func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegisterRecord) {
-	initializer := schema.NewInitializer(db)
-	err := initializer.CreateDatasetTable("cad_layers", true, []schema.FieldColumn{
-		{Name: "name", SQLiteType: "TEXT", Nullable: false},
-		{Name: "level", SQLiteType: "INTEGER", Nullable: true},
-	})
+	// Task 5 will make CadDataset write SmGeoType. This shared Task 4 fixture uses
+	// a test-only default so existing CRUD and malformed-row tests can still insert.
+	_, err := db.Exec(`
+		CREATE TABLE cad_layers (
+			SmID INTEGER PRIMARY KEY,
+			SmUserID INTEGER DEFAULT 0,
+			SmGeoType INTEGER NOT NULL DEFAULT 0,
+			SmGeometry BLOB,
+			SmIndexKey POLYGON,
+			name TEXT NOT NULL,
+			level INTEGER
+		)
+	`)
 	require.NoError(t, err)
 
 	registerDao := system.NewSmRegisterDao(db)
@@ -25,9 +32,21 @@ func createCadDataset(t *testing.T, db *sql.DB) (*CadDataset, *system.SmRegister
 		SmDatasetName: "cad_layers",
 		SmTableName:   "cad_layers",
 		SmObjectCount: 0,
+		SmIDColName:   sql.NullString{String: "SmID", Valid: true},
+		SmGeoColName:  sql.NullString{String: "SmGeometry", Valid: true},
+		SmSRID:        sql.NullInt32{Int32: 0, Valid: true},
+		SmIndexType:   sql.NullInt32{Int32: 0, Valid: true},
 	}
 	err = registerDao.Insert(record)
 	require.NoError(t, err)
+	require.NoError(t, system.NewGeometryColumnsDao(db).Insert(&system.GeometryColumnsRecord{
+		FTableName:          "cad_layers",
+		FGeometryColumn:     "SmIndexKey",
+		GeometryType:        3,
+		CoordDimension:      2,
+		SRID:                0,
+		SpatialIndexEnabled: 0,
+	}))
 
 	fieldInfoDao := system.NewSmFieldInfoDao(db)
 	require.NoError(t, fieldInfoDao.Insert(&system.SmFieldInfoRecord{

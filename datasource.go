@@ -506,7 +506,6 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 	}
 
 	tableName := generateTableName(name)
-	initializer := schema.NewInitializer(ds.db)
 
 	fieldColumns := make([]schema.FieldColumn, len(fields))
 	for i, f := range fields {
@@ -517,8 +516,27 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 		}
 	}
 
-	if err := initializer.CreateDatasetTable(tableName, true, fieldColumns); err != nil {
-		return nil, errors.IOError("failed to create CAD dataset table", err)
+	tx, err := ds.db.Begin()
+	if err != nil {
+		return nil, errors.IOError("failed to begin CAD dataset transaction", err)
+	}
+	rollback := func(operationErr error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return errors.IOError(
+				"failed to rollback CAD dataset transaction",
+				fmt.Errorf("operation failed: %v; rollback failed: %w", operationErr, rollbackErr),
+			)
+		}
+		return operationErr
+	}
+
+	initializer := schema.NewInitializer(tx)
+	registerDao := system.NewSmRegisterDao(tx)
+	geoColsDao := system.NewGeometryColumnsDao(tx)
+	fieldInfoDao := system.NewSmFieldInfoDao(tx)
+
+	if err := initializer.CreateCadDatasetTable(tableName, fieldColumns); err != nil {
+		return nil, rollback(errors.IOError("failed to create CAD dataset table", err))
 	}
 
 	record := &system.SmRegisterRecord{
@@ -526,9 +544,25 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 		SmDatasetName: name,
 		SmTableName:   tableName,
 		SmObjectCount: 0,
+		SmIDColName:   sql.NullString{String: "SmID", Valid: true},
+		SmGeoColName:  sql.NullString{String: "SmGeometry", Valid: true},
+		SmSRID:        sql.NullInt32{Int32: 0, Valid: true},
+		SmIndexType:   sql.NullInt32{Int32: 0, Valid: true},
 	}
-	if err := ds.registerDao.Insert(record); err != nil {
-		return nil, err
+	if err := registerDao.Insert(record); err != nil {
+		return nil, rollback(err)
+	}
+
+	geoRecord := &system.GeometryColumnsRecord{
+		FTableName:          strings.ToLower(tableName),
+		FGeometryColumn:     "SmIndexKey",
+		GeometryType:        3,
+		CoordDimension:      2,
+		SRID:                0,
+		SpatialIndexEnabled: 0,
+	}
+	if err := geoColsDao.Insert(geoRecord); err != nil {
+		return nil, rollback(err)
 	}
 
 	for _, field := range fields {
@@ -541,9 +575,13 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 		if field.Alias != nil {
 			fieldRecord.SmFieldCaption = sql.NullString{String: *field.Alias, Valid: true}
 		}
-		if err := ds.fieldInfoDao.Insert(fieldRecord); err != nil {
-			return nil, err
+		if err := fieldInfoDao.Insert(fieldRecord); err != nil {
+			return nil, rollback(err)
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, errors.IOError("failed to commit CAD dataset transaction", err)
 	}
 
 	return dataset.NewCadDataset(ds.db, record.ToDatasetInfo()), nil

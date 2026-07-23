@@ -146,6 +146,110 @@ func TestDataSource_CreatePointDataset(t *testing.T) {
 	assert.Equal(t, 4326, pointDS.SRID())
 }
 
+func TestDataSourceCreateCadDatasetWritesWhitepaperSchema(t *testing.T) {
+	ds, err := Create(filepath.Join(t.TempDir(), "cad.udbx"))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	alias := "Display name"
+	cad, err := ds.CreateCadDataset("CAD-Layer", []*types.FieldInfo{
+		{Name: "name", Alias: &alias, FieldType: types.FieldTypeText, Required: true, Nullable: false},
+		{Name: "level", FieldType: types.FieldTypeInt32, Nullable: true},
+	})
+	require.NoError(t, err)
+
+	columns, err := sqliteTableColumns(ds.db, cad.Info().TableName)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"SmID", "SmUserID", "SmGeoType", "SmGeometry", "SmIndexKey", "name", "level",
+	}, columns)
+
+	record, err := ds.registerDao.GetByName("CAD-Layer")
+	require.NoError(t, err)
+	assert.Equal(t, int(types.DatasetKindCAD), record.SmDatasetType)
+	assert.Equal(t, "CAD_Layer", record.SmTableName)
+	assert.Equal(t, 0, record.SmObjectCount)
+	assert.Equal(t, sql.NullString{String: "SmID", Valid: true}, record.SmIDColName)
+	assert.Equal(t, sql.NullString{String: "SmGeometry", Valid: true}, record.SmGeoColName)
+	assert.Equal(t, sql.NullInt32{Int32: 0, Valid: true}, record.SmSRID)
+	assert.Equal(t, sql.NullInt32{Int32: 0, Valid: true}, record.SmIndexType)
+
+	geometry, err := ds.geoColsDao.GetByTableName("cad_layer")
+	require.NoError(t, err)
+	require.NotNil(t, geometry)
+	assert.Equal(t, "cad_layer", geometry.FTableName)
+	assert.Equal(t, "SmIndexKey", geometry.FGeometryColumn)
+	assert.Equal(t, 3, geometry.GeometryType)
+	assert.Equal(t, 2, geometry.CoordDimension)
+	assert.Equal(t, 0, geometry.SRID)
+	assert.Equal(t, 0, geometry.SpatialIndexEnabled)
+
+	fieldRecords, err := ds.fieldInfoDao.ListByDatasetID(record.SmDatasetID)
+	require.NoError(t, err)
+	require.Len(t, fieldRecords, 2)
+	assert.Equal(t, "level", fieldRecords[0].SmFieldName)
+	assert.Equal(t, int(types.FieldTypeInt32), fieldRecords[0].SmFieldType)
+	assert.Equal(t, 0, fieldRecords[0].SmFieldbRequired)
+	assert.Equal(t, "name", fieldRecords[1].SmFieldName)
+	assert.Equal(t, int(types.FieldTypeText), fieldRecords[1].SmFieldType)
+	assert.Equal(t, 1, fieldRecords[1].SmFieldbRequired)
+	assert.Equal(t, sql.NullString{String: alias, Valid: true}, fieldRecords[1].SmFieldCaption)
+}
+
+func TestDataSourceCreateCadDatasetRollsBackOnFieldMetadataFailure(t *testing.T) {
+	ds, err := Create(filepath.Join(t.TempDir(), "cad-rollback.udbx"))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	_, err = ds.db.Exec(`
+		CREATE TRIGGER fail_cad_field_metadata
+		BEFORE INSERT ON SmFieldInfo
+		BEGIN
+			SELECT RAISE(ABORT, 'controlled SmFieldInfo failure');
+		END
+	`)
+	require.NoError(t, err)
+
+	_, err = ds.CreateCadDataset("cad atomic", []*types.FieldInfo{
+		{Name: "name", FieldType: types.FieldTypeText, Nullable: true},
+	})
+	require.Error(t, err)
+	assert.True(t, IsIOError(err))
+
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", 0, "cad_atomic")
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM SmRegister WHERE SmDatasetName = ?", 0, "cad atomic")
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM geometry_columns WHERE f_table_name = ?", 0, "cad_atomic")
+	assertDatabaseCount(t, ds.db, "SELECT COUNT(*) FROM SmFieldInfo", 0)
+}
+
+func sqliteTableColumns(db *sql.DB, tableName string) ([]string, error) {
+	rows, err := db.Query("PRAGMA table_info(" + tableName + ")")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, typeName string
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &typeName, &notNull, &defaultValue, &primaryKey); err != nil {
+			return nil, err
+		}
+		names = append(names, name)
+	}
+	return names, rows.Err()
+}
+
+func assertDatabaseCount(t *testing.T, db *sql.DB, query string, expected int, args ...interface{}) {
+	t.Helper()
+
+	var count int
+	require.NoError(t, db.QueryRow(query, args...).Scan(&count))
+	assert.Equal(t, expected, count)
+}
+
 func TestDataSource_CreateDuplicateDataset(t *testing.T) {
 	tempDir := t.TempDir()
 	udbxPath := filepath.Join(tempDir, "test.udbx")

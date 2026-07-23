@@ -156,6 +156,28 @@ func (i *Initializer) CreateDatasetTable(tableName string, hasGeometry bool, fie
 	return err
 }
 
+// CreateCadDatasetTable creates a whitepaper-compatible CAD dataset table.
+func (i *Initializer) CreateCadDatasetTable(tableName string, fieldInfos []FieldColumn) error {
+	query := "CREATE TABLE IF NOT EXISTS " + tableName + " (\n"
+	query += "\tSmID INTEGER PRIMARY KEY,\n"
+	query += "\tSmUserID INTEGER DEFAULT 0,\n"
+	query += "\tSmGeoType INTEGER NOT NULL,\n"
+	query += "\tSmGeometry BLOB,\n"
+	query += "\tSmIndexKey POLYGON"
+
+	for _, field := range fieldInfos {
+		query += ",\n\t" + field.Name + " " + field.SQLiteType
+		if !field.Nullable {
+			query += " NOT NULL"
+		}
+	}
+
+	query += "\n)"
+
+	_, err := i.db.Exec(query)
+	return err
+}
+
 // DropDatasetTable drops a dataset data table.
 func (i *Initializer) DropDatasetTable(tableName string) error {
 	query := "DROP TABLE IF EXISTS " + tableName
