@@ -45,6 +45,20 @@ type WritableDataset[T any] interface {
 	Delete(id int) error
 }
 
+type spatialMutationHookSetter interface {
+	setSpatialMutationHook(func())
+}
+
+// AttachSpatialMutationHook installs an internal spatial-write callback.
+// Repeated trusted calls replace the previous callback without accumulating hooks.
+func AttachSpatialMutationHook(value Dataset, hook func()) {
+	setter, ok := value.(spatialMutationHookSetter)
+	if !ok {
+		return
+	}
+	setter.setSpatialMutationHook(hook)
+}
+
 // BaseDataset provides common functionality for all datasets.
 type BaseDataset struct {
 	db          *sql.DB
@@ -106,8 +120,7 @@ func (d *BaseDataset) TableName() string {
 	return d.info.TableName
 }
 
-// SetSpatialMutationHook sets the callback invoked after an affected spatial write.
-func (d *BaseDataset) SetSpatialMutationHook(hook func()) {
+func (d *BaseDataset) setSpatialMutationHook(hook func()) {
 	d.spatialMutationMu.Lock()
 	d.spatialMutationHook = hook
 	d.spatialMutationMu.Unlock()

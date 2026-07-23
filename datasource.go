@@ -669,20 +669,21 @@ func (ds *DataSource) createTextDatasetInternal(name string, srid int, fields []
 
 func (ds *DataSource) newTextDataset(info *types.DatasetInfo) *dataset.TextDataset {
 	text := dataset.NewTextDataset(ds.db, info)
-	ds.attachSpatialMutationHook(text.BaseDataset)
+	ds.attachSpatialMutationHook(text)
 	return text
 }
 
 func (ds *DataSource) newCadDataset(info *types.DatasetInfo) *dataset.CadDataset {
 	cad := dataset.NewCadDataset(ds.db, info)
-	ds.attachSpatialMutationHook(cad.BaseDataset)
+	ds.attachSpatialMutationHook(cad)
 	return cad
 }
 
-func (ds *DataSource) attachSpatialMutationHook(base *dataset.BaseDataset) {
-	tableName := base.TableName()
-	base.SetSpatialMutationHook(func() {
-		ds.envelopeCacheManager.InvalidateDataset(tableName)
+func (ds *DataSource) attachSpatialMutationHook(value dataset.Dataset) {
+	tableName := value.Info().TableName
+	manager := ds.envelopeCacheManager
+	dataset.AttachSpatialMutationHook(value, func() {
+		manager.InvalidateDataset(tableName)
 	})
 }
 

@@ -19,8 +19,8 @@ func TestBaseDatasetMutationHookCanReenterAndBeReplacedConcurrently(t *testing.T
 
 	base := NewBaseDataset(db, &types.DatasetInfo{Name: "test", TableName: "test"})
 	done := make(chan struct{})
-	base.SetSpatialMutationHook(func() {
-		base.SetSpatialMutationHook(nil)
+	base.setSpatialMutationHook(func() {
+		base.setSpatialMutationHook(nil)
 		close(done)
 	})
 	go base.notifySpatialMutation()
@@ -38,7 +38,7 @@ func TestBaseDatasetMutationHookCanReenterAndBeReplacedConcurrently(t *testing.T
 		go func() {
 			defer writers.Done()
 			for range 100 {
-				base.SetSpatialMutationHook(func() { calls.Add(1) })
+				base.setSpatialMutationHook(func() { calls.Add(1) })
 				base.notifySpatialMutation()
 			}
 		}()
@@ -53,7 +53,7 @@ func TestTextDatasetMutationHookFiresOnlyAfterAffectedWrites(t *testing.T) {
 
 	dataset := createMutationTextDataset(t, db)
 	var calls int
-	dataset.SetSpatialMutationHook(func() { calls++ })
+	dataset.setSpatialMutationHook(func() { calls++ })
 
 	require.NoError(t, dataset.Insert(textMutationFeature(1, 1, 1)))
 	assert.Equal(t, 1, calls)
@@ -79,7 +79,7 @@ func TestCadDatasetMutationHookFiresOnlyAfterAffectedWrites(t *testing.T) {
 
 	dataset, _ := createCadDataset(t, db)
 	var calls int
-	dataset.SetSpatialMutationHook(func() { calls++ })
+	dataset.setSpatialMutationHook(func() { calls++ })
 
 	require.NoError(t, dataset.Insert(cadMutationFeature(1, 1, 1)))
 	assert.Equal(t, 1, calls)
@@ -128,7 +128,7 @@ func TestSpatialDatasetInsertManyNotifiesOncePerSuccessfulRow(t *testing.T) {
 			defer db.Close()
 			dataset := tt.new(t, db)
 			var calls int
-			dataset.SetSpatialMutationHook(func() { calls++ })
+			dataset.setSpatialMutationHook(func() { calls++ })
 
 			require.NoError(t, dataset.InsertMany(tt.features))
 			assert.Equal(t, len(tt.features), calls)
@@ -138,7 +138,21 @@ func TestSpatialDatasetInsertManyNotifiesOncePerSuccessfulRow(t *testing.T) {
 
 type mutationInsertManyDataset interface {
 	InsertMany([]*types.Feature) error
-	SetSpatialMutationHook(func())
+	setSpatialMutationHook(func())
+}
+
+func TestAttachSpatialMutationHookUsesTrustedReplacementSemantics(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	dataset := createMutationTextDataset(t, db)
+	var firstCalls, replacementCalls int
+	AttachSpatialMutationHook(dataset, func() { firstCalls++ })
+	AttachSpatialMutationHook(dataset, func() { replacementCalls++ })
+	dataset.notifySpatialMutation()
+
+	assert.Zero(t, firstCalls)
+	assert.Equal(t, 1, replacementCalls)
 }
 
 func createMutationTextDataset(t *testing.T, db *sql.DB) *TextDataset {

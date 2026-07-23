@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -569,11 +570,19 @@ func TestDataSourceAttachesSpatialMutationHookOnCreate(t *testing.T) {
 			defer ds.Close()
 
 			created, mutate := tt.create(t, ds)
+			ds.attachSpatialMutationHook(created)
+			ds.attachSpatialMutationHook(created)
 			buildDataSourceEnvelopeCacheForSpatialDataset(t, ds, created.Info())
 			require.Equal(t, 1, ds.envelopeCacheManager.EntryCount())
+			require.Positive(t, ds.envelopeCacheManager.TotalBytes())
 
 			require.NoError(t, mutate())
 			assert.Zero(t, ds.envelopeCacheManager.EntryCount())
+			assert.Zero(t, ds.envelopeCacheManager.TotalBytes())
+
+			buildDataSourceEnvelopeCacheForSpatialDataset(t, ds, created.Info())
+			assert.Equal(t, 1, ds.envelopeCacheManager.EntryCount())
+			assert.Positive(t, ds.envelopeCacheManager.TotalBytes())
 		})
 	}
 }
@@ -623,11 +632,34 @@ func TestDataSourceAttachesSpatialMutationHookOnGet(t *testing.T) {
 			info := tt.create(t, ds)
 			buildDataSourceEnvelopeCacheForSpatialDataset(t, ds, info)
 			require.Equal(t, 1, ds.envelopeCacheManager.EntryCount())
+			require.Positive(t, ds.envelopeCacheManager.TotalBytes())
+			_ = tt.get(t, ds)
 			mutate := tt.get(t, ds)
 
 			require.NoError(t, mutate())
 			assert.Zero(t, ds.envelopeCacheManager.EntryCount())
+			assert.Zero(t, ds.envelopeCacheManager.TotalBytes())
+
+			buildDataSourceEnvelopeCacheForSpatialDataset(t, ds, info)
+			assert.Equal(t, 1, ds.envelopeCacheManager.EntryCount())
+			assert.Positive(t, ds.envelopeCacheManager.TotalBytes())
 		})
+	}
+}
+
+func TestDataSourceSpatialMutationHookSetterIsNotPromoted(t *testing.T) {
+	ds, err := Create(filepath.Join(t.TempDir(), "mutation-method-set.udbx"))
+	require.NoError(t, err)
+	defer ds.Close()
+
+	text, err := ds.CreateTextDataset("labels", 4326, nil)
+	require.NoError(t, err)
+	cad, err := ds.CreateCadDataset("cad", nil)
+	require.NoError(t, err)
+
+	for _, value := range []interface{}{text, cad} {
+		_, exposed := reflect.TypeOf(value).MethodByName("SetSpatialMutationHook")
+		assert.False(t, exposed)
 	}
 }
 
