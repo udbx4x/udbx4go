@@ -279,12 +279,18 @@ func TestViewerSpatialSummaryAndPreviewUseRendererNeutralContract(t *testing.T) 
 	if preview.Sampled {
 		t.Fatal("Sampled = true for small limit preview")
 	}
-	wantFeatureCount := summary.ObjectCount
-	if wantFeatureCount > minSpatialPreviewFeatureLimit {
-		wantFeatureCount = minSpatialPreviewFeatureLimit
+	if len(preview.Features) == 0 || len(preview.Features) > minSpatialPreviewFeatureLimit {
+		t.Fatalf("len(Features) = %d, want declared-extent result in [1, %d]", len(preview.Features), minSpatialPreviewFeatureLimit)
 	}
-	if len(preview.Features) != wantFeatureCount {
-		t.Fatalf("len(Features) = %d, want clamped limit count %d", len(preview.Features), wantFeatureCount)
+	if preview.QueriedBounds == nil || *preview.QueriedBounds != *summary.Extent {
+		t.Fatalf("QueriedBounds = %+v, want declared extent %+v", preview.QueriedBounds, summary.Extent)
+	}
+	if preview.Strategy != string(types.SpatialQueryStrategyRTree) &&
+		preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) {
+		t.Fatalf("Strategy = %q, want normal SDK spatial-query strategy", preview.Strategy)
+	}
+	if preview.DegradedReason != "" {
+		t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
 	}
 	first := preview.Features[0]
 	if first.ID == 0 {
@@ -629,6 +635,63 @@ func TestViewerSpatialViewportPassesBoundsToSDKAndKeepsRequiredID(t *testing.T) 
 	}
 	if ids[3] {
 		t.Fatalf("feature IDs = %v, outside non-required ID 3 must be filtered", ids)
+	}
+}
+
+func TestViewerSpatialPreviewWithoutViewportUsesDeclaredExtentQuery(t *testing.T) {
+	path, _ := createViewerPointFixture(t, false, 0)
+	app := NewApp()
+	if _, err := app.OpenUDBXFile(path); err != nil {
+		t.Fatalf("OpenUDBXFile() error = %v", err)
+	}
+
+	preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+		Limit:       100,
+		MaxVertices: minSpatialPreviewVertexBudget,
+	})
+	if err != nil {
+		t.Fatalf("LoadSpatialPreview() error = %v", err)
+	}
+
+	wantBounds := BoundingBoxDTO{MinX: -10, MinY: -20, MaxX: 30, MaxY: 40}
+	if preview.QueriedBounds == nil || *preview.QueriedBounds != wantBounds {
+		t.Fatalf("QueriedBounds = %+v, want declared extent %+v", preview.QueriedBounds, wantBounds)
+	}
+	if preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) {
+		t.Fatalf("Strategy = %q, want envelope_cache", preview.Strategy)
+	}
+	if preview.DegradedReason != "" {
+		t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
+	}
+}
+
+func TestViewerSpatialPreviewWithoutViewportRejectsUnavailableDeclaredExtent(t *testing.T) {
+	tests := []struct {
+		name   string
+		update string
+	}{
+		{name: "missing extent", update: "SmLeft = NULL"},
+		{name: "invalid extent", update: "SmLeft = 50, SmRight = 40"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path, _ := createViewerPointFixture(t, false, 0)
+			db := openViewerFixtureDB(t, path)
+			if _, err := db.Exec("UPDATE SmRegister SET " + tt.update + " WHERE SmDatasetName = 'viewer_points'"); err != nil {
+				t.Fatalf("invalidate declared extent: %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatalf("close fixture database: %v", err)
+			}
+
+			app := NewApp()
+			if _, err := app.OpenUDBXFile(path); err != nil {
+				t.Fatalf("OpenUDBXFile() error = %v", err)
+			}
+			_, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{Limit: 100})
+			assertViewerSpatialReason(t, err, types.SpatialQueryReasonSpatialIndexUnavailable)
+		})
 	}
 }
 

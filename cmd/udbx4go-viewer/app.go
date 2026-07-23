@@ -480,45 +480,30 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 			return nil, mapViewerPreviewError(queryContext, err)
 		}
 	}
+	explicitViewport := request.Viewport != nil
+	queryBounds, err := viewerSpatialPreviewBounds(info, request.Viewport)
+	if err != nil {
+		return nil, err
+	}
 
 	var (
 		features       []*types.Feature
 		queriedBounds  *BoundingBoxDTO
-		strategy       = spatialPreviewStrategyBoundedSample
+		strategy       string
 		hasMore        bool
 		degradedReason string
 	)
 	queryStarted := time.Now()
-	if request.Viewport != nil {
-		queryResult, queryErr := dataSource.QuerySpatial(queryContext, datasetName, types.SpatialQueryOptions{
-			Bounds:      request.Viewport.spatialBoundingBox(),
-			Limit:       request.Limit,
-			RequiredIDs: request.RequiredIDs,
-		})
-		if queryErr != nil {
-			if !viewerCanUseBoundedFallback(queryErr) {
-				return nil, queryErr
-			}
-			reason, _ := udbxerrors.SpatialQueryReasonOf(queryErr)
-			features, hasMore, err = a.loadBoundedPreviewFeatures(
-				queryContext,
-				ds,
-				request.Limit,
-				request.RequiredIDs,
-			)
-			if err != nil {
-				return nil, err
-			}
-			requestedBounds := request.Viewport.spatialBoundingBox()
-			queriedBounds = boundingBoxDTO(&requestedBounds)
-			degradedReason = string(reason)
-		} else {
-			features = queryResult.Features
-			queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
-			strategy = string(queryResult.Strategy)
-			hasMore = queryResult.HasMore
+	queryResult, queryErr := dataSource.QuerySpatial(queryContext, datasetName, types.SpatialQueryOptions{
+		Bounds:      queryBounds,
+		Limit:       request.Limit,
+		RequiredIDs: request.RequiredIDs,
+	})
+	if queryErr != nil {
+		if !viewerCanUseBoundedFallback(queryErr) {
+			return nil, queryErr
 		}
-	} else {
+		reason, _ := udbxerrors.SpatialQueryReasonOf(queryErr)
 		features, hasMore, err = a.loadBoundedPreviewFeatures(
 			queryContext,
 			ds,
@@ -528,6 +513,14 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		if err != nil {
 			return nil, err
 		}
+		queriedBounds = boundingBoxDTO(&queryBounds)
+		strategy = spatialPreviewStrategyBoundedSample
+		degradedReason = string(reason)
+	} else {
+		features = queryResult.Features
+		queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
+		strategy = string(queryResult.Strategy)
+		hasMore = queryResult.HasMore
 	}
 	queryDurationMS := float64(time.Since(queryStarted).Nanoseconds()) / float64(time.Millisecond)
 	previewFeatures, vertexBudgetReached := a.formatPreviewFeatures(
@@ -553,7 +546,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		response.Extent = mergeBBox(response.Extent, feature.BBox)
 	}
-	if request.Viewport != nil {
+	if explicitViewport {
 		applySpatialPreviewSampling(response, vertexBudgetReached)
 	} else {
 		response.Sampled, response.SampleReason = spatialPreviewSampleReason(
@@ -815,6 +808,19 @@ func mapViewerPreviewError(ctx context.Context, err error) error {
 		return newViewerSpatialError(types.SpatialQueryReasonQueryTimeout, ctxErr)
 	}
 	return err
+}
+
+func viewerSpatialPreviewBounds(info *types.DatasetInfo, viewport *BoundingBoxDTO) (types.BoundingBox, error) {
+	if viewport != nil {
+		return viewport.spatialBoundingBox(), nil
+	}
+	if info == nil || info.Extent == nil {
+		return types.BoundingBox{}, newViewerSpatialError(
+			types.SpatialQueryReasonSpatialIndexUnavailable,
+			udbxerrors.UnsupportedError("dataset declared extent is unavailable for spatial preview"),
+		)
+	}
+	return *info.Extent, nil
 }
 
 func viewerCanUseBoundedFallback(err error) bool {
