@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 
 	udbxerrors "github.com/udbx4x/udbx4go/pkg/errors"
@@ -15,6 +16,8 @@ import (
 var (
 	errEnvelopeCacheBudgetExceeded = stderrors.New("envelope cache budget exceeded")
 	errEnvelopeCacheClosed         = stderrors.New("envelope cache manager is closed")
+	errEnvelopeCacheInvalidContext = stderrors.New("envelope cache build context is unavailable")
+	errEnvelopeCacheRowOverflow    = stderrors.New("envelope cache scanned row count overflow")
 )
 
 type envelopeEntry struct {
@@ -75,17 +78,15 @@ func (c *envelopeCache) CandidateIDs(bounds types.BoundingBox, limit int) ([]int
 type envelopeCacheBuildFunc func(context.Context, *envelopeCacheBuildBuffer) error
 
 type envelopeCacheBuildBuffer struct {
-	ctx     context.Context
-	manager *EnvelopeCacheManager
-	pending *envelopeCacheBuild
-	entries []envelopeEntry
+	ctx         context.Context
+	manager     *EnvelopeCacheManager
+	pending     *envelopeCacheBuild
+	entries     []envelopeEntry
+	scannedRows int
 }
 
 func (b *envelopeCacheBuildBuffer) Append(entry envelopeEntry) error {
-	if b == nil || b.manager == nil || b.pending == nil {
-		return fmt.Errorf("envelope cache build buffer is unavailable")
-	}
-	if err := b.ctx.Err(); err != nil {
+	if err := b.validateRowAction(); err != nil {
 		return err
 	}
 	if len(b.entries) == math.MaxInt {
@@ -108,7 +109,44 @@ func (b *envelopeCacheBuildBuffer) Append(entry envelopeEntry) error {
 			return err
 		}
 	}
+	if err := b.validateRowAction(); err != nil {
+		return err
+	}
 	b.entries = append(b.entries, entry)
+	b.scannedRows++
+	return nil
+}
+
+func (b *envelopeCacheBuildBuffer) SkipRow() error {
+	if err := b.validateRowAction(); err != nil {
+		return err
+	}
+	b.scannedRows++
+	return nil
+}
+
+func (b *envelopeCacheBuildBuffer) validateRowAction() error {
+	if b == nil || b.manager == nil || b.pending == nil {
+		return fmt.Errorf("envelope cache build buffer is unavailable")
+	}
+	if b.ctx == nil {
+		return errEnvelopeCacheInvalidContext
+	}
+	if err := b.ctx.Err(); err != nil {
+		return err
+	}
+	if b.scannedRows == math.MaxInt {
+		return errEnvelopeCacheRowOverflow
+	}
+
+	b.manager.mu.Lock()
+	defer b.manager.mu.Unlock()
+	if b.pending.invalidated {
+		return context.Canceled
+	}
+	if !b.pending.active {
+		return fmt.Errorf("envelope cache build is no longer active")
+	}
 	return nil
 }
 
@@ -118,6 +156,8 @@ type envelopeCacheBuild struct {
 	err           error
 	reservedBytes int64
 	active        bool
+	invalidated   bool
+	cancel        context.CancelFunc
 }
 
 type envelopeCacheManagerTestHooks struct {
@@ -131,6 +171,7 @@ type EnvelopeCacheManager struct {
 	policy        types.SpatialQueryPolicy
 	caches        map[string]*envelopeCache
 	builds        map[string]*envelopeCacheBuild
+	activeBuilds  map[*envelopeCacheBuild]struct{}
 	totalBytes    int64
 	reservedBytes int64
 	closeCtx      context.Context
@@ -146,12 +187,13 @@ func NewEnvelopeCacheManager(policy types.SpatialQueryPolicy) (*EnvelopeCacheMan
 	}
 	closeCtx, cancel := context.WithCancel(context.Background())
 	return &EnvelopeCacheManager{
-		policy:    policy,
-		caches:    make(map[string]*envelopeCache),
-		builds:    make(map[string]*envelopeCacheBuild),
-		closeCtx:  closeCtx,
-		cancel:    cancel,
-		closeDone: make(chan struct{}),
+		policy:       policy,
+		caches:       make(map[string]*envelopeCache),
+		builds:       make(map[string]*envelopeCacheBuild),
+		activeBuilds: make(map[*envelopeCacheBuild]struct{}),
+		closeCtx:     closeCtx,
+		cancel:       cancel,
+		closeDone:    make(chan struct{}),
 	}, nil
 }
 
@@ -163,6 +205,9 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 ) (*envelopeCache, error) {
 	if m == nil {
 		return nil, errEnvelopeCacheClosed
+	}
+	if ctx == nil {
+		return nil, errEnvelopeCacheInvalidContext
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -204,17 +249,19 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 		m.mu.Unlock()
 		return nil, errEnvelopeCacheBudgetExceeded
 	}
+	buildCtx, cancel := context.WithTimeout(ctx, m.policy.BuildTimeout)
+	stopCloseCancel := context.AfterFunc(m.closeCtx, cancel)
 	pending := &envelopeCacheBuild{
 		done:          make(chan struct{}),
 		reservedBytes: estimatedBytes,
 		active:        true,
+		cancel:        cancel,
 	}
 	m.builds[key] = pending
+	m.activeBuilds[pending] = struct{}{}
 	m.reservedBytes += estimatedBytes
 	m.mu.Unlock()
 
-	buildCtx, cancel := context.WithTimeout(ctx, m.policy.BuildTimeout)
-	stopCloseCancel := context.AfterFunc(m.closeCtx, cancel)
 	buffer := &envelopeCacheBuildBuffer{
 		ctx:     buildCtx,
 		manager: m,
@@ -229,10 +276,10 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 		buildErr = buildCtx.Err()
 	}
 
-	if buildErr == nil && len(buffer.entries) != objectCount {
+	if buildErr == nil && buffer.scannedRows != objectCount {
 		buildErr = udbxerrors.FormatError(
 			"envelope cache row count does not match dataset metadata",
-			fmt.Errorf("got %d rows, metadata declares %d", len(buffer.entries), objectCount),
+			fmt.Errorf("scanned %d rows, metadata declares %d", buffer.scannedRows, objectCount),
 		)
 	}
 	if buildErr == nil {
@@ -257,11 +304,17 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 
 	m.mu.Lock()
 	pending.active = false
-	delete(m.builds, key)
+	delete(m.activeBuilds, pending)
+	isCurrentGeneration := m.builds[key] == pending
+	if isCurrentGeneration {
+		delete(m.builds, key)
+	}
 	m.reservedBytes -= pending.reservedBytes
 	pending.reservedBytes = 0
 	if m.closed {
 		buildErr = errEnvelopeCacheClosed
+	} else if pending.invalidated || !isCurrentGeneration {
+		buildErr = context.Canceled
 	} else if buildErr == nil {
 		buildErr = buildCtx.Err()
 	}
@@ -284,6 +337,39 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 	cancel()
 
 	return pending.cache, pending.err
+}
+
+// InvalidateDataset removes every cache generation owned by tableName.
+func (m *EnvelopeCacheManager) InvalidateDataset(tableName string) {
+	if m == nil {
+		return
+	}
+	prefix := tableName + "\x00"
+	cancels := make([]context.CancelFunc, 0)
+
+	m.mu.Lock()
+	for key, cache := range m.caches {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		delete(m.caches, key)
+		m.totalBytes -= cache.bytes
+	}
+	for key, pending := range m.builds {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		delete(m.builds, key)
+		pending.invalidated = true
+		if pending.cancel != nil {
+			cancels = append(cancels, pending.cancel)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, cancel := range cancels {
+		cancel()
+	}
 }
 
 func (m *EnvelopeCacheManager) reserveGrowthCapacity(
@@ -417,8 +503,8 @@ func (m *EnvelopeCacheManager) Close() {
 		return
 	}
 	m.closed = true
-	buildsDone := make([]<-chan struct{}, 0, len(m.builds))
-	for _, pending := range m.builds {
+	buildsDone := make([]<-chan struct{}, 0, len(m.activeBuilds))
+	for pending := range m.activeBuilds {
 		buildsDone = append(buildsDone, pending.done)
 	}
 	m.mu.Unlock()
@@ -431,6 +517,7 @@ func (m *EnvelopeCacheManager) Close() {
 	m.mu.Lock()
 	m.caches = make(map[string]*envelopeCache)
 	m.builds = make(map[string]*envelopeCacheBuild)
+	m.activeBuilds = make(map[*envelopeCacheBuild]struct{})
 	m.totalBytes = 0
 	m.reservedBytes = 0
 	close(m.closeDone)

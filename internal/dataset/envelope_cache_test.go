@@ -528,6 +528,239 @@ func TestEnvelopeCacheObjectCountMismatchIsFormatError(t *testing.T) {
 	assert.Zero(t, manager.EntryCount())
 }
 
+func TestEnvelopeCacheCountsSkippedRowsAsComplete(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 3), testEnvelopeCacheRSSCharge(t, 3))
+
+	cache, err := manager.GetOrBuild(context.Background(), "points\x00SmID\x00SmGeometry", 3, func(
+		_ context.Context,
+		buffer *envelopeCacheBuildBuffer,
+	) error {
+		initialCapacity := cap(buffer.entries)
+		require.NoError(t, buffer.Append(envelopeEntry{ID: 1, MinX: 1, MinY: 1, MaxX: 1, MaxY: 1}))
+		require.NoError(t, buffer.SkipRow())
+		require.NoError(t, buffer.SkipRow())
+		assert.Equal(t, initialCapacity, cap(buffer.entries), "skipped rows must not allocate cache entries")
+		assert.Len(t, buffer.entries, 1)
+		assert.Equal(t, 3, buffer.scannedRows)
+		return nil
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, cache)
+	assert.True(t, cache.Complete())
+	assert.Len(t, cache.entries, 1)
+	assert.Equal(t, int64(1), cache.entries[0].ID)
+	assert.Equal(t, testEnvelopeCacheRSSCharge(t, 3), manager.TotalBytes())
+}
+
+func TestEnvelopeCacheCountsSkippedRowsRejectsInvalidRowAccounting(t *testing.T) {
+	t.Run("failed append is not counted", func(t *testing.T) {
+		manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 1), testEnvelopeCacheRSSCharge(t, 1))
+		var buffer *envelopeCacheBuildBuffer
+
+		cache, err := manager.GetOrBuild(context.Background(), "points\x00SmID\x00SmGeometry", 1, func(
+			_ context.Context,
+			buildBuffer *envelopeCacheBuildBuffer,
+		) error {
+			buffer = buildBuffer
+			require.NoError(t, buffer.Append(envelopeEntry{ID: 1}))
+			return buffer.Append(envelopeEntry{ID: 2})
+		})
+
+		assert.Nil(t, cache)
+		assert.ErrorIs(t, err, errEnvelopeCacheBudgetExceeded)
+		require.NotNil(t, buffer)
+		assert.Equal(t, 1, buffer.scannedRows)
+		assert.Zero(t, manager.TotalBytes())
+		assert.Zero(t, manager.ReservedBytes())
+	})
+
+	t.Run("append then skip cannot complete one physical row", func(t *testing.T) {
+		manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 1), testEnvelopeCacheRSSCharge(t, 2))
+
+		cache, err := manager.GetOrBuild(context.Background(), "points\x00SmID\x00SmGeometry", 1, func(
+			_ context.Context,
+			buffer *envelopeCacheBuildBuffer,
+		) error {
+			require.NoError(t, buffer.Append(envelopeEntry{ID: 1}))
+			return buffer.SkipRow()
+		})
+
+		assert.Nil(t, cache)
+		assert.True(t, udbxerrors.IsFormatError(err))
+		assert.Zero(t, manager.TotalBytes())
+		assert.Zero(t, manager.ReservedBytes())
+	})
+
+	t.Run("invalid buffer context and overflow return errors", func(t *testing.T) {
+		var nilBuffer *envelopeCacheBuildBuffer
+		assert.Error(t, nilBuffer.SkipRow())
+		assert.Error(t, nilBuffer.Append(envelopeEntry{}))
+
+		invalidContext := &envelopeCacheBuildBuffer{
+			manager: &EnvelopeCacheManager{},
+			pending: &envelopeCacheBuild{active: true},
+		}
+		assert.ErrorIs(t, invalidContext.SkipRow(), errEnvelopeCacheInvalidContext)
+		assert.ErrorIs(t, invalidContext.Append(envelopeEntry{}), errEnvelopeCacheInvalidContext)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		canceled := &envelopeCacheBuildBuffer{
+			ctx:     ctx,
+			manager: &EnvelopeCacheManager{},
+			pending: &envelopeCacheBuild{active: true},
+		}
+		assert.ErrorIs(t, canceled.SkipRow(), context.Canceled)
+		assert.ErrorIs(t, canceled.Append(envelopeEntry{}), context.Canceled)
+
+		overflow := &envelopeCacheBuildBuffer{
+			ctx:         context.Background(),
+			manager:     &EnvelopeCacheManager{},
+			pending:     &envelopeCacheBuild{active: true},
+			scannedRows: math.MaxInt,
+		}
+		assert.ErrorIs(t, overflow.SkipRow(), errEnvelopeCacheRowOverflow)
+		assert.ErrorIs(t, overflow.Append(envelopeEntry{}), errEnvelopeCacheRowOverflow)
+		assert.Equal(t, math.MaxInt, overflow.scannedRows)
+		assert.Empty(t, overflow.entries)
+
+		manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 1), testEnvelopeCacheRSSCharge(t, 1))
+		cache, err := manager.GetOrBuild(nil, "points\x00SmID\x00SmGeometry", 1, fixedEnvelopeBuild(1))
+		assert.Nil(t, cache)
+		assert.ErrorIs(t, err, errEnvelopeCacheInvalidContext)
+	})
+}
+
+func TestEnvelopeCacheInvalidateDatasetRemovesOnlyExactDatasetPrefix(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheTotalRSSCharge(t, 2, 2, 2, 2))
+	roadsA, err := manager.GetOrBuild(context.Background(), "roads\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(1))
+	require.NoError(t, err)
+	_, err = manager.GetOrBuild(context.Background(), "roads\x00FeatureID\x00Shape", 2, fixedEnvelopeBuild(2, 3))
+	require.NoError(t, err)
+	roadsArchive, err := manager.GetOrBuild(context.Background(), "roads_archive\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(4))
+	require.NoError(t, err)
+	road, err := manager.GetOrBuild(context.Background(), "road\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(5))
+	require.NoError(t, err)
+
+	manager.InvalidateDataset("roads")
+
+	assert.Equal(t, testEnvelopeCacheTotalRSSCharge(t, 1, 1), manager.TotalBytes())
+	assert.Equal(t, 2, manager.EntryCount())
+	archiveAgain, err := manager.GetOrBuild(context.Background(), "roads_archive\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(99))
+	require.NoError(t, err)
+	assert.Same(t, roadsArchive, archiveAgain)
+	roadAgain, err := manager.GetOrBuild(context.Background(), "road\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(99))
+	require.NoError(t, err)
+	assert.Same(t, road, roadAgain)
+
+	rebuilt, err := manager.GetOrBuild(context.Background(), "roads\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(6))
+	require.NoError(t, err)
+	assert.NotSame(t, roadsA, rebuilt)
+	assert.Equal(t, []envelopeEntry{{ID: 6, MinX: 6, MinY: 6, MaxX: 6, MaxY: 6}}, rebuilt.entries)
+
+	manager.InvalidateDataset("roads")
+	manager.InvalidateDataset("roads")
+	assert.Equal(t, testEnvelopeCacheTotalRSSCharge(t, 1, 1), manager.TotalBytes())
+	assert.Equal(t, 2, manager.EntryCount())
+}
+
+func TestEnvelopeCacheInvalidateDatasetCancelsBeforePublishAndWaiters(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
+	beforePublish := make(chan struct{})
+	waitersJoined := make(chan struct{})
+	var publishOnce sync.Once
+	var joined atomic.Int32
+	manager.testHooks = &envelopeCacheManagerTestHooks{
+		beforePublish: func(ctx context.Context) {
+			publishOnce.Do(func() { close(beforePublish) })
+			<-ctx.Done()
+		},
+		waiterJoined: func() {
+			if joined.Add(1) == 3 {
+				close(waitersJoined)
+			}
+		},
+	}
+
+	type result struct {
+		cache *envelopeCache
+		err   error
+	}
+	results := make(chan result, 4)
+	key := "roads\x00SmID\x00Geometry"
+	go func() {
+		cache, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(1))
+		results <- result{cache: cache, err: err}
+	}()
+	<-beforePublish
+	for range 3 {
+		go func() {
+			cache, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(99))
+			results <- result{cache: cache, err: err}
+		}()
+	}
+	<-waitersJoined
+
+	manager.InvalidateDataset("roads")
+
+	for range 4 {
+		got := <-results
+		assert.Nil(t, got.cache)
+		assert.ErrorIs(t, got.err, context.Canceled)
+	}
+	assert.Zero(t, manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Zero(t, manager.EntryCount())
+}
+
+func TestEnvelopeCacheInvalidateDatasetCancelsScanAndIsolatesNewGeneration(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheTotalRSSCharge(t, 2, 2, 2))
+	other, err := manager.GetOrBuild(context.Background(), "buildings\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(8))
+	require.NoError(t, err)
+
+	key := "roads\x00SmID\x00Geometry"
+	oldStarted := make(chan struct{})
+	oldCanceled := make(chan struct{})
+	releaseOld := make(chan struct{})
+	oldResult := make(chan error, 1)
+	go func() {
+		_, buildErr := manager.GetOrBuild(context.Background(), key, 1, func(ctx context.Context, buffer *envelopeCacheBuildBuffer) error {
+			if appendErr := buffer.Append(envelopeEntry{ID: 1}); appendErr != nil {
+				return appendErr
+			}
+			close(oldStarted)
+			<-ctx.Done()
+			close(oldCanceled)
+			<-releaseOld
+			return stderrors.New("ignored cancellation")
+		})
+		oldResult <- buildErr
+	}()
+	<-oldStarted
+
+	manager.InvalidateDataset("roads")
+	manager.InvalidateDataset("roads")
+	<-oldCanceled
+
+	rebuilt, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(2))
+	require.NoError(t, err)
+	require.NotNil(t, rebuilt)
+	assert.Equal(t, int64(2), rebuilt.entries[0].ID)
+	otherAgain, err := manager.GetOrBuild(context.Background(), "buildings\x00SmID\x00Geometry", 1, fixedEnvelopeBuild(99))
+	require.NoError(t, err)
+	assert.Same(t, other, otherAgain)
+
+	close(releaseOld)
+	assert.ErrorIs(t, <-oldResult, context.Canceled)
+	again, err := manager.GetOrBuild(context.Background(), key, 1, fixedEnvelopeBuild(99))
+	require.NoError(t, err)
+	assert.Same(t, rebuilt, again, "an invalidated generation must not delete or replace its successor")
+	assert.Equal(t, testEnvelopeCacheTotalRSSCharge(t, 1, 1), manager.TotalBytes())
+	assert.Zero(t, manager.ReservedBytes())
+	assert.Equal(t, 2, manager.EntryCount())
+}
+
 func TestEnvelopeCacheRejectsObjectCountOverflow(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, math.MaxInt64, math.MaxInt64)
 	called := false
