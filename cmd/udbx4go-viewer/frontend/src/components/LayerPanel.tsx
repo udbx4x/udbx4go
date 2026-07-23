@@ -44,12 +44,9 @@ function getLayerStatus(layer: MapLayerState): string {
   if (layer.error || layer.queryStatus === 'error') {
     return layer.error || layer.queryError || '当前范围加载失败'
   }
-  if (
-    layer.queryStatus === 'degraded' &&
-    layer.preview?.strategy === 'bounded_sample' &&
-    layer.preview.degradedReason === 'envelope_cache_budget_exceeded'
-  ) {
-    return '无空间索引，显示有界预览'
+  const degradedStatus = getDegradedStatus(layer)
+  if (degradedStatus) {
+    return degradedStatus
   }
   if (layer.preview?.hasMore) {
     return `当前范围 ${layer.preview.viewportFeatureCount ?? layer.preview.features.length}+ 个对象，请继续放大`
@@ -62,6 +59,21 @@ function getLayerStatus(layer: MapLayerState): string {
   }
 
   return `${layer.kind} · ${layer.preview?.features.length ?? 0} 个预览要素`
+}
+
+function getDegradedStatus(layer: MapLayerState): string | null {
+  if (layer.queryStatus !== 'degraded' || layer.preview?.strategy !== 'bounded_sample') {
+    return null
+  }
+
+  switch (layer.preview.degradedReason) {
+    case 'envelope_cache_budget_exceeded':
+      return '缓存预算不足，显示有界预览'
+    case 'spatial_index_unavailable':
+      return '范围索引不可用，显示有界预览'
+    default:
+      return null
+  }
 }
 
 export const LayerPanel: React.FC<LayerPanelProps> = ({

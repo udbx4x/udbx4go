@@ -1,6 +1,11 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoundingBox, SpatialPreview } from '../types'
+import {
+  createDegradedSpatialPreviewFixture,
+  createSpatialPreviewFixture,
+  spatialPreviewDegradedReasons,
+} from '../test/fixtures'
 import { useUDBX } from './useUDBX'
 
 const mocks = vi.hoisted(() => ({
@@ -185,7 +190,6 @@ describe('useUDBX viewport spatial previews', () => {
       kind,
       queriedBounds: undefined,
       strategy: 'bounded_sample',
-      degradedReason: 'unsupported_dataset_kind',
     }))
     const { result } = renderViewerHook()
 
@@ -223,23 +227,116 @@ describe('useUDBX viewport spatial previews', () => {
     expect(result.current.mapLayers[0].error).toBe('cad decode failed')
   })
 
-  it('空间矢量仅在包络缓存预算超限降级为 bounded sample', async () => {
-    const { result } = renderViewerHook()
-    await act(async () => {
-      await result.current.addDatasetToMap('BaseMap_P')
-    })
-    mocks.LoadSpatialPreview.mockResolvedValue(preview({
-      queriedBounds: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
-      strategy: 'bounded_sample',
-      degradedReason: 'envelope_cache_budget_exceeded',
-    }))
+  it.each(spatialPreviewDegradedReasons)(
+    '非视口图层返回 %s 时标记为降级并保留原因',
+    async (degradedReason) => {
+      mocks.GetDatasetSpatialSummary.mockResolvedValue({
+        ...vectorSummary(),
+        datasetName: 'FallbackLayer',
+        viewportQuerySupported: false,
+      })
+      const degradedPreview = createDegradedSpatialPreviewFixture(degradedReason, {
+        datasetName: 'FallbackLayer',
+        queriedBounds: undefined,
+      })
+      mocks.LoadSpatialPreview.mockResolvedValue(degradedPreview)
+      const { result } = renderViewerHook()
 
-    act(() => result.current.queryViewport(viewport))
-    await act(async () => vi.advanceTimersByTimeAsync(250))
-    await act(flushPromises)
+      await act(async () => result.current.addDatasetToMap('FallbackLayer'))
 
-    expect(result.current.mapLayers[0].queryStatus).toBe('degraded')
-  })
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'degraded',
+        queryError: null,
+        preview: {
+          strategy: 'bounded_sample',
+          degradedReason,
+        },
+      })
+      expect(result.current.mapLayers[0].preview).toBe(degradedPreview)
+    },
+  )
+
+  it.each(spatialPreviewDegradedReasons)(
+    '视口查询返回 %s 时保留旧图形至成功后再替换为降级预览',
+    async (degradedReason) => {
+      const deferred = createDeferred<SpatialPreview>()
+      const { result } = renderViewerHook()
+      await act(async () => {
+        await result.current.addDatasetToMap('BaseMap_P')
+      })
+      act(() => result.current.queryViewport(viewport))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+      const oldPreview = result.current.mapLayers[0].preview
+      mocks.LoadSpatialPreview.mockImplementationOnce(() => deferred.promise)
+
+      act(() => result.current.queryViewport({ minX: 100, minY: 100, maxX: 200, maxY: 200 }))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+
+      expect(result.current.mapLayers[0].queryStatus).toBe('loading')
+      expect(result.current.mapLayers[0].preview).toBe(oldPreview)
+      const queriedBounds = mocks.LoadSpatialPreview.mock.calls[1][1].viewport
+      deferred.resolve(createDegradedSpatialPreviewFixture(degradedReason, { queriedBounds }))
+      await act(flushPromises)
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'degraded',
+        queryError: null,
+        lastQueriedBounds: queriedBounds,
+        preview: {
+          strategy: 'bounded_sample',
+          degradedReason,
+        },
+      })
+      expect(result.current.mapLayers[0].preview).not.toBe(oldPreview)
+    },
+  )
+
+  it.each(['corrupt_geometry', 'query_timeout'] as const)(
+    '后端以 %s 拒绝视口查询时进入 error 并保留旧图形',
+    async (queryError) => {
+      const { result } = renderViewerHook()
+      await act(async () => {
+        await result.current.addDatasetToMap('BaseMap_P')
+      })
+      act(() => result.current.queryViewport(viewport))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+      const oldPreview = result.current.mapLayers[0].preview
+      mocks.LoadSpatialPreview.mockRejectedValueOnce(queryError)
+
+      act(() => result.current.queryViewport({ minX: 100, minY: 100, maxX: 200, maxY: 200 }))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'error',
+        queryError,
+      })
+      expect(result.current.mapLayers[0].preview).toBe(oldPreview)
+    },
+  )
+
+  it.each(spatialPreviewDegradedReasons)(
+    '非 bounded_sample 策略即使携带 %s 也保持 ready',
+    async (degradedReason) => {
+      const { result } = renderViewerHook()
+      await act(async () => {
+        await result.current.addDatasetToMap('BaseMap_P')
+      })
+      mocks.LoadSpatialPreview.mockResolvedValue(preview({
+        queriedBounds: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
+        strategy: 'rtree',
+        degradedReason,
+      }))
+
+      act(() => result.current.queryViewport(viewport))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+
+      expect(result.current.mapLayers[0].queryStatus).toBe('ready')
+    },
+  )
 
   it.each([
     ['视口外', { minX: 200, minY: 200, maxX: 200, maxY: 200 }, 2],
@@ -720,18 +817,7 @@ function vectorSummary() {
 }
 
 function preview(overrides: Partial<SpatialPreview> = {}): SpatialPreview {
-  return {
-    datasetName: 'BaseMap_P',
-    kind: 'point',
-    features: [],
-    estimatedVertexCount: 0,
-    sampled: false,
-    strategy: 'rtree',
-    hasMore: false,
-    queryDurationMs: 1,
-    fileGeneration: 0,
-    ...overrides,
-  }
+  return createSpatialPreviewFixture({ queryDurationMs: 1, ...overrides })
 }
 
 function featureAttributes(id: number) {

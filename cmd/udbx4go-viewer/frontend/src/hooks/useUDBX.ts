@@ -254,7 +254,7 @@ export function useUDBX(options: UseUDBXOptions) {
         ? {
             ...layer,
             preview,
-            queryStatus: 'ready',
+            queryStatus: stableQueryStatus(preview),
             queryError: null,
           }
         : layer,
@@ -456,7 +456,10 @@ function selectionRequestMatches(
 }
 
 function isDegradedViewportPreview(preview: SpatialPreview): boolean {
-  return preview.strategy === 'bounded_sample' && preview.degradedReason === 'envelope_cache_budget_exceeded'
+  return preview.strategy === 'bounded_sample' && (
+    preview.degradedReason === 'envelope_cache_budget_exceeded' ||
+    preview.degradedReason === 'spatial_index_unavailable'
+  )
 }
 
 function stableQueryStatus(preview: SpatialPreview | null): MapLayerState['queryStatus'] {

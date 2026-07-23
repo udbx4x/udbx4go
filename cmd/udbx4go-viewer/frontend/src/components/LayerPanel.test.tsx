@@ -2,7 +2,12 @@ import { ThemeProvider } from '@mui/material/styles'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { LayerPanel } from './LayerPanel'
-import { mapLayerFixtures, sampledMapLayerFixture } from '../test/fixtures'
+import {
+  createDegradedSpatialPreviewFixture,
+  createSpatialPreviewFixture,
+  mapLayerFixtures,
+  sampledMapLayerFixture,
+} from '../test/fixtures'
 import { viewerTheme } from '../theme/viewerTheme'
 import type { BoundingBox, MapLayerState } from '../types'
 
@@ -39,17 +44,11 @@ describe('LayerPanel', () => {
     datasetName: 'BaseMap_L',
     kind: 'line',
     visible: false,
-    preview: {
+    preview: createSpatialPreviewFixture({
       datasetName: 'BaseMap_L',
       kind: 'line',
-      features: [],
-      estimatedVertexCount: 0,
-      sampled: false,
       strategy: 'rtree',
-      hasMore: false,
-      queryDurationMs: 0,
-      fileGeneration: 0,
-    },
+    }),
   }
 
   it('显示地图图层摘要并支持切换可见性和移除', () => {
@@ -158,7 +157,7 @@ describe('LayerPanel', () => {
 
   it.each([
     ['error', 'backend details'],
-    ['degraded', 'point · 0 个预览要素'],
+    ['degraded', '范围索引不可用，显示有界预览'],
     ['ready', '当前范围 0+ 个对象，请继续放大'],
     ['loading', '加载当前范围'],
   ] as const)('按最高优先级显示 %s 查询状态', (queryStatus, message) => {
@@ -166,12 +165,12 @@ describe('LayerPanel', () => {
       ...mapLayerFixtures[0],
       queryStatus,
       queryError: queryStatus === 'error' ? 'backend details' : null,
-      preview: {
-        ...mapLayerFixtures[0].preview!,
-        strategy: queryStatus === 'degraded' ? 'bounded_sample' : 'rtree',
-        degradedReason: queryStatus === 'degraded' ? 'spatial_index_unavailable' : undefined,
-        hasMore: queryStatus === 'ready',
-      },
+      preview: queryStatus === 'degraded'
+        ? createDegradedSpatialPreviewFixture('spatial_index_unavailable')
+        : createSpatialPreviewFixture({
+            strategy: 'rtree',
+            hasMore: queryStatus === 'ready',
+          }),
     }
 
     renderLayerPanel({ layers: [layer] })
@@ -179,33 +178,29 @@ describe('LayerPanel', () => {
     expect(screen.getByText(message)).toBeInTheDocument()
   })
 
-  it('仅包络缓存预算超限显示空间索引降级', () => {
+  it.each([
+    ['envelope_cache_budget_exceeded', '缓存预算不足，显示有界预览'],
+    ['spatial_index_unavailable', '范围索引不可用，显示有界预览'],
+  ] as const)('%s 显示明确中文降级原因', (degradedReason, message) => {
     const layer: MapLayerState = {
       ...mapLayerFixtures[0],
       queryStatus: 'degraded',
-      preview: {
-        ...mapLayerFixtures[0].preview!,
-        strategy: 'bounded_sample',
-        degradedReason: 'envelope_cache_budget_exceeded',
-      },
+      preview: createDegradedSpatialPreviewFixture(degradedReason),
     }
 
     renderLayerPanel({ layers: [layer] })
 
-    expect(screen.getByText('无空间索引，显示有界预览')).toBeInTheDocument()
+    expect(screen.getByText(message)).toBeInTheDocument()
   })
 
   it('ShowPreviewStats 开启时显示查询策略、耗时、要素、顶点和原因', () => {
     const layer: MapLayerState = {
       ...mapLayerFixtures[0],
       queryStatus: 'degraded',
-      preview: {
-        ...mapLayerFixtures[0].preview!,
-        strategy: 'bounded_sample',
+      preview: createDegradedSpatialPreviewFixture('spatial_index_unavailable', {
         queryDurationMs: 12.5,
-        degradedReason: 'spatial_index_unavailable',
         hasMore: false,
-      },
+      }),
     }
 
     renderLayerPanel({ layers: [layer], showPreviewStats: true })
@@ -218,17 +213,16 @@ describe('LayerPanel', () => {
       ...mapLayerFixtures[0],
       kind,
       queryStatus: 'ready',
-      preview: {
-        ...mapLayerFixtures[0].preview!,
+      preview: createSpatialPreviewFixture({
         kind,
         strategy: 'bounded_sample',
-        degradedReason: 'unsupported_dataset_kind',
-      },
+      }),
     }
 
     renderLayerPanel({ layers: [layer] })
 
-    expect(screen.queryByText('无空间索引，显示有界预览')).not.toBeInTheDocument()
+    expect(screen.queryByText('缓存预算不足，显示有界预览')).not.toBeInTheDocument()
+    expect(screen.queryByText('范围索引不可用，显示有界预览')).not.toBeInTheDocument()
     expect(screen.getByText(`${kind} · 0 个预览要素`)).toBeInTheDocument()
   })
 
