@@ -424,11 +424,6 @@ func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, 
 		summary.QueryDiagnosticReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
 		return summary, nil
 	}
-	if !supportsViewportSpatialQuery(info.Kind) {
-		summary.QueryDiagnosticReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
-		return summary, nil
-	}
-
 	queryContext, cancel := a.spatialQueryContext(dataSourceContext)
 	defer cancel()
 	capability, err := dataSource.GetSpatialQueryCapability(queryContext, datasetName)
@@ -494,7 +489,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		degradedReason string
 	)
 	queryStarted := time.Now()
-	if supportsViewportSpatialQuery(info.Kind) && request.Viewport != nil {
+	if request.Viewport != nil {
 		queryResult, queryErr := dataSource.QuerySpatial(queryContext, datasetName, types.SpatialQueryOptions{
 			Bounds:      request.Viewport.spatialBoundingBox(),
 			Limit:       request.Limit,
@@ -533,9 +528,6 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		if err != nil {
 			return nil, err
 		}
-		if !supportsViewportSpatialQuery(info.Kind) {
-			degradedReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
-		}
 	}
 	queryDurationMS := float64(time.Since(queryStarted).Nanoseconds()) / float64(time.Millisecond)
 	previewFeatures, vertexBudgetReached := a.formatPreviewFeatures(
@@ -561,7 +553,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		response.Extent = mergeBBox(response.Extent, feature.BBox)
 	}
-	if request.Viewport != nil && supportsViewportSpatialQuery(info.Kind) {
+	if request.Viewport != nil {
 		applySpatialPreviewSampling(response, vertexBudgetReached)
 	} else {
 		response.Sampled, response.SampleReason = spatialPreviewSampleReason(
@@ -868,22 +860,6 @@ func spatialPreviewResultSampleReason(hasMore bool, vertexBudgetReached bool) (b
 		return false, ""
 	}
 	return true, strings.Join(sampleReasons, "，")
-}
-
-func supportsViewportSpatialQuery(kind types.DatasetKind) bool {
-	switch kind {
-	case types.DatasetKindPoint,
-		types.DatasetKindLine,
-		types.DatasetKindRegion,
-		types.DatasetKindText,
-		types.DatasetKindPointZ,
-		types.DatasetKindLineZ,
-		types.DatasetKindRegionZ,
-		types.DatasetKindCAD:
-		return true
-	default:
-		return false
-	}
 }
 
 func (b *BoundingBoxDTO) spatialBoundingBox() types.BoundingBox {

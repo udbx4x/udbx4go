@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	stderrors "errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math"
 	"os"
 	"path/filepath"
@@ -750,6 +753,19 @@ func TestViewerSpatialReasonMapsRTreeCacheAndBoundedSampleStates(t *testing.T) {
 	})
 }
 
+func TestViewerSpatialRoutingDoesNotDefineDatasetKindWhitelist(t *testing.T) {
+	file, err := parser.ParseFile(token.NewFileSet(), "app.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse app.go: %v", err)
+	}
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == "supportsViewportSpatialQuery" {
+			t.Fatal("Viewer must use DatasetKind.IsSpatial and SDK capability instead of a local viewport kind whitelist")
+		}
+	}
+}
+
 func TestViewerSpatialBoundedPreviewPreservesMinimumFeatureLimit(t *testing.T) {
 	path, _ := createViewerPointFixture(t, false, 1_000_000)
 	app := NewApp()
@@ -779,14 +795,22 @@ func TestViewerSpatialReasonTextAndCADUseViewportQueryCapability(t *testing.T) {
 		t.Fatalf("OpenUDBXFile(sample) error = %v", err)
 	}
 
-	for _, datasetName := range []string{"County_T", "CADDT"} {
-		t.Run(datasetName, func(t *testing.T) {
-			summary, err := app.GetDatasetSpatialSummary(datasetName)
+	tests := []struct {
+		datasetName string
+		targetKind  string
+	}{
+		{datasetName: "County_T", targetKind: "text"},
+		{datasetName: "CADDT", targetKind: "cad-line"},
+		{datasetName: "CADDT", targetKind: "cad-region"},
+	}
+	for _, test := range tests {
+		t.Run(test.datasetName+"/"+test.targetKind, func(t *testing.T) {
+			summary, err := app.GetDatasetSpatialSummary(test.datasetName)
 			if err != nil {
-				t.Fatalf("GetDatasetSpatialSummary(%s) error = %v", datasetName, err)
+				t.Fatalf("GetDatasetSpatialSummary(%s) error = %v", test.datasetName, err)
 			}
 			if !summary.PreviewSupported || !summary.ViewportQuerySupported || summary.Extent == nil {
-				t.Fatalf("summary(%s) = %+v", datasetName, summary)
+				t.Fatalf("summary(%s) = %+v", test.datasetName, summary)
 			}
 
 			dataSource, _, queryContext, release, err := app.acquireDataSource()
@@ -794,9 +818,9 @@ func TestViewerSpatialReasonTextAndCADUseViewportQueryCapability(t *testing.T) {
 				t.Fatalf("acquireDataSource() error = %v", err)
 			}
 			defer release()
-			capability, err := dataSource.GetSpatialQueryCapability(queryContext, datasetName)
+			capability, err := dataSource.GetSpatialQueryCapability(queryContext, test.datasetName)
 			if err != nil {
-				t.Fatalf("GetSpatialQueryCapability(%s) error = %v", datasetName, err)
+				t.Fatalf("GetSpatialQueryCapability(%s) error = %v", test.datasetName, err)
 			}
 			wantViewportSupport := capability.RTreeAvailable || capability.FallbackAvailable
 			if summary.ViewportQuerySupported != wantViewportSupport {
@@ -812,20 +836,21 @@ func TestViewerSpatialReasonTextAndCADUseViewportQueryCapability(t *testing.T) {
 				t,
 				dataSource,
 				queryContext,
-				datasetName,
+				test.datasetName,
 				*summary.Extent,
+				test.targetKind,
 			)
 			if authoritative.Strategy != types.SpatialQueryStrategyEnvelopeCache {
 				t.Fatalf("SDK strategy = %q, want envelope_cache", authoritative.Strategy)
 			}
 
-			preview, err := app.LoadSpatialPreview(datasetName, SpatialPreviewRequestDTO{
+			preview, err := app.LoadSpatialPreview(test.datasetName, SpatialPreviewRequestDTO{
 				Viewport:    viewport,
 				Limit:       100,
 				MaxVertices: maxSpatialPreviewVertexBudget,
 			})
 			if err != nil {
-				t.Fatalf("LoadSpatialPreview(%s) error = %v", datasetName, err)
+				t.Fatalf("LoadSpatialPreview(%s) error = %v", test.datasetName, err)
 			}
 			if len(preview.Features) != len(authoritative.Features) {
 				t.Fatalf("len(preview.Features) = %d, want SDK result %d", len(preview.Features), len(authoritative.Features))
@@ -1630,6 +1655,7 @@ func selectViewerSpatialAuthority(
 	ctx context.Context,
 	datasetName string,
 	extent BoundingBoxDTO,
+	targetKind string,
 ) (*BoundingBoxDTO, *types.SpatialQueryResult) {
 	t.Helper()
 	all, err := dataSource.QuerySpatial(ctx, datasetName, types.SpatialQueryOptions{
@@ -1644,6 +1670,9 @@ func selectViewerSpatialAuthority(
 	}
 
 	for _, feature := range all.Features {
+		if !sdkGeometryMatchesTarget(feature.Geometry, targetKind) {
+			continue
+		}
 		bbox := feature.Geometry.GetBBox()
 		if len(bbox) < 4 {
 			continue
@@ -1658,12 +1687,37 @@ func selectViewerSpatialAuthority(
 		if err != nil {
 			t.Fatalf("QuerySpatial(%s selective viewport) error = %v", datasetName, err)
 		}
-		if len(result.Features) > 0 && len(result.Features) < len(all.Features) {
+		if containsSDKFeatureID(result.Features, feature.ID) && len(result.Features) < len(all.Features) {
 			return viewport, result
 		}
 	}
-	t.Fatalf("could not find a selective viewport for %s from %d SDK features", datasetName, len(all.Features))
+	t.Fatalf("could not find a selective %s viewport for %s from %d SDK features", targetKind, datasetName, len(all.Features))
 	return nil, nil
+}
+
+func sdkGeometryMatchesTarget(geometry types.Geometry, targetKind string) bool {
+	switch targetKind {
+	case "text":
+		_, ok := geometry.(*types.TextGeometry)
+		return ok
+	case "cad-line":
+		_, ok := geometry.(*types.CadLineGeometry)
+		return ok
+	case "cad-region":
+		_, ok := geometry.(*types.CadRegionGeometry)
+		return ok
+	default:
+		return false
+	}
+}
+
+func containsSDKFeatureID(features []*types.Feature, want int) bool {
+	for _, feature := range features {
+		if feature.ID == want {
+			return true
+		}
+	}
+	return false
 }
 
 func assertViewerPreviewMatchesSDKFeature(
@@ -1676,63 +1730,90 @@ func assertViewerPreviewMatchesSDKFeature(
 	if preview.ID != feature.ID {
 		t.Fatalf("preview ID = %d, want SDK ID %d", preview.ID, feature.ID)
 	}
-	wantType, wantX, wantY, ok := sdkPreviewGeometryKey(feature.Geometry)
+	wantGeometry, ok := sdkExpectedPreviewGeometry(feature.Geometry)
 	if !ok {
 		t.Fatalf("unsupported SDK geometry for preview comparison: %T", feature.Geometry)
 	}
-	if preview.Geometry.Type != wantType || preview.Geometry.HasZ != feature.Geometry.HasZ() {
-		t.Fatalf("preview geometry = {%s hasZ=%v}, want {%s hasZ=%v}", preview.Geometry.Type, preview.Geometry.HasZ, wantType, feature.Geometry.HasZ())
+	if preview.Geometry.Type != wantGeometry.Type || preview.Geometry.HasZ != wantGeometry.HasZ {
+		t.Fatalf("preview geometry = {%s hasZ=%v}, want {%s hasZ=%v}", preview.Geometry.Type, preview.Geometry.HasZ, wantGeometry.Type, wantGeometry.HasZ)
 	}
-	gotX, gotY, ok := firstPreviewCoordinate(preview.Geometry.Coordinates)
-	if !ok || math.Abs(gotX-wantX) > 1e-9 || math.Abs(gotY-wantY) > 1e-9 {
-		t.Fatalf("preview first coordinate = (%v, %v, present=%v), want (%v, %v)", gotX, gotY, ok, wantX, wantY)
-	}
+	assertViewerCoordinateStructure(t, preview.Geometry.Coordinates, wantGeometry.Coordinates, "coordinates")
 	assertViewerBBoxMatchesSDK(t, preview.BBox, feature.Geometry.GetBBox())
 	if datasetSRID != nil && feature.Geometry.GetSRID() != *datasetSRID {
 		t.Fatalf("SDK feature SRID = %d, want dataset SRID %d", feature.Geometry.GetSRID(), *datasetSRID)
 	}
 }
 
-func sdkPreviewGeometryKey(geometry types.Geometry) (string, float64, float64, bool) {
+func sdkExpectedPreviewGeometry(geometry types.Geometry) (PreviewGeometryDTO, bool) {
 	switch typed := geometry.(type) {
 	case *types.TextGeometry:
-		if len(typed.Anchor) >= 2 {
-			return "Text", typed.Anchor[0], typed.Anchor[1], true
-		}
+		return PreviewGeometryDTO{Type: "Text", Coordinates: sdkFloatCoordinates(typed.Anchor), HasZ: typed.HasZ()}, true
 	case *types.CadPointGeometry:
-		return "Point", typed.XCoord, typed.YCoord, true
+		return PreviewGeometryDTO{Type: "Point", Coordinates: []interface{}{typed.XCoord, typed.YCoord}}, true
 	case *types.CadLineGeometry:
-		if len(typed.Coordinates) > 0 {
-			return "MultiLineString", typed.Coordinates[0][0], typed.Coordinates[0][1], true
-		}
+		return PreviewGeometryDTO{Type: "MultiLineString", Coordinates: sdkCADSegments(typed.Coordinates, typed.SubPointCounts)}, true
 	case *types.CadRegionGeometry:
-		if len(typed.Coordinates) > 0 {
-			return "MultiPolygon", typed.Coordinates[0][0], typed.Coordinates[0][1], true
-		}
+		return PreviewGeometryDTO{Type: "MultiPolygon", Coordinates: []interface{}{sdkCADSegments(typed.Coordinates, typed.SubPointCounts)}}, true
 	case *types.CadTextGeometry:
-		if len(typed.Anchor) >= 2 {
-			return "Text", typed.Anchor[0], typed.Anchor[1], true
-		}
+		return PreviewGeometryDTO{Type: "Text", Coordinates: sdkFloatCoordinates(typed.Anchor)}, true
 	}
-	return "", 0, 0, false
+	return PreviewGeometryDTO{}, false
 }
 
-func firstPreviewCoordinate(values []interface{}) (float64, float64, bool) {
-	if len(values) >= 2 {
-		x, xOK := values[0].(float64)
-		y, yOK := values[1].(float64)
-		if xOK && yOK {
-			return x, y, true
-		}
+func sdkFloatCoordinates(values []float64) []interface{} {
+	coordinates := make([]interface{}, len(values))
+	for index, value := range values {
+		coordinates[index] = value
 	}
-	for _, value := range values {
-		if nested, ok := value.([]interface{}); ok {
-			if x, y, found := firstPreviewCoordinate(nested); found {
-				return x, y, true
-			}
-		}
+	return coordinates
+}
+
+func sdkCADSegments(coordinates [][2]float64, subPointCounts []int) []interface{} {
+	if len(subPointCounts) == 0 {
+		subPointCounts = []int{len(coordinates)}
 	}
-	return 0, 0, false
+	segments := make([]interface{}, 0, len(subPointCounts))
+	offset := 0
+	for _, count := range subPointCounts {
+		if count <= 0 || offset >= len(coordinates) {
+			continue
+		}
+		end := offset + count
+		if end > len(coordinates) {
+			end = len(coordinates)
+		}
+		segment := make([]interface{}, 0, end-offset)
+		for _, coordinate := range coordinates[offset:end] {
+			segment = append(segment, []interface{}{coordinate[0], coordinate[1]})
+		}
+		segments = append(segments, segment)
+		offset = end
+	}
+	return segments
+}
+
+func assertViewerCoordinateStructure(t *testing.T, got interface{}, want interface{}, path string) {
+	t.Helper()
+	switch typedWant := want.(type) {
+	case []interface{}:
+		typedGot, ok := got.([]interface{})
+		if !ok {
+			t.Fatalf("%s type = %T, want []interface{}", path, got)
+		}
+		if len(typedGot) != len(typedWant) {
+			t.Fatalf("%s length = %d, want %d", path, len(typedGot), len(typedWant))
+		}
+		for index := range typedWant {
+			assertViewerCoordinateStructure(t, typedGot[index], typedWant[index], fmt.Sprintf("%s[%d]", path, index))
+		}
+	case float64:
+		typedGot, ok := got.(float64)
+		if !ok || math.Abs(typedGot-typedWant) > 1e-9 {
+			t.Fatalf("%s = %v (%T), want %v", path, got, got, typedWant)
+		}
+	default:
+		t.Fatalf("unsupported expected coordinate type at %s: %T", path, want)
+	}
 }
 
 func assertViewerBBoxMatchesSDK(t *testing.T, preview *BoundingBoxDTO, bbox []float64) {
