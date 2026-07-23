@@ -390,6 +390,9 @@ func (d *TextDataset) loadFeaturesByIDs(
 		columns []string,
 		values []interface{},
 	) (*types.Feature, error) {
+		if spatialFeatureRowIsDoubleNull(columns, values, payloadColumn, envelopeColumn) {
+			return nil, nil
+		}
 		return d.buildFeatureWithMetadata(columns, values, idColumn, payloadColumn, envelopeColumn)
 	})
 }

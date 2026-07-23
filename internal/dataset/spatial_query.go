@@ -2,7 +2,6 @@ package dataset
 
 import (
 	"context"
-	"database/sql"
 	stderrors "errors"
 	"fmt"
 
@@ -53,12 +52,19 @@ func (q *SpatialQuerier) QueryWithEnvelopeCache(
 			udbxerrors.UnsupportedError("spatial query columns are unavailable"),
 		)
 	}
+	if manager == nil {
+		manager, err = NewEnvelopeCacheManager(types.DefaultSpatialQueryPolicy())
+		if err != nil {
+			return nil, err
+		}
+		defer manager.Close()
+	}
 
 	strategy := types.SpatialQueryStrategyRTree
 	var candidateIDs []int
 	var hasMore bool
 	if detected.Capability.RTreeAvailable {
-		candidateIDs, hasMore, err = q.queryRTreeCandidateIDs(ctx, detected, normalized)
+		candidateIDs, hasMore, err = q.queryRTreeCandidateIDs(ctx, detected, normalized, manager)
 	} else {
 		candidateIDs, hasMore, strategy, err = q.queryFallbackCandidateIDs(ctx, detected, normalized, manager)
 	}
@@ -121,15 +127,6 @@ func (q *SpatialQuerier) queryFallbackCandidateIDs(
 	options types.SpatialQueryOptions,
 	manager *EnvelopeCacheManager,
 ) ([]int, bool, types.SpatialQueryStrategy, error) {
-	if manager == nil {
-		var err error
-		manager, err = NewEnvelopeCacheManager(types.DefaultSpatialQueryPolicy())
-		if err != nil {
-			return nil, false, "", err
-		}
-		defer manager.Close()
-	}
-
 	cacheKey := spatialEnvelopeCacheKey(q.info.TableName, detected.IDColumn, detected.EnvelopeColumn)
 	cache, err := manager.GetOrBuild(ctx, cacheKey, q.info.ObjectCount, func(
 		buildCtx context.Context,
@@ -159,6 +156,19 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 	ctx context.Context,
 	detected *detectedSpatialCapability,
 	buffer *envelopeCacheBuildBuffer,
+) error {
+	return q.scanSpatialEnvelopeRows(ctx, detected, func(entry *envelopeEntry) error {
+		if entry == nil {
+			return buffer.SkipRow()
+		}
+		return buffer.Append(*entry)
+	})
+}
+
+func (q *SpatialQuerier) scanSpatialEnvelopeRows(
+	ctx context.Context,
+	detected *detectedSpatialCapability,
+	consume func(*envelopeEntry) error,
 ) (returnErr error) {
 	quotedTable, err := sqliteutil.QuoteIdentifier(q.info.TableName)
 	if err != nil {
@@ -196,8 +206,9 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 		}
 	}()
 
+	scannedRows := 0
 	for rows.Next() {
-		if len(buffer.entries)%256 == 0 {
+		if scannedRows%256 == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -225,9 +236,10 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 					udbxerrors.UnsupportedError("spatial payload is missing its SmIndexKey envelope"),
 				)
 			}
-			if err := buffer.SkipRow(); err != nil {
+			if err := consume(nil); err != nil {
 				return err
 			}
+			scannedRows++
 			continue
 		}
 		if nullablePayload && payloadPresent == 0 {
@@ -241,12 +253,14 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 		if err != nil {
 			return &spatialGeometryError{cause: udbxerrors.FormatError("failed to read GAIA envelope", err)}
 		}
-		if err := buffer.Append(envelopeEntry{
+		entry := envelopeEntry{
 			ID: id, MinX: envelope.MinX, MinY: envelope.MinY,
 			MaxX: envelope.MaxX, MaxY: envelope.MaxY,
-		}); err != nil {
+		}
+		if err := consume(&entry); err != nil {
 			return err
 		}
+		scannedRows++
 	}
 	if err := rows.Err(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -294,9 +308,15 @@ func (q *SpatialQuerier) queryRTreeCandidateIDs(
 	ctx context.Context,
 	detected *detectedSpatialCapability,
 	options types.SpatialQueryOptions,
+	manager *EnvelopeCacheManager,
 ) ([]int, bool, error) {
-	if err := q.validateNullableSpatialRows(ctx, detected); err != nil {
-		return nil, false, err
+	if q.info.Kind == types.DatasetKindText || q.info.Kind == types.DatasetKindCAD {
+		cacheKey := spatialEnvelopeCacheKey(q.info.TableName, detected.IDColumn, detected.EnvelopeColumn)
+		if err := manager.validateEnvelopeIntegrity(ctx, cacheKey, func(validateCtx context.Context) error {
+			return q.scanSpatialEnvelopeRows(validateCtx, detected, func(*envelopeEntry) error { return nil })
+		}); err != nil {
+			return nil, false, err
+		}
 	}
 	quotedRTree, err := sqliteutil.QuoteIdentifier(detected.RTreeName)
 	if err != nil {
@@ -382,55 +402,6 @@ func (q *SpatialQuerier) queryRTreeCandidateIDs(
 		ids = ids[:options.Limit]
 	}
 	return ids, hasMore, nil
-}
-
-func (q *SpatialQuerier) validateNullableSpatialRows(
-	ctx context.Context,
-	detected *detectedSpatialCapability,
-) error {
-	if q.info.Kind != types.DatasetKindText && q.info.Kind != types.DatasetKindCAD {
-		return nil
-	}
-	quotedTable, err := sqliteutil.QuoteIdentifier(q.info.TableName)
-	if err != nil {
-		return udbxerrors.IOError("failed to quote dataset table name", err)
-	}
-	quotedID, err := sqliteutil.QuoteIdentifier(detected.IDColumn)
-	if err != nil {
-		return udbxerrors.IOError("failed to quote feature ID column", err)
-	}
-	quotedPayload, err := sqliteutil.QuoteIdentifier(detected.PayloadColumn)
-	if err != nil {
-		return udbxerrors.IOError("failed to quote payload column", err)
-	}
-	quotedEnvelope, err := sqliteutil.QuoteIdentifier(detected.EnvelopeColumn)
-	if err != nil {
-		return udbxerrors.IOError("failed to quote envelope column", err)
-	}
-
-	query := "SELECT " + quotedPayload + " IS NOT NULL, " + quotedEnvelope + " IS NOT NULL" +
-		" FROM " + quotedTable +
-		" WHERE (" + quotedPayload + " IS NULL AND " + quotedEnvelope + " IS NOT NULL)" +
-		" OR (" + quotedPayload + " IS NOT NULL AND " + quotedEnvelope + " IS NULL)" +
-		" ORDER BY " + quotedID + " LIMIT 1"
-	var payloadPresent, envelopePresent int
-	err = q.db.QueryRowContext(ctx, query).Scan(&payloadPresent, &envelopePresent)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		return udbxerrors.IOError("failed to validate spatial payload metadata", err)
-	}
-	if payloadPresent != 0 && envelopePresent == 0 {
-		return spatialQueryFailure(
-			types.SpatialQueryReasonSpatialIndexUnavailable,
-			udbxerrors.UnsupportedError("spatial payload is missing its SmIndexKey envelope"),
-		)
-	}
-	return newSpatialGeometryError("SmIndexKey envelope exists without a spatial payload")
 }
 
 func initialCandidateCapacity(limit int) int {

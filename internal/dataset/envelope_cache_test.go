@@ -665,6 +665,55 @@ func TestEnvelopeCacheInvalidateDatasetRemovesOnlyExactDatasetPrefix(t *testing.
 	assert.Equal(t, 2, manager.EntryCount())
 }
 
+func TestEnvelopeIntegrityStateReusesResultUntilInvalidated(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 1), testEnvelopeCacheRSSCharge(t, 2))
+	defer manager.Close()
+	key := "labels\x00SmID\x00SmIndexKey"
+	var calls atomic.Int32
+	corrupt := newSpatialGeometryError("malformed SmIndexKey")
+
+	err := manager.validateEnvelopeIntegrity(context.Background(), key, func(context.Context) error {
+		calls.Add(1)
+		return corrupt
+	})
+	assert.ErrorIs(t, err, corrupt)
+	err = manager.validateEnvelopeIntegrity(context.Background(), key, func(context.Context) error {
+		calls.Add(1)
+		return nil
+	})
+	assert.ErrorIs(t, err, corrupt)
+	assert.Equal(t, int32(1), calls.Load())
+
+	manager.InvalidateDataset("labels")
+	err = manager.validateEnvelopeIntegrity(context.Background(), key, func(context.Context) error {
+		calls.Add(1)
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), calls.Load())
+}
+
+func TestEnvelopeIntegrityInvalidationCancelsOldGeneration(t *testing.T) {
+	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 1), testEnvelopeCacheRSSCharge(t, 2))
+	defer manager.Close()
+	key := "labels\x00SmID\x00SmIndexKey"
+	started := make(chan struct{})
+	oldResult := make(chan error, 1)
+	go func() {
+		oldResult <- manager.validateEnvelopeIntegrity(context.Background(), key, func(ctx context.Context) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	}()
+	<-started
+
+	manager.InvalidateDataset("labels")
+	assert.ErrorIs(t, <-oldResult, context.Canceled)
+	err := manager.validateEnvelopeIntegrity(context.Background(), key, func(context.Context) error { return nil })
+	require.NoError(t, err)
+}
+
 func TestEnvelopeCacheInvalidateDatasetCancelsBeforePublishAndWaiters(t *testing.T) {
 	manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
 	beforePublish := make(chan struct{})

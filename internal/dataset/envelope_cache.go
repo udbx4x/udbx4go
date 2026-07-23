@@ -200,6 +200,17 @@ type envelopeCacheBuild struct {
 	cancel        context.CancelFunc
 }
 
+type envelopeIntegrityBuild struct {
+	done        chan struct{}
+	err         error
+	invalidated bool
+	cancel      context.CancelFunc
+}
+
+type envelopeIntegrityState struct {
+	err error
+}
+
 type envelopeCacheManagerTestHooks struct {
 	beforePublish       func(context.Context)
 	waiterJoined        func()
@@ -209,19 +220,22 @@ type envelopeCacheManagerTestHooks struct {
 
 // EnvelopeCacheManager owns all envelope caches for one DataSource.
 type EnvelopeCacheManager struct {
-	mu            sync.Mutex
-	retireMu      sync.Mutex
-	policy        types.SpatialQueryPolicy
-	caches        map[string]*envelopeCache
-	builds        map[string]*envelopeCacheBuild
-	activeBuilds  map[*envelopeCacheBuild]struct{}
-	totalBytes    int64
-	reservedBytes int64
-	closeCtx      context.Context
-	cancel        context.CancelFunc
-	closeDone     chan struct{}
-	closed        bool
-	testHooks     *envelopeCacheManagerTestHooks
+	mu                    sync.Mutex
+	retireMu              sync.Mutex
+	policy                types.SpatialQueryPolicy
+	caches                map[string]*envelopeCache
+	builds                map[string]*envelopeCacheBuild
+	activeBuilds          map[*envelopeCacheBuild]struct{}
+	integrityStates       map[string]*envelopeIntegrityState
+	integrityBuilds       map[string]*envelopeIntegrityBuild
+	activeIntegrityBuilds map[*envelopeIntegrityBuild]struct{}
+	totalBytes            int64
+	reservedBytes         int64
+	closeCtx              context.Context
+	cancel                context.CancelFunc
+	closeDone             chan struct{}
+	closed                bool
+	testHooks             *envelopeCacheManagerTestHooks
 }
 
 func NewEnvelopeCacheManager(policy types.SpatialQueryPolicy) (*EnvelopeCacheManager, error) {
@@ -230,13 +244,16 @@ func NewEnvelopeCacheManager(policy types.SpatialQueryPolicy) (*EnvelopeCacheMan
 	}
 	closeCtx, cancel := context.WithCancel(context.Background())
 	return &EnvelopeCacheManager{
-		policy:       policy,
-		caches:       make(map[string]*envelopeCache),
-		builds:       make(map[string]*envelopeCacheBuild),
-		activeBuilds: make(map[*envelopeCacheBuild]struct{}),
-		closeCtx:     closeCtx,
-		cancel:       cancel,
-		closeDone:    make(chan struct{}),
+		policy:                policy,
+		caches:                make(map[string]*envelopeCache),
+		builds:                make(map[string]*envelopeCacheBuild),
+		activeBuilds:          make(map[*envelopeCacheBuild]struct{}),
+		integrityStates:       make(map[string]*envelopeIntegrityState),
+		integrityBuilds:       make(map[string]*envelopeIntegrityBuild),
+		activeIntegrityBuilds: make(map[*envelopeIntegrityBuild]struct{}),
+		closeCtx:              closeCtx,
+		cancel:                cancel,
+		closeDone:             make(chan struct{}),
 	}, nil
 }
 
@@ -378,6 +395,7 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 			complete:            true,
 			beforeCandidateScan: beforeCandidateScan,
 		}
+		delete(m.integrityStates, key)
 		m.caches[key] = pending.cache
 		m.totalBytes += actualBytes
 	}
@@ -389,6 +407,98 @@ func (m *EnvelopeCacheManager) GetOrBuild(
 	cancel()
 
 	return pending.cache, pending.err
+}
+
+func (m *EnvelopeCacheManager) validateEnvelopeIntegrity(
+	ctx context.Context,
+	key string,
+	validate func(context.Context) error,
+) error {
+	if m == nil {
+		return errEnvelopeCacheClosed
+	}
+	if ctx == nil {
+		return errEnvelopeCacheInvalidContext
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if validate == nil {
+		return fmt.Errorf("envelope integrity validation function is required")
+	}
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return errEnvelopeCacheClosed
+	}
+	if m.caches[key] != nil {
+		m.mu.Unlock()
+		return nil
+	}
+	if state := m.integrityStates[key]; state != nil {
+		m.mu.Unlock()
+		return state.err
+	}
+	if pending := m.integrityBuilds[key]; pending != nil {
+		m.mu.Unlock()
+		select {
+		case <-pending.done:
+			return pending.err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	buildCtx, cancel := context.WithTimeout(ctx, m.policy.BuildTimeout)
+	stopCloseCancel := context.AfterFunc(m.closeCtx, cancel)
+	pending := &envelopeIntegrityBuild{
+		done:   make(chan struct{}),
+		cancel: cancel,
+	}
+	m.integrityBuilds[key] = pending
+	m.activeIntegrityBuilds[pending] = struct{}{}
+	m.mu.Unlock()
+
+	validateErr := buildCtx.Err()
+	if validateErr == nil {
+		validateErr = validate(buildCtx)
+	}
+	if validateErr == nil {
+		validateErr = buildCtx.Err()
+	}
+
+	m.mu.Lock()
+	delete(m.activeIntegrityBuilds, pending)
+	isCurrentGeneration := m.integrityBuilds[key] == pending
+	if isCurrentGeneration {
+		delete(m.integrityBuilds, key)
+	}
+	if m.closed {
+		validateErr = errEnvelopeCacheClosed
+	} else if pending.invalidated || !isCurrentGeneration {
+		validateErr = context.Canceled
+	} else if m.caches[key] == nil && cacheableEnvelopeIntegrityResult(validateErr) {
+		m.integrityStates[key] = &envelopeIntegrityState{err: validateErr}
+	}
+	pending.err = validateErr
+	close(pending.done)
+	m.mu.Unlock()
+	stopCloseCancel()
+	cancel()
+
+	return pending.err
+}
+
+func cacheableEnvelopeIntegrityResult(err error) bool {
+	if err == nil {
+		return true
+	}
+	var geometryErr *spatialGeometryError
+	if stderrors.As(err, &geometryErr) {
+		return true
+	}
+	reason, ok := udbxerrors.SpatialQueryReasonOf(err)
+	return ok && reason != types.SpatialQueryReasonQueryTimeout
 }
 
 // InvalidateDataset removes every cache generation owned by tableName.
@@ -412,11 +522,26 @@ func (m *EnvelopeCacheManager) InvalidateDataset(tableName string) {
 		delete(m.caches, key)
 		retiring = append(retiring, cache)
 	}
+	for key := range m.integrityStates {
+		if strings.HasPrefix(key, prefix) {
+			delete(m.integrityStates, key)
+		}
+	}
 	for key, pending := range m.builds {
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
 		delete(m.builds, key)
+		pending.invalidated = true
+		if pending.cancel != nil {
+			cancels = append(cancels, pending.cancel)
+		}
+	}
+	for key, pending := range m.integrityBuilds {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		delete(m.integrityBuilds, key)
 		pending.invalidated = true
 		if pending.cancel != nil {
 			cancels = append(cancels, pending.cancel)
@@ -578,8 +703,14 @@ func (m *EnvelopeCacheManager) Close() {
 		delete(m.caches, key)
 		retiring = append(retiring, cache)
 	}
+	for key := range m.integrityStates {
+		delete(m.integrityStates, key)
+	}
 	buildsDone := make([]<-chan struct{}, 0, len(m.activeBuilds))
 	for pending := range m.activeBuilds {
+		buildsDone = append(buildsDone, pending.done)
+	}
+	for pending := range m.activeIntegrityBuilds {
 		buildsDone = append(buildsDone, pending.done)
 	}
 	var beforeCacheRetire func()
@@ -603,6 +734,9 @@ func (m *EnvelopeCacheManager) Close() {
 	m.caches = make(map[string]*envelopeCache)
 	m.builds = make(map[string]*envelopeCacheBuild)
 	m.activeBuilds = make(map[*envelopeCacheBuild]struct{})
+	m.integrityStates = make(map[string]*envelopeIntegrityState)
+	m.integrityBuilds = make(map[string]*envelopeIntegrityBuild)
+	m.activeIntegrityBuilds = make(map[*envelopeIntegrityBuild]struct{})
 	m.totalBytes = 0
 	m.reservedBytes = 0
 	close(m.closeDone)

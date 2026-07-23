@@ -106,6 +106,9 @@ func loadSpatialFeatureBatch(
 		if err != nil {
 			return nil, err
 		}
+		if feature == nil {
+			continue
+		}
 		features[feature.ID] = feature
 	}
 	if err := rows.Err(); err != nil {
@@ -115,4 +118,25 @@ func loadSpatialFeatureBatch(
 		return nil, errors.IOError("error iterating spatial query features", err)
 	}
 	return features, nil
+}
+
+func spatialFeatureRowIsDoubleNull(
+	columns []string,
+	values []interface{},
+	payloadColumn string,
+	envelopeColumn string,
+) bool {
+	payloadNull, payloadFound := false, false
+	envelopeNull, envelopeFound := false, false
+	for index, column := range columns {
+		switch {
+		case strings.EqualFold(column, payloadColumn):
+			payloadFound = true
+			payloadNull = values[index] == nil
+		case strings.EqualFold(column, envelopeColumn):
+			envelopeFound = true
+			envelopeNull = values[index] == nil
+		}
+	}
+	return payloadFound && envelopeFound && payloadNull && envelopeNull
 }

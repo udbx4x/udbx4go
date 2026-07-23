@@ -193,6 +193,141 @@ func TestSpatialQueryTextAndCADRTreeRejectsOrphanIndexOutsideViewport(t *testing
 	}
 }
 
+func TestSpatialQueryTextAndCADRTreeRejectsMalformedIndexOutsideViewport(t *testing.T) {
+	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
+		t.Run(kind.String(), func(t *testing.T) {
+			fixture := createSpatialTextCADQueryFixture(t, kind, true)
+			defer fixture.db.Close()
+			fixture.insertFeature(t, 1, 100, 100, "malformed-index")
+			_, err := fixture.db.Exec(
+				"UPDATE "+mustQuoteSpatialIdentifier(t, fixture.tableName)+" SET SmIndexKey = ? WHERE SmID = 1",
+				[]byte{0x00, 0x01},
+			)
+			require.NoError(t, err)
+
+			_, err = fixture.querier.Query(context.Background(), types.SpatialQueryOptions{
+				Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 1, MaxY: 1},
+				Limit:  10,
+			})
+			assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+		})
+	}
+}
+
+func TestSpatialQueryTextAndCADRequiredIDsSkipDoubleNull(t *testing.T) {
+	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
+		for _, withRTree := range []bool{false, true} {
+			t.Run(kind.String()+fmt.Sprintf("/rtree-%t", withRTree), func(t *testing.T) {
+				fixture := createSpatialTextCADQueryFixture(t, kind, withRTree)
+				defer fixture.db.Close()
+				fixture.insertRaw(t, 1, nil, nil, 1)
+
+				result, err := fixture.querier.Query(context.Background(), types.SpatialQueryOptions{
+					Bounds:      types.BoundingBox{MinX: 0, MinY: 0, MaxX: 1, MaxY: 1},
+					Limit:       10,
+					RequiredIDs: []int{1},
+				})
+				require.NoError(t, err)
+				assert.Empty(t, result.Features)
+				assert.False(t, result.HasMore)
+				if withRTree {
+					assert.Equal(t, types.SpatialQueryStrategyRTree, result.Strategy)
+				} else {
+					assert.Equal(t, types.SpatialQueryStrategyEnvelopeCache, result.Strategy)
+				}
+			})
+		}
+	}
+}
+
+func TestSpatialQueryTextAndCADRequiredIDsPreserveSingleNullErrors(t *testing.T) {
+	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
+		for _, withRTree := range []bool{false, true} {
+			for _, missing := range []string{"index", "payload"} {
+				t.Run(kind.String()+fmt.Sprintf("/rtree-%t/missing-%s", withRTree, missing), func(t *testing.T) {
+					fixture := createSpatialTextCADQueryFixture(t, kind, withRTree)
+					defer fixture.db.Close()
+					if missing == "index" {
+						fixture.insertFeature(t, 1, 100, 100, "missing-index")
+						_, err := fixture.db.Exec(
+							"UPDATE " + mustQuoteSpatialIdentifier(t, fixture.tableName) + " SET SmIndexKey = NULL WHERE SmID = 1",
+						)
+						require.NoError(t, err)
+					} else {
+						fixture.insertRaw(t, 1, nil, mustSpatialEnvelopeIndex(t, 100, 100), 1)
+					}
+
+					_, err := fixture.querier.Query(context.Background(), types.SpatialQueryOptions{
+						Bounds:      types.BoundingBox{MinX: 0, MinY: 0, MaxX: 1, MaxY: 1},
+						Limit:       10,
+						RequiredIDs: []int{1},
+					})
+					if missing == "index" {
+						assertSpatialQueryError(t, err, types.SpatialQueryReasonSpatialIndexUnavailable, udbxerrors.CodeUnsupported)
+					} else {
+						assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestSpatialQueryTextAndCADRTreeIntegrityInvalidatesWithDatasetGeneration(t *testing.T) {
+	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
+		t.Run(kind.String(), func(t *testing.T) {
+			fixture := createSpatialTextCADQueryFixture(t, kind, true)
+			defer fixture.db.Close()
+			fixture.insertFeature(t, 1, 100, 100, "valid")
+			manager := newTestEnvelopeCacheManager(t, testEnvelopeCacheRSSCharge(t, 2), testEnvelopeCacheRSSCharge(t, 4))
+			defer manager.Close()
+			require.NoError(t, system.NewSmRegisterDao(fixture.db).Insert(fixture.querier.record))
+			mutate := func(id int) error {
+				if kind == types.DatasetKindText {
+					dataset := NewTextDataset(fixture.db, fixture.querier.info)
+					AttachSpatialMutationHook(dataset, func() { manager.InvalidateDataset(fixture.tableName) })
+					return dataset.Insert(&types.Feature{
+						ID: id, Geometry: &types.TextGeometry{Text: "write", Anchor: []float64{200 + float64(id), 200}},
+					})
+				}
+				dataset := NewCadDataset(fixture.db, fixture.querier.info)
+				AttachSpatialMutationHook(dataset, func() { manager.InvalidateDataset(fixture.tableName) })
+				return dataset.Insert(&types.Feature{
+					ID: id, Geometry: &types.CadPointGeometry{XCoord: 200 + float64(id), YCoord: 200},
+				})
+			}
+			options := types.SpatialQueryOptions{
+				Bounds: types.BoundingBox{MinX: 0, MinY: 0, MaxX: 1, MaxY: 1},
+				Limit:  10,
+			}
+
+			_, err := fixture.querier.QueryWithEnvelopeCache(context.Background(), options, manager)
+			require.NoError(t, err)
+			_, err = fixture.db.Exec(
+				"UPDATE "+mustQuoteSpatialIdentifier(t, fixture.tableName)+" SET SmIndexKey = ? WHERE SmID = 1",
+				[]byte{0x00, 0x01},
+			)
+			require.NoError(t, err)
+			_, err = fixture.querier.QueryWithEnvelopeCache(context.Background(), options, manager)
+			require.NoError(t, err, "integrity status should be reused until the dataset generation is invalidated")
+			require.NoError(t, mutate(2))
+
+			_, err = fixture.querier.QueryWithEnvelopeCache(context.Background(), options, manager)
+			assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+			_, err = fixture.db.Exec(
+				"UPDATE "+mustQuoteSpatialIdentifier(t, fixture.tableName)+" SET SmIndexKey = ? WHERE SmID = 1",
+				mustSpatialEnvelopeIndex(t, 100, 100),
+			)
+			require.NoError(t, err)
+			_, err = fixture.querier.QueryWithEnvelopeCache(context.Background(), options, manager)
+			assertSpatialQueryError(t, err, types.SpatialQueryReasonCorruptGeometry, udbxerrors.CodeFormatError)
+			require.NoError(t, mutate(3))
+			_, err = fixture.querier.QueryWithEnvelopeCache(context.Background(), options, manager)
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestSpatialQueryTextAndCADRequiredIDsPreserveOrderAndDecode(t *testing.T) {
 	for _, kind := range []types.DatasetKind{types.DatasetKindText, types.DatasetKindCAD} {
 		t.Run(kind.String(), func(t *testing.T) {
