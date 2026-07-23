@@ -46,7 +46,8 @@ func NewSpatialQuerier(db *sql.DB, info *types.DatasetInfo, record *system.SmReg
 	}
 }
 
-// Capability reports whether the Task 4 RTree path is available.
+// Capability reports the verified RTree or envelope-cache spatial-query paths
+// available to the dataset, together with any capability diagnostic.
 func (q *SpatialQuerier) Capability(ctx context.Context) (*types.SpatialQueryCapability, error) {
 	detected, err := q.detectCapability(ctx)
 	if err != nil {
