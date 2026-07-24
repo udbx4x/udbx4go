@@ -489,7 +489,7 @@ function withSummaryDegradation(
 ): SpatialPreview {
   if (
     preview.strategy !== 'bounded_sample' ||
-    preview.queriedBounds === undefined ||
+    preview.queriedBounds == null ||
     preview.degradedReason !== undefined ||
     !isSpatialPreviewDegradedReason(summary.queryDiagnosticReason)
   ) {

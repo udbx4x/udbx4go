@@ -237,6 +237,35 @@ describe('useUDBX viewport spatial previews', () => {
     expect(result.current.mapLayers[0].preview?.degradedReason).toBeUndefined()
   })
 
+  it('Wails 返回 null queriedBounds 的初始有界预览不继承 summary 降级原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    const wailsPreview: Omit<SpatialPreview, 'queriedBounds'> & { queriedBounds: null } = {
+      ...preview({
+        datasetName: 'CADDT',
+        kind: 'cad',
+        strategy: 'bounded_sample',
+        degradedReason: undefined,
+      }),
+      queriedBounds: null,
+    }
+    mocks.LoadSpatialPreview.mockResolvedValue(wailsPreview)
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'ready',
+      preview: {
+        strategy: 'bounded_sample',
+        queriedBounds: null,
+      },
+    })
+    expect(result.current.mapLayers[0].preview?.degradedReason).toBeUndefined()
+  })
+
   it('旧后端带 queriedBounds 的有界预览可继承白名单 summary 原因', async () => {
     mocks.GetDatasetSpatialSummary.mockResolvedValue({
       ...boundedSummary(),
