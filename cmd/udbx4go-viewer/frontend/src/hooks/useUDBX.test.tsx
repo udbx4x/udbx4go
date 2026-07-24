@@ -242,16 +242,13 @@ describe('useUDBX viewport spatial previews', () => {
       ...boundedSummary(),
       queryDiagnosticReason: 'spatial_index_unavailable',
     })
-    const wailsPreview: Omit<SpatialPreview, 'queriedBounds'> & { queriedBounds: null } = {
-      ...preview({
-        datasetName: 'CADDT',
-        kind: 'cad',
-        strategy: 'bounded_sample',
-        degradedReason: undefined,
-      }),
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      datasetName: 'CADDT',
+      kind: 'cad',
+      strategy: 'bounded_sample',
+      degradedReason: undefined,
       queriedBounds: null,
-    }
-    mocks.LoadSpatialPreview.mockResolvedValue(wailsPreview)
+    }))
     const { result } = renderViewerHook()
 
     await act(async () => result.current.addDatasetToMap('CADDT'))

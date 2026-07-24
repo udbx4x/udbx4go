@@ -97,7 +97,7 @@ export function useUDBX(options: UseUDBXOptions) {
                 preview: nextPreview,
                 queryStatus: isDegradedSpatialPreview(nextPreview) ? 'degraded' : 'ready',
                 queryError: null,
-                lastQueriedBounds: nextPreview.queriedBounds,
+                lastQueriedBounds: nextPreview.queriedBounds ?? undefined,
               }
             : layer,
         ))

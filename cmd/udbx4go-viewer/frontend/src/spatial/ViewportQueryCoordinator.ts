@@ -276,7 +276,7 @@ export class ViewportQueryCoordinator {
       return true
     }
 
-    return preview.fileGeneration === job.fileGeneration && boundsEqual(preview.queriedBounds, job.bounds)
+    return preview.fileGeneration === job.fileGeneration && boundsEqual(preview.queriedBounds ?? undefined, job.bounds)
   }
 
   private getOrCreateLayerState(datasetName: string): LayerRequestState {

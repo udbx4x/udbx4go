@@ -249,7 +249,7 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
             preview,
             queryStatus: isDegradedSpatialPreview(preview) ? 'degraded' : 'ready',
             queryError: null,
-            lastQueriedBounds: preview.queriedBounds,
+            lastQueriedBounds: preview.queriedBounds ?? undefined,
           })
           stepMeasurement?.backendQueryMS.push(preview.queryDurationMs)
           stepMeasurement?.strategies.push(preview.strategy)
