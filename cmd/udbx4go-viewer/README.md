@@ -19,7 +19,7 @@
 - 左侧数据集浏览器支持名称搜索、按类型过滤，并显示轻量“已加入”状态。
 - 采样预览图层会在图层面板和地图区域显示轻量提示。
 - Point、Line、Region 及对应 Z 类型按 OpenLayers 稳定视口查询；首次加入图层时先按有效的数据集声明范围定位，再由 `moveend` 触发当前范围加载。
-- SDK 视口查询支持 RTree 和 DataSource 生命周期包络缓存，Text/CAD 正常路径与普通矢量共用 `QuerySpatial`、required ID 和视口协调器；Viewer 仅在缓存预算超限或空间索引不可用时生成私有的非空间有界预览，并显示当前范围、截断和降级状态。
+- SDK 视口查询支持 RTree 和 DataSource 生命周期包络缓存，Text/CAD 正常路径与普通矢量共用 `QuerySpatial`、required ID 和视口协调器；无 viewport 时 Viewer 生成无降级原因的私有初始有界样本，显式 viewport 查询仅在缓存预算超限或空间索引不可用时 fallback 为携带对应原因的非空间有界预览，并显示当前范围、截断和降级状态。
 - 点、线、面图层使用内置默认样式渲染，并在内部保留 `LayerStyle` 结构供后续样式设置 UI 使用。
 - 在地图、图层和属性表之间按 `datasetName + SmID` 做单选联动。
 - 点击地图要素或属性表行查看属性摘要。
