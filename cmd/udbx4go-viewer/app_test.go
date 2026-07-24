@@ -280,10 +280,10 @@ func TestViewerSpatialSummaryAndPreviewUseRendererNeutralContract(t *testing.T) 
 		t.Fatal("Sampled = true for small limit preview")
 	}
 	if len(preview.Features) == 0 || len(preview.Features) > minSpatialPreviewFeatureLimit {
-		t.Fatalf("len(Features) = %d, want declared-extent result in [1, %d]", len(preview.Features), minSpatialPreviewFeatureLimit)
+		t.Fatalf("len(Features) = %d, want full-domain result in [1, %d]", len(preview.Features), minSpatialPreviewFeatureLimit)
 	}
-	if preview.QueriedBounds == nil || *preview.QueriedBounds != *summary.Extent {
-		t.Fatalf("QueriedBounds = %+v, want declared extent %+v", preview.QueriedBounds, summary.Extent)
+	if preview.QueriedBounds != nil {
+		t.Fatalf("QueriedBounds = %+v, want nil when caller omitted viewport", preview.QueriedBounds)
 	}
 	if preview.Strategy != string(types.SpatialQueryStrategyRTree) &&
 		preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) {
@@ -549,17 +549,18 @@ func TestViewerSpatialPreviewClampsExplicitRequestLimits(t *testing.T) {
 	}
 }
 
-func TestViewerSpatialPreviewSampleReasonCombinesFeatureAndVertexLimits(t *testing.T) {
-	sampled, reason := spatialPreviewSampleReason(200, 100, 100, true)
+func TestViewerSpatialPreviewSampleReasonCombinesActualQueryAndVertexLimits(t *testing.T) {
+	response := &SpatialPreviewDTO{HasMore: true}
+	applySpatialPreviewSampling(response, true)
 
-	if !sampled {
-		t.Fatal("sampled = false, want true")
+	if !response.Sampled {
+		t.Fatal("Sampled = false, want true")
 	}
-	if !strings.Contains(reason, "要素上限") {
-		t.Fatalf("reason = %q, want feature limit reason", reason)
+	if !strings.Contains(response.SampleReason, "要素上限") {
+		t.Fatalf("SampleReason = %q, want feature limit reason", response.SampleReason)
 	}
-	if !strings.Contains(reason, "顶点上限") {
-		t.Fatalf("reason = %q, want vertex budget reason", reason)
+	if !strings.Contains(response.SampleReason, "顶点上限") {
+		t.Fatalf("SampleReason = %q, want vertex budget reason", response.SampleReason)
 	}
 }
 
@@ -638,34 +639,50 @@ func TestViewerSpatialViewportPassesBoundsToSDKAndKeepsRequiredID(t *testing.T) 
 	}
 }
 
-func TestViewerSpatialPreviewWithoutViewportUsesDeclaredExtentQuery(t *testing.T) {
-	path, _ := createViewerPointFixture(t, false, 0)
-	app := NewApp()
-	if _, err := app.OpenUDBXFile(path); err != nil {
-		t.Fatalf("OpenUDBXFile() error = %v", err)
-	}
+func TestViewerSpatialPreviewWithoutViewportUsesFullFiniteDomainAndActualQueryState(t *testing.T) {
+	for _, objectCount := range []int{1, 1000} {
+		t.Run(fmt.Sprintf("SmObjectCount-%d", objectCount), func(t *testing.T) {
+			path := createViewerSequentialPointFixture(t, 150, objectCount)
+			app := NewApp()
+			if _, err := app.OpenUDBXFile(path); err != nil {
+				t.Fatalf("OpenUDBXFile() error = %v", err)
+			}
 
-	preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
-		Limit:       100,
-		MaxVertices: minSpatialPreviewVertexBudget,
-	})
-	if err != nil {
-		t.Fatalf("LoadSpatialPreview() error = %v", err)
-	}
+			preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+				Limit:       100,
+				MaxVertices: maxSpatialPreviewVertexBudget,
+			})
+			if err != nil {
+				t.Fatalf("LoadSpatialPreview() error = %v", err)
+			}
 
-	wantBounds := BoundingBoxDTO{MinX: -10, MinY: -20, MaxX: 30, MaxY: 40}
-	if preview.QueriedBounds == nil || *preview.QueriedBounds != wantBounds {
-		t.Fatalf("QueriedBounds = %+v, want declared extent %+v", preview.QueriedBounds, wantBounds)
-	}
-	if preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) {
-		t.Fatalf("Strategy = %q, want envelope_cache", preview.Strategy)
-	}
-	if preview.DegradedReason != "" {
-		t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
+			wantIDs := make([]int, 100)
+			for index := range wantIDs {
+				wantIDs[index] = index + 1
+			}
+			if ids := previewFeatureIDs(preview.Features); !reflect.DeepEqual(ids, wantIDs) {
+				t.Fatalf("feature IDs = %v, want ordered IDs %v", ids, wantIDs)
+			}
+			if preview.QueriedBounds != nil {
+				t.Fatalf("QueriedBounds = %+v, want nil when caller omitted viewport", preview.QueriedBounds)
+			}
+			if !preview.HasMore {
+				t.Fatal("HasMore = false, want true from actual limit+1 query")
+			}
+			if !preview.Sampled || preview.SampleReason != "预览达到要素上限" {
+				t.Fatalf("Sampled = %v, SampleReason = %q, want actual query truncation", preview.Sampled, preview.SampleReason)
+			}
+			if preview.Strategy != string(types.SpatialQueryStrategyRTree) {
+				t.Fatalf("Strategy = %q, want rtree", preview.Strategy)
+			}
+			if preview.DegradedReason != "" {
+				t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
+			}
+		})
 	}
 }
 
-func TestViewerSpatialPreviewWithoutViewportRejectsUnavailableDeclaredExtent(t *testing.T) {
+func TestViewerSpatialPreviewWithoutViewportIgnoresUnavailableDeclaredExtent(t *testing.T) {
 	tests := []struct {
 		name   string
 		update string
@@ -689,8 +706,22 @@ func TestViewerSpatialPreviewWithoutViewportRejectsUnavailableDeclaredExtent(t *
 			if _, err := app.OpenUDBXFile(path); err != nil {
 				t.Fatalf("OpenUDBXFile() error = %v", err)
 			}
-			_, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{Limit: 100})
-			assertViewerSpatialReason(t, err, types.SpatialQueryReasonSpatialIndexUnavailable)
+			preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{Limit: 100})
+			if err != nil {
+				t.Fatalf("LoadSpatialPreview() error = %v", err)
+			}
+			if ids := previewFeatureIDs(preview.Features); !reflect.DeepEqual(ids, []int{1, 2, 3}) {
+				t.Fatalf("feature IDs = %v, want [1 2 3]", ids)
+			}
+			if preview.QueriedBounds != nil {
+				t.Fatalf("QueriedBounds = %+v, want nil when caller omitted viewport", preview.QueriedBounds)
+			}
+			if preview.HasMore || preview.Sampled || preview.SampleReason != "" {
+				t.Fatalf("HasMore = %v, Sampled = %v, SampleReason = %q, want complete result", preview.HasMore, preview.Sampled, preview.SampleReason)
+			}
+			if preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) || preview.DegradedReason != "" {
+				t.Fatalf("Strategy = %q, DegradedReason = %q, want normal envelope_cache result", preview.Strategy, preview.DegradedReason)
+			}
 		})
 	}
 }
@@ -1582,6 +1613,66 @@ func createViewerPointFixture(t *testing.T, withRTree bool, objectCountOverride 
 		t.Fatalf("close fixture database: %v", err)
 	}
 	return path, tableName
+}
+
+func createViewerSequentialPointFixture(t *testing.T, featureCount int, objectCount int) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "viewer-sequential-points.udbx")
+	source, err := udbx4go.Create(path)
+	if err != nil {
+		t.Fatalf("create sequential point fixture: %v", err)
+	}
+	points, err := source.CreatePointDataset("viewer_points", 4326, nil)
+	if err != nil {
+		t.Fatalf("create sequential point dataset: %v", err)
+	}
+	tableName := points.Info().TableName
+	for id := 1; id <= featureCount; id++ {
+		coordinate := float64(id)
+		if err := points.Insert(&types.Feature{
+			ID: id,
+			Geometry: &types.PointGeometry{
+				Type:        "Point",
+				Coordinates: []float64{coordinate, coordinate},
+				SRID:        4326,
+				BBox:        []float64{coordinate, coordinate, coordinate, coordinate},
+			},
+		}); err != nil {
+			t.Fatalf("insert sequential point %d: %v", id, err)
+		}
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close sequential point fixture: %v", err)
+	}
+
+	db := openViewerFixtureDB(t, path)
+	if _, err := db.Exec(`
+		UPDATE SmRegister
+		SET SmObjectCount = ?, SmLeft = 1, SmBottom = 1, SmRight = 10, SmTop = 10,
+		    SmIDColName = 'SmID', SmGeoColName = 'SmGeometry'
+		WHERE SmDatasetName = 'viewer_points'`, objectCount); err != nil {
+		t.Fatalf("shrink sequential point metadata: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE geometry_columns SET spatial_index_enabled = 1 WHERE f_table_name = ?`, tableName); err != nil {
+		t.Fatalf("enable sequential point RTree metadata: %v", err)
+	}
+	rtreeName := "idx_" + tableName + "_SmGeometry"
+	if _, err := db.Exec(fmt.Sprintf(`CREATE VIRTUAL TABLE %q USING rtree(pkid, xmin, xmax, ymin, ymax)`, rtreeName)); err != nil {
+		t.Fatalf("create sequential point RTree: %v", err)
+	}
+	for id := 1; id <= featureCount; id++ {
+		coordinate := float64(id)
+		if _, err := db.Exec(
+			fmt.Sprintf(`INSERT INTO %q VALUES (?, ?, ?, ?, ?)`, rtreeName),
+			id, coordinate, coordinate, coordinate, coordinate,
+		); err != nil {
+			t.Fatalf("insert sequential point RTree row %d: %v", id, err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close sequential point fixture database: %v", err)
+	}
+	return path
 }
 
 func openViewerFixtureDB(t *testing.T, path string) *sql.DB {

@@ -146,6 +146,7 @@ npm run build
 - “空间预览要素上限”默认 1,000，限制一次视口查询的普通候选数。存在更多视口命中对象时显示当前范围截断提示；required ID 不占用该上限。
 - SDK 返回的普通要素必须与请求范围 MBR 相交；只有通过 required ID 补入的选中对象可以位于视口外。
 - “空间预览顶点预算”默认 1,000,000，限制一次响应发送和渲染的普通几何顶点总量，用于控制 Wails 传输和前端渲染成本。它不是数据集对象数或 UDBX 格式限制。
+- 未提供 viewport 时，后端使用完整的有限 `float64` 坐标域调用公共 `QuerySpatial`，`QueriedBounds` 保持为空；声明 extent 只用于自动定位提示，不作为完整性边界。采样状态由实际 `HasMore` 和顶点预算截断决定，不依赖 `SmObjectCount`。
 - 高级预览统计中的 `rtree` 和 `envelope_cache` 是 SDK 成功策略。`bounded_sample` 仅是 Viewer 捕获 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 后生成的私有非空间有界预览，不属于 SDK `QuerySpatial` 成功结果；正常 Text/CAD 不进入该路径。
 - SDK `SpatialQueryResult` 没有 `DegradedReason`；Viewer `SpatialPreviewDTO` 保留 `degradedReason` 供界面诊断。
 - 当前包络缓存默认策略是单数据集 32 MiB、当前 `DataSource` 合计 64 MiB；关闭或切换文件会释放缓存。完整缓存超预算时 SDK 返回 `envelope_cache_budget_exceeded` 错误。这是当前 SDK/Viewer 资源策略，不是 UDBX 格式限制。

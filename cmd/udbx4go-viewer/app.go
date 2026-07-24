@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +20,7 @@ const (
 	defaultSpatialPreviewLimit          = 1000
 	defaultSpatialVertexBudget          = 1000000
 	spatialPreviewStrategyBoundedSample = "bounded_sample"
+	viewerFiniteCoordinateLimit         = math.MaxFloat64
 )
 
 // App struct
@@ -481,10 +483,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		}
 	}
 	explicitViewport := request.Viewport != nil
-	queryBounds, err := viewerSpatialPreviewBounds(info, request.Viewport)
-	if err != nil {
-		return nil, err
-	}
+	queryBounds := viewerSpatialPreviewBounds(request.Viewport)
 
 	var (
 		features       []*types.Feature
@@ -513,12 +512,16 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		if err != nil {
 			return nil, err
 		}
-		queriedBounds = boundingBoxDTO(&queryBounds)
+		if explicitViewport {
+			queriedBounds = boundingBoxDTO(&queryBounds)
+		}
 		strategy = spatialPreviewStrategyBoundedSample
 		degradedReason = string(reason)
 	} else {
 		features = queryResult.Features
-		queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
+		if explicitViewport {
+			queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
+		}
 		strategy = string(queryResult.Strategy)
 		hasMore = queryResult.HasMore
 	}
@@ -546,16 +549,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		response.Extent = mergeBBox(response.Extent, feature.BBox)
 	}
-	if explicitViewport {
-		applySpatialPreviewSampling(response, vertexBudgetReached)
-	} else {
-		response.Sampled, response.SampleReason = spatialPreviewSampleReason(
-			info.ObjectCount,
-			len(features),
-			request.Limit,
-			vertexBudgetReached,
-		)
-	}
+	applySpatialPreviewSampling(response, vertexBudgetReached)
 	if a.previewResultHook != nil {
 		a.previewResultHook(queryContext)
 	}
@@ -810,17 +804,16 @@ func mapViewerPreviewError(ctx context.Context, err error) error {
 	return err
 }
 
-func viewerSpatialPreviewBounds(info *types.DatasetInfo, viewport *BoundingBoxDTO) (types.BoundingBox, error) {
+func viewerSpatialPreviewBounds(viewport *BoundingBoxDTO) types.BoundingBox {
 	if viewport != nil {
-		return viewport.spatialBoundingBox(), nil
+		return viewport.spatialBoundingBox()
 	}
-	if info == nil || info.Extent == nil {
-		return types.BoundingBox{}, newViewerSpatialError(
-			types.SpatialQueryReasonSpatialIndexUnavailable,
-			udbxerrors.UnsupportedError("dataset declared extent is unavailable for spatial preview"),
-		)
+	return types.BoundingBox{
+		MinX: -viewerFiniteCoordinateLimit,
+		MinY: -viewerFiniteCoordinateLimit,
+		MaxX: viewerFiniteCoordinateLimit,
+		MaxY: viewerFiniteCoordinateLimit,
 	}
-	return *info.Extent, nil
 }
 
 func viewerCanUseBoundedFallback(err error) bool {
@@ -838,20 +831,6 @@ func newViewerSpatialError(reason types.SpatialQueryReason, cause error) error {
 		return err
 	}
 	return spatialErr
-}
-
-func spatialPreviewSampleReason(objectCount int, rawFeatureCount int, featureLimit int, vertexBudgetReached bool) (bool, string) {
-	sampleReasons := make([]string, 0, 2)
-	if objectCount > rawFeatureCount && rawFeatureCount >= featureLimit {
-		sampleReasons = append(sampleReasons, "预览达到要素上限")
-	}
-	if vertexBudgetReached {
-		sampleReasons = append(sampleReasons, "预览达到顶点上限")
-	}
-	if len(sampleReasons) == 0 {
-		return false, ""
-	}
-	return true, strings.Join(sampleReasons, "，")
 }
 
 func spatialPreviewResultSampleReason(hasMore bool, vertexBudgetReached bool) (bool, string) {
