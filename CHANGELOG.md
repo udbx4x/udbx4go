@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added context-aware `ListContext` methods for spatial, Text, and CAD datasets.
 - Added Text/CAD viewport querying through the public spatial-query contract, including envelope-cache filtering from `SmIndexKey`, payload decoding from `SmGeometry`, required IDs, context cancellation, and stable error reasons.
 - Added CAD `SmIndexKey` writes and Text/CAD mutation-driven envelope-cache invalidation so create/update/delete operations cannot publish or reuse stale query state.
-- Added Viewer-private non-spatial `bounded_sample` previews only for `envelope_cache_budget_exceeded` and `spatial_index_unavailable`, while retaining `degradedReason` in the Viewer DTO.
+- Added Viewer-private non-spatial `bounded_sample` previews: initial no-viewport samples have no `degradedReason`, while viewport-query fallbacks carry only `envelope_cache_budget_exceeded` or `spatial_index_unavailable`.
 - Added Viewer viewport coordination, offscreen selection retention, deterministic stale-result probes, canvas-pixel blank-render gates, real-sample automatic tests, the envelope-cache PoC, and transactional macOS benchmark tooling.
 
 ### Changed

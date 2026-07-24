@@ -262,7 +262,7 @@ go test . -run Udbx4Spec -v
 - Text / GeoText 最小基线已纳入合规闭环
 - CAD 最小 GeoHeader 基线已纳入合规闭环
 - Go 视口空间查询已实现；两种 SDK 成功策略、普通要素 MBR 相交、仅 required ID 可在视口外、预算超限错误和六个原因码均已纳入合规闭环
-- Viewer 私有 `bounded_sample` 只用于 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 的非空间有界预览，不属于 SDK 成功结果；正常 Text/CAD 通过公共视口查询返回 `rtree` 或 `envelope_cache`，Viewer DTO 仅在降级时保留 `degradedReason`
+- Viewer 无 viewport 的初始预览通过 `ListContext` 返回无 `degradedReason` 的私有 `bounded_sample`；显式 viewport 必须调用公共空间查询，正常 Text/CAD 返回 `rtree` 或 `envelope_cache`，只有 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 才以携带对应 `degradedReason` 的 `bounded_sample` 降级；该策略不属于 SDK 成功结果
 
 需要改进：
 - 扩展真实 SuperMap UDBX 样本文本和 CAD 兼容范围

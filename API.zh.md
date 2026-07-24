@@ -331,7 +331,7 @@ Text 与 CAD 使用 `SmIndexKey` 中的 GAIA 包络进行 RTree 或包络缓存�
 
 Text 与 CAD 在必需列和空间元数据有效时参与公共 `QuerySpatial` 契约。数据表必须具有已注册 ID、`SmIndexKey` 和 `SmGeometry` 列，CAD 还必须具有 `SmGeoType`；`geometry_columns` 必须把 `SmIndexKey` 有效注册为包络几何。缺少 `SmIndexKey` 或有效 `geometry_columns` 注册的 legacy CAD 仍是已识别的 CAD 类型，但 `GetSpatialQueryCapability` 会返回 `Supported: true`、无可用执行路径以及 `DiagnosticReason: spatial_index_unavailable`，`QuerySpatial` 则返回相同原因的错误。`List`、`ListContext` 等非空间 API 与该 capability 边界相互独立。Tabular 数据集返回 `unsupported_dataset_kind`。
 
-Viewer 预览请求未提供 viewport 时，后端使用完整的有限 `float64` 坐标域调用 `QuerySpatial`，并保持 Viewer DTO 的 `QueriedBounds` 为空。声明 extent 仍可用于地图自动定位，但不作为完整性边界。`Sampled` 和 `SampleReason` 由实际查询的 `HasMore` 状态及顶点预算截断决定，不使用 `SmObjectCount` 推断。Wails Viewer 只在 `QuerySpatial` 返回 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 后生成私有的非空间 `bounded_sample` 预览。正常 Text/CAD 查询以 `rtree` 或 `envelope_cache` 成功，不进入该 Viewer fallback。`bounded_sample` 和 Viewer DTO 的 `degradedReason` 都不是 SDK `SpatialQueryResult` 字段或 SDK 成功策略。
+Viewer 预览请求未提供 viewport 时，后端通过 `ListContext` 按 ID 创建私有的初始有界样本。该响应使用 `bounded_sample`，`QueriedBounds` 和 `degradedReason` 均为空；声明 extent 仍可用于地图自动定位。`Sampled` 和 `SampleReason` 由该有界读取的真实 `HasMore` 状态及顶点预算截断决定，不使用 `SmObjectCount` 推断。请求提供 viewport 时，Viewer 调用 `QuerySpatial`；正常 Text/CAD 查询以 `rtree` 或 `envelope_cache` 成功，只有 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 才可触发私有有界 fallback，并携带对应的 `degradedReason`。`bounded_sample` 和 Viewer DTO 的 `degradedReason` 都不是 SDK `SpatialQueryResult` 字段或 SDK 成功策略。
 
 ## 数据集类型
 

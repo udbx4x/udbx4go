@@ -285,9 +285,8 @@ func TestViewerSpatialSummaryAndPreviewUseRendererNeutralContract(t *testing.T) 
 	if preview.QueriedBounds != nil {
 		t.Fatalf("QueriedBounds = %+v, want nil when caller omitted viewport", preview.QueriedBounds)
 	}
-	if preview.Strategy != string(types.SpatialQueryStrategyRTree) &&
-		preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) {
-		t.Fatalf("Strategy = %q, want normal SDK spatial-query strategy", preview.Strategy)
+	if preview.Strategy != spatialPreviewStrategyBoundedSample {
+		t.Fatalf("Strategy = %q, want bounded_sample initial preview", preview.Strategy)
 	}
 	if preview.DegradedReason != "" {
 		t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
@@ -639,7 +638,7 @@ func TestViewerSpatialViewportPassesBoundsToSDKAndKeepsRequiredID(t *testing.T) 
 	}
 }
 
-func TestViewerSpatialPreviewWithoutViewportUsesFullFiniteDomainAndActualQueryState(t *testing.T) {
+func TestViewerSpatialPreviewWithoutViewportUsesBoundedListAndActualQueryState(t *testing.T) {
 	for _, objectCount := range []int{1, 1000} {
 		t.Run(fmt.Sprintf("SmObjectCount-%d", objectCount), func(t *testing.T) {
 			path := createViewerSequentialPointFixture(t, 150, objectCount)
@@ -672,8 +671,8 @@ func TestViewerSpatialPreviewWithoutViewportUsesFullFiniteDomainAndActualQuerySt
 			if !preview.Sampled || preview.SampleReason != "预览达到要素上限" {
 				t.Fatalf("Sampled = %v, SampleReason = %q, want actual query truncation", preview.Sampled, preview.SampleReason)
 			}
-			if preview.Strategy != string(types.SpatialQueryStrategyRTree) {
-				t.Fatalf("Strategy = %q, want rtree", preview.Strategy)
+			if preview.Strategy != spatialPreviewStrategyBoundedSample {
+				t.Fatalf("Strategy = %q, want bounded_sample initial preview", preview.Strategy)
 			}
 			if preview.DegradedReason != "" {
 				t.Fatalf("DegradedReason = %q, want empty", preview.DegradedReason)
@@ -719,8 +718,38 @@ func TestViewerSpatialPreviewWithoutViewportIgnoresUnavailableDeclaredExtent(t *
 			if preview.HasMore || preview.Sampled || preview.SampleReason != "" {
 				t.Fatalf("HasMore = %v, Sampled = %v, SampleReason = %q, want complete result", preview.HasMore, preview.Sampled, preview.SampleReason)
 			}
-			if preview.Strategy != string(types.SpatialQueryStrategyEnvelopeCache) || preview.DegradedReason != "" {
-				t.Fatalf("Strategy = %q, DegradedReason = %q, want normal envelope_cache result", preview.Strategy, preview.DegradedReason)
+			if preview.Strategy != spatialPreviewStrategyBoundedSample || preview.DegradedReason != "" {
+				t.Fatalf("Strategy = %q, DegradedReason = %q, want non-degraded bounded_sample", preview.Strategy, preview.DegradedReason)
+			}
+		})
+	}
+}
+
+func TestViewerSpatialPreviewWithoutViewportIncludesCoordinatesBeyondFloat32Range(t *testing.T) {
+	for _, withRTree := range []bool{false, true} {
+		t.Run(fmt.Sprintf("rtree-%t", withRTree), func(t *testing.T) {
+			path := createViewerExtremeCoordinatePointFixture(t, withRTree)
+			app := NewApp()
+			if _, err := app.OpenUDBXFile(path); err != nil {
+				t.Fatalf("OpenUDBXFile() error = %v", err)
+			}
+
+			preview, err := app.LoadSpatialPreview("viewer_points", SpatialPreviewRequestDTO{
+				Limit:       100,
+				MaxVertices: maxSpatialPreviewVertexBudget,
+			})
+			if err != nil {
+				t.Fatalf("LoadSpatialPreview() error = %v", err)
+			}
+
+			if ids := previewFeatureIDs(preview.Features); !reflect.DeepEqual(ids, []int{1, 2, 3}) {
+				t.Fatalf("feature IDs = %v, want all IDs beyond and within float32 range", ids)
+			}
+			if preview.HasMore || preview.Sampled || preview.SampleReason != "" {
+				t.Fatalf("HasMore = %v, Sampled = %v, SampleReason = %q, want complete initial sample", preview.HasMore, preview.Sampled, preview.SampleReason)
+			}
+			if preview.Strategy != spatialPreviewStrategyBoundedSample || preview.QueriedBounds != nil || preview.DegradedReason != "" {
+				t.Fatalf("Strategy = %q, QueriedBounds = %+v, DegradedReason = %q, want non-degraded unbounded-request sample", preview.Strategy, preview.QueriedBounds, preview.DegradedReason)
 			}
 		})
 	}
@@ -1671,6 +1700,69 @@ func createViewerSequentialPointFixture(t *testing.T, featureCount int, objectCo
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close sequential point fixture database: %v", err)
+	}
+	return path
+}
+
+func createViewerExtremeCoordinatePointFixture(t *testing.T, withRTree bool) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "viewer-extreme-coordinate-points.udbx")
+	source, err := udbx4go.Create(path)
+	if err != nil {
+		t.Fatalf("create extreme-coordinate point fixture: %v", err)
+	}
+	points, err := source.CreatePointDataset("viewer_points", 4326, nil)
+	if err != nil {
+		t.Fatalf("create extreme-coordinate point dataset: %v", err)
+	}
+	tableName := points.Info().TableName
+	coordinates := []float64{-1e39, 0, 1e39}
+	for index, coordinate := range coordinates {
+		id := index + 1
+		if err := points.Insert(&types.Feature{
+			ID: id,
+			Geometry: &types.PointGeometry{
+				Type:        "Point",
+				Coordinates: []float64{coordinate, coordinate},
+				SRID:        4326,
+				BBox:        []float64{coordinate, coordinate, coordinate, coordinate},
+			},
+		}); err != nil {
+			t.Fatalf("insert extreme-coordinate point %d: %v", id, err)
+		}
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("close extreme-coordinate point fixture: %v", err)
+	}
+
+	db := openViewerFixtureDB(t, path)
+	if _, err := db.Exec(`
+		UPDATE SmRegister
+		SET SmObjectCount = 3, SmLeft = -1, SmBottom = -1, SmRight = 1, SmTop = 1,
+		    SmIDColName = 'SmID', SmGeoColName = 'SmGeometry'
+		WHERE SmDatasetName = 'viewer_points'`); err != nil {
+		t.Fatalf("set stale extreme-coordinate metadata: %v", err)
+	}
+	if withRTree {
+		if _, err := db.Exec(`UPDATE geometry_columns SET spatial_index_enabled = 1 WHERE f_table_name = ?`, tableName); err != nil {
+			t.Fatalf("enable extreme-coordinate RTree metadata: %v", err)
+		}
+		rtreeName := "idx_" + tableName + "_SmGeometry"
+		if _, err := db.Exec(fmt.Sprintf(`CREATE VIRTUAL TABLE %q USING rtree(pkid, xmin, xmax, ymin, ymax)`, rtreeName)); err != nil {
+			t.Fatalf("create extreme-coordinate RTree: %v", err)
+		}
+		for index, coordinate := range coordinates {
+			id := index + 1
+			if _, err := db.Exec(
+				fmt.Sprintf(`INSERT INTO %q VALUES (?, ?, ?, ?, ?)`, rtreeName),
+				id, coordinate, coordinate, coordinate, coordinate,
+			); err != nil {
+				t.Fatalf("insert extreme-coordinate RTree row %d: %v", id, err)
+			}
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close extreme-coordinate point fixture database: %v", err)
 	}
 	return path
 }

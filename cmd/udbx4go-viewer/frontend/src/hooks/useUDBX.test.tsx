@@ -212,7 +212,7 @@ describe('useUDBX viewport spatial previews', () => {
     })
   })
 
-  it('缺少范围索引的初始有界预览继承 summary 降级原因', async () => {
+  it('缺少范围索引的初始有界预览不继承 summary 降级原因', async () => {
     mocks.GetDatasetSpatialSummary.mockResolvedValue({
       ...boundedSummary(),
       queryDiagnosticReason: 'spatial_index_unavailable',
@@ -229,9 +229,36 @@ describe('useUDBX viewport spatial previews', () => {
     await act(async () => result.current.addDatasetToMap('CADDT'))
 
     expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'ready',
+      preview: {
+        strategy: 'bounded_sample',
+      },
+    })
+    expect(result.current.mapLayers[0].preview?.degradedReason).toBeUndefined()
+  })
+
+  it('旧后端带 queriedBounds 的有界预览可继承白名单 summary 原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    const queriedBounds = { minX: -1, minY: -1, maxX: 1, maxY: 1 }
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      datasetName: 'CADDT',
+      kind: 'cad',
+      queriedBounds,
+      strategy: 'bounded_sample',
+      degradedReason: undefined,
+    }))
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
       queryStatus: 'degraded',
       preview: {
         strategy: 'bounded_sample',
+        queriedBounds,
         degradedReason: 'spatial_index_unavailable',
       },
     })

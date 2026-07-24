@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,7 +19,6 @@ const (
 	defaultSpatialPreviewLimit          = 1000
 	defaultSpatialVertexBudget          = 1000000
 	spatialPreviewStrategyBoundedSample = "bounded_sample"
-	viewerFiniteCoordinateLimit         = math.MaxFloat64
 )
 
 // App struct
@@ -483,7 +481,6 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		}
 	}
 	explicitViewport := request.Viewport != nil
-	queryBounds := viewerSpatialPreviewBounds(request.Viewport)
 
 	var (
 		features       []*types.Feature
@@ -493,16 +490,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		degradedReason string
 	)
 	queryStarted := time.Now()
-	queryResult, queryErr := dataSource.QuerySpatial(queryContext, datasetName, types.SpatialQueryOptions{
-		Bounds:      queryBounds,
-		Limit:       request.Limit,
-		RequiredIDs: request.RequiredIDs,
-	})
-	if queryErr != nil {
-		if !viewerCanUseBoundedFallback(queryErr) {
-			return nil, queryErr
-		}
-		reason, _ := udbxerrors.SpatialQueryReasonOf(queryErr)
+	if !explicitViewport {
 		features, hasMore, err = a.loadBoundedPreviewFeatures(
 			queryContext,
 			ds,
@@ -510,20 +498,39 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 			request.RequiredIDs,
 		)
 		if err != nil {
-			return nil, err
-		}
-		if explicitViewport {
-			queriedBounds = boundingBoxDTO(&queryBounds)
+			return nil, mapViewerPreviewError(queryContext, err)
 		}
 		strategy = spatialPreviewStrategyBoundedSample
-		degradedReason = string(reason)
 	} else {
-		features = queryResult.Features
-		if explicitViewport {
+		queryBounds := request.Viewport.spatialBoundingBox()
+		queryResult, queryErr := dataSource.QuerySpatial(queryContext, datasetName, types.SpatialQueryOptions{
+			Bounds:      queryBounds,
+			Limit:       request.Limit,
+			RequiredIDs: request.RequiredIDs,
+		})
+		if queryErr != nil {
+			if !viewerCanUseBoundedFallback(queryErr) {
+				return nil, queryErr
+			}
+			reason, _ := udbxerrors.SpatialQueryReasonOf(queryErr)
+			features, hasMore, err = a.loadBoundedPreviewFeatures(
+				queryContext,
+				ds,
+				request.Limit,
+				request.RequiredIDs,
+			)
+			if err != nil {
+				return nil, err
+			}
+			queriedBounds = boundingBoxDTO(&queryBounds)
+			strategy = spatialPreviewStrategyBoundedSample
+			degradedReason = string(reason)
+		} else {
+			features = queryResult.Features
 			queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
+			strategy = string(queryResult.Strategy)
+			hasMore = queryResult.HasMore
 		}
-		strategy = string(queryResult.Strategy)
-		hasMore = queryResult.HasMore
 	}
 	queryDurationMS := float64(time.Since(queryStarted).Nanoseconds()) / float64(time.Millisecond)
 	previewFeatures, vertexBudgetReached := a.formatPreviewFeatures(
@@ -802,18 +809,6 @@ func mapViewerPreviewError(ctx context.Context, err error) error {
 		return newViewerSpatialError(types.SpatialQueryReasonQueryTimeout, ctxErr)
 	}
 	return err
-}
-
-func viewerSpatialPreviewBounds(viewport *BoundingBoxDTO) types.BoundingBox {
-	if viewport != nil {
-		return viewport.spatialBoundingBox()
-	}
-	return types.BoundingBox{
-		MinX: -viewerFiniteCoordinateLimit,
-		MinY: -viewerFiniteCoordinateLimit,
-		MaxX: viewerFiniteCoordinateLimit,
-		MaxY: viewerFiniteCoordinateLimit,
-	}
 }
 
 func viewerCanUseBoundedFallback(err error) bool {
