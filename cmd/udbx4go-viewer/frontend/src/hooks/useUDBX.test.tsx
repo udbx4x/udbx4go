@@ -1,6 +1,11 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { BoundingBox, SpatialPreview } from '../types'
+import {
+  createDegradedSpatialPreviewFixture,
+  createSpatialPreviewFixture,
+} from '../test/fixtures'
+import { spatialPreviewDegradedReasons } from '../spatial/spatialPreviewDegradation'
 import { useUDBX } from './useUDBX'
 
 const mocks = vi.hoisted(() => ({
@@ -185,7 +190,6 @@ describe('useUDBX viewport spatial previews', () => {
       kind,
       queriedBounds: undefined,
       strategy: 'bounded_sample',
-      degradedReason: 'unsupported_dataset_kind',
     }))
     const { result } = renderViewerHook()
 
@@ -208,6 +212,134 @@ describe('useUDBX viewport spatial previews', () => {
     })
   })
 
+  it('缺少范围索引的初始有界预览不继承 summary 降级原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      datasetName: 'CADDT',
+      kind: 'cad',
+      queriedBounds: undefined,
+      strategy: 'bounded_sample',
+      degradedReason: undefined,
+    }))
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'ready',
+      preview: {
+        strategy: 'bounded_sample',
+      },
+    })
+    expect(result.current.mapLayers[0].preview?.degradedReason).toBeUndefined()
+  })
+
+  it('Wails 返回 null queriedBounds 的初始有界预览不继承 summary 降级原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      datasetName: 'CADDT',
+      kind: 'cad',
+      strategy: 'bounded_sample',
+      degradedReason: undefined,
+      queriedBounds: null,
+    }))
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'ready',
+      preview: {
+        strategy: 'bounded_sample',
+        queriedBounds: null,
+      },
+    })
+    expect(result.current.mapLayers[0].preview?.degradedReason).toBeUndefined()
+  })
+
+  it('旧后端带 queriedBounds 的有界预览可继承白名单 summary 原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    const queriedBounds = { minX: -1, minY: -1, maxX: 1, maxY: 1 }
+    mocks.LoadSpatialPreview.mockResolvedValue(preview({
+      datasetName: 'CADDT',
+      kind: 'cad',
+      queriedBounds,
+      strategy: 'bounded_sample',
+      degradedReason: undefined,
+    }))
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'degraded',
+      preview: {
+        strategy: 'bounded_sample',
+        queriedBounds,
+        degradedReason: 'spatial_index_unavailable',
+      },
+    })
+  })
+
+  it.each([
+    ['future_summary_reason', 'bounded_sample'],
+    ['spatial_index_unavailable', 'full_scan'],
+  ] as const)(
+    'summary 原因 %s 不传播到 %s 初始预览',
+    async (queryDiagnosticReason, strategy) => {
+      mocks.GetDatasetSpatialSummary.mockResolvedValue({
+        ...boundedSummary(),
+        queryDiagnosticReason,
+      })
+      mocks.LoadSpatialPreview.mockResolvedValue(preview({
+        datasetName: 'CADDT',
+        kind: 'cad',
+        queriedBounds: undefined,
+        strategy,
+        degradedReason: undefined,
+      }))
+      const { result } = renderViewerHook()
+
+      await act(async () => result.current.addDatasetToMap('CADDT'))
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'ready',
+        preview: { strategy },
+      })
+      expect(result.current.mapLayers[0].preview?.degradedReason).toBeUndefined()
+    },
+  )
+
+  it('summary 降级原因不覆盖初始预览已有原因', async () => {
+    mocks.GetDatasetSpatialSummary.mockResolvedValue({
+      ...boundedSummary(),
+      queryDiagnosticReason: 'spatial_index_unavailable',
+    })
+    const backendPreview = createDegradedSpatialPreviewFixture(
+      'envelope_cache_budget_exceeded',
+      { datasetName: 'CADDT', kind: 'cad', queriedBounds: undefined },
+    )
+    mocks.LoadSpatialPreview.mockResolvedValue(backendPreview)
+    const { result } = renderViewerHook()
+
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+
+    expect(result.current.mapLayers[0]).toMatchObject({
+      queryStatus: 'degraded',
+      preview: { degradedReason: 'envelope_cache_budget_exceeded' },
+    })
+    expect(result.current.mapLayers[0].preview).toBe(backendPreview)
+  })
+
   it('有界预览失败时保留 Wails 字符串错误原因', async () => {
     mocks.GetDatasetSpatialSummary.mockResolvedValue({
       ...vectorSummary(),
@@ -223,23 +355,218 @@ describe('useUDBX viewport spatial previews', () => {
     expect(result.current.mapLayers[0].error).toBe('cad decode failed')
   })
 
-  it('空间矢量仅在包络缓存预算超限降级为 bounded sample', async () => {
+  it('旧 summary 晚于新同名图层完成时不再启动旧有界预览', async () => {
+    const oldSummary = createDeferred<ReturnType<typeof boundedSummary>>()
+    const newPreview = preview({ datasetName: 'CADDT', kind: 'cad', sampleReason: 'new layer' })
+    mocks.GetDatasetSpatialSummary
+      .mockImplementationOnce(() => oldSummary.promise)
+      .mockResolvedValueOnce(boundedSummary())
+    mocks.LoadSpatialPreview.mockResolvedValue(newPreview)
     const { result } = renderViewerHook()
-    await act(async () => {
-      await result.current.addDatasetToMap('BaseMap_P')
+
+    let oldAdd!: Promise<void>
+    act(() => {
+      oldAdd = result.current.addDatasetToMap('CADDT')
     })
-    mocks.LoadSpatialPreview.mockResolvedValue(preview({
-      queriedBounds: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
-      strategy: 'bounded_sample',
-      degradedReason: 'envelope_cache_budget_exceeded',
-    }))
-
-    act(() => result.current.queryViewport(viewport))
-    await act(async () => vi.advanceTimersByTimeAsync(250))
     await act(flushPromises)
+    expect(mocks.LoadSpatialPreview).not.toHaveBeenCalled()
 
-    expect(result.current.mapLayers[0].queryStatus).toBe('degraded')
+    act(() => result.current.removeMapLayer('CADDT'))
+    await act(async () => result.current.addDatasetToMap('CADDT'))
+    expect(result.current.mapLayers[0].preview).toBe(newPreview)
+
+    oldSummary.resolve(boundedSummary())
+    await act(async () => oldAdd)
+
+    expect(mocks.LoadSpatialPreview).toHaveBeenCalledTimes(1)
+    expect(result.current.mapLayers[0].preview).toBe(newPreview)
   })
+
+  it.each(['close', 'switch'] as const)(
+    '%s 文件后旧 summary 不再启动有界预览',
+    async (action) => {
+      const oldSummary = createDeferred<ReturnType<typeof boundedSummary>>()
+      mocks.GetDatasetSpatialSummary.mockImplementationOnce(() => oldSummary.promise)
+      const { result } = renderViewerHook()
+
+      let oldAdd!: Promise<void>
+      act(() => {
+        oldAdd = result.current.addDatasetToMap('CADDT')
+      })
+      await act(flushPromises)
+
+      if (action === 'close') {
+        await act(async () => result.current.closeFile())
+      } else {
+        mocks.OpenFileDialog.mockResolvedValue('/tmp/next.udbx')
+        mocks.OpenUDBXFile.mockResolvedValue({
+          path: '/tmp/next.udbx',
+          datasetCount: 0,
+          fileGeneration: 2,
+        })
+        await act(async () => result.current.openFileDialog())
+      }
+
+      oldSummary.resolve(boundedSummary())
+      await act(async () => oldAdd)
+
+      expect(mocks.LoadSpatialPreview).not.toHaveBeenCalled()
+      expect(result.current.mapLayers).toEqual([])
+    },
+  )
+
+  it.each(['resolve', 'reject'] as const)(
+    '移除并重加同名图层后旧有界预览 %s 不污染新图层',
+    async (outcome) => {
+      const oldPreviewRequest = createDeferred<SpatialPreview>()
+      const oldPreview = preview({ datasetName: 'CADDT', kind: 'cad', sampleReason: 'old layer' })
+      const newPreview = preview({ datasetName: 'CADDT', kind: 'cad', sampleReason: 'new layer' })
+      mocks.GetDatasetSpatialSummary.mockResolvedValue(boundedSummary())
+      mocks.LoadSpatialPreview
+        .mockImplementationOnce(() => oldPreviewRequest.promise)
+        .mockResolvedValueOnce(newPreview)
+      const { result } = renderViewerHook()
+
+      let oldAdd!: Promise<void>
+      act(() => {
+        oldAdd = result.current.addDatasetToMap('CADDT')
+      })
+      await act(flushPromises)
+      expect(mocks.LoadSpatialPreview).toHaveBeenCalledTimes(1)
+
+      act(() => result.current.removeMapLayer('CADDT'))
+      await act(async () => result.current.addDatasetToMap('CADDT'))
+      expect(result.current.mapLayers[0]).toMatchObject({
+        error: null,
+        queryStatus: 'ready',
+      })
+      expect(result.current.mapLayers[0].preview).toBe(newPreview)
+
+      if (outcome === 'resolve') {
+        oldPreviewRequest.resolve(oldPreview)
+      } else {
+        oldPreviewRequest.reject('stale bounded preview failed')
+      }
+      await act(async () => oldAdd)
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        error: null,
+        queryStatus: 'ready',
+      })
+      expect(result.current.mapLayers[0].preview).toBe(newPreview)
+    },
+  )
+
+  it.each(spatialPreviewDegradedReasons)(
+    '非视口图层返回 %s 时标记为降级并保留原因',
+    async (degradedReason) => {
+      mocks.GetDatasetSpatialSummary.mockResolvedValue({
+        ...vectorSummary(),
+        datasetName: 'FallbackLayer',
+        viewportQuerySupported: false,
+      })
+      const degradedPreview = createDegradedSpatialPreviewFixture(degradedReason, {
+        datasetName: 'FallbackLayer',
+        queriedBounds: undefined,
+      })
+      mocks.LoadSpatialPreview.mockResolvedValue(degradedPreview)
+      const { result } = renderViewerHook()
+
+      await act(async () => result.current.addDatasetToMap('FallbackLayer'))
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'degraded',
+        queryError: null,
+        preview: {
+          strategy: 'bounded_sample',
+          degradedReason,
+        },
+      })
+      expect(result.current.mapLayers[0].preview).toBe(degradedPreview)
+    },
+  )
+
+  it.each(spatialPreviewDegradedReasons)(
+    '视口查询返回 %s 时保留旧图形至成功后再替换为降级预览',
+    async (degradedReason) => {
+      const deferred = createDeferred<SpatialPreview>()
+      const { result } = renderViewerHook()
+      await act(async () => {
+        await result.current.addDatasetToMap('BaseMap_P')
+      })
+      act(() => result.current.queryViewport(viewport))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+      const oldPreview = result.current.mapLayers[0].preview
+      mocks.LoadSpatialPreview.mockImplementationOnce(() => deferred.promise)
+
+      act(() => result.current.queryViewport({ minX: 100, minY: 100, maxX: 200, maxY: 200 }))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+
+      expect(result.current.mapLayers[0].queryStatus).toBe('loading')
+      expect(result.current.mapLayers[0].preview).toBe(oldPreview)
+      const queriedBounds = mocks.LoadSpatialPreview.mock.calls[1][1].viewport
+      deferred.resolve(createDegradedSpatialPreviewFixture(degradedReason, { queriedBounds }))
+      await act(flushPromises)
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'degraded',
+        queryError: null,
+        lastQueriedBounds: queriedBounds,
+        preview: {
+          strategy: 'bounded_sample',
+          degradedReason,
+        },
+      })
+      expect(result.current.mapLayers[0].preview).not.toBe(oldPreview)
+    },
+  )
+
+  it.each(['corrupt_geometry', 'query_timeout'] as const)(
+    '后端以 %s 拒绝视口查询时进入 error 并保留旧图形',
+    async (queryError) => {
+      const { result } = renderViewerHook()
+      await act(async () => {
+        await result.current.addDatasetToMap('BaseMap_P')
+      })
+      act(() => result.current.queryViewport(viewport))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+      const oldPreview = result.current.mapLayers[0].preview
+      mocks.LoadSpatialPreview.mockRejectedValueOnce(queryError)
+
+      act(() => result.current.queryViewport({ minX: 100, minY: 100, maxX: 200, maxY: 200 }))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+
+      expect(result.current.mapLayers[0]).toMatchObject({
+        queryStatus: 'error',
+        queryError,
+      })
+      expect(result.current.mapLayers[0].preview).toBe(oldPreview)
+    },
+  )
+
+  it.each(spatialPreviewDegradedReasons)(
+    '非 bounded_sample 策略即使携带 %s 也保持 ready',
+    async (degradedReason) => {
+      const { result } = renderViewerHook()
+      await act(async () => {
+        await result.current.addDatasetToMap('BaseMap_P')
+      })
+      mocks.LoadSpatialPreview.mockResolvedValue(preview({
+        queriedBounds: { minX: -15, minY: -7.5, maxX: 115, maxY: 57.5 },
+        strategy: 'rtree',
+        degradedReason,
+      }))
+
+      act(() => result.current.queryViewport(viewport))
+      await act(async () => vi.advanceTimersByTimeAsync(250))
+      await act(flushPromises)
+
+      expect(result.current.mapLayers[0].queryStatus).toBe('ready')
+    },
+  )
 
   it.each([
     ['视口外', { minX: 200, minY: 200, maxX: 200, maxY: 200 }, 2],
@@ -719,19 +1046,17 @@ function vectorSummary() {
   }
 }
 
-function preview(overrides: Partial<SpatialPreview> = {}): SpatialPreview {
+function boundedSummary() {
   return {
-    datasetName: 'BaseMap_P',
-    kind: 'point',
-    features: [],
-    estimatedVertexCount: 0,
-    sampled: false,
-    strategy: 'rtree',
-    hasMore: false,
-    queryDurationMs: 1,
-    fileGeneration: 0,
-    ...overrides,
+    ...vectorSummary(),
+    datasetName: 'CADDT',
+    kind: 'cad',
+    viewportQuerySupported: false,
   }
+}
+
+function preview(overrides: Partial<SpatialPreview> = {}): SpatialPreview {
+  return createSpatialPreviewFixture({ queryDurationMs: 1, ...overrides })
 }
 
 function featureAttributes(id: number) {

@@ -4,6 +4,7 @@ package dataset
 import (
 	"database/sql"
 	"fmt"
+	"sync"
 
 	"github.com/udbx4x/udbx4go/internal/system"
 	"github.com/udbx4x/udbx4go/pkg/errors"
@@ -44,12 +45,29 @@ type WritableDataset[T any] interface {
 	Delete(id int) error
 }
 
+type spatialMutationHookSetter interface {
+	setSpatialMutationHook(func())
+}
+
+// AttachSpatialMutationHook installs an internal spatial-write callback.
+// Repeated trusted calls replace the previous callback without accumulating hooks.
+func AttachSpatialMutationHook(value Dataset, hook func()) {
+	setter, ok := value.(spatialMutationHookSetter)
+	if !ok {
+		return
+	}
+	setter.setSpatialMutationHook(hook)
+}
+
 // BaseDataset provides common functionality for all datasets.
 type BaseDataset struct {
 	db          *sql.DB
 	info        *types.DatasetInfo
 	fieldDao    *system.SmFieldInfoDao
 	registerDao *system.SmRegisterDao
+
+	spatialMutationMu   sync.RWMutex
+	spatialMutationHook func()
 }
 
 // NewBaseDataset creates a new base dataset.
@@ -100,6 +118,21 @@ func (d *BaseDataset) DB() *sql.DB {
 // TableName returns the dataset table name.
 func (d *BaseDataset) TableName() string {
 	return d.info.TableName
+}
+
+func (d *BaseDataset) setSpatialMutationHook(hook func()) {
+	d.spatialMutationMu.Lock()
+	d.spatialMutationHook = hook
+	d.spatialMutationMu.Unlock()
+}
+
+func (d *BaseDataset) notifySpatialMutation() {
+	d.spatialMutationMu.RLock()
+	hook := d.spatialMutationHook
+	d.spatialMutationMu.RUnlock()
+	if hook != nil {
+		hook()
+	}
 }
 
 // syncObjectCount refreshes SmRegister.SmObjectCount from the actual table row count.

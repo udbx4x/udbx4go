@@ -1,5 +1,6 @@
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
 import { featureGeometryKind, isValidBounds } from '../spatial/featureLocation'
+import { isDegradedSpatialPreview } from '../spatial/spatialPreviewDegradation'
 import type { BoundingBox, MapLayerState } from '../types'
 import type { BenchmarkConfig, BenchmarkDependencies, BenchmarkResult } from './types'
 
@@ -53,7 +54,7 @@ export async function runBenchmarkScenario(
       error: null,
       summary,
       preview,
-      queryStatus: preview?.degradedReason ? 'degraded' : 'idle',
+      queryStatus: preview && isDegradedSpatialPreview(preview) ? 'degraded' : 'idle',
       queryError: null,
     }
     dependencies.setLayer(layer)
@@ -155,12 +156,13 @@ export async function runBenchmarkScenario(
   if (staleProbeResult.blankRender) {
     blankRenderCount += 1
   }
+  if (config.temperature === 'cold') {
+    selectAndFitMs += await validateSelection()
+  }
+  await dependencies.waitForCoordinatorIdle?.()
   const coordinatorMetrics = dependencies.getCoordinatorMetrics()
   if (coordinatorMetrics.staleResultsDiscarded < 1) {
     throw new Error('stale viewport probe did not discard an obsolete result')
-  }
-  if (config.temperature === 'cold') {
-    selectAndFitMs += await validateSelection()
   }
 
   return {

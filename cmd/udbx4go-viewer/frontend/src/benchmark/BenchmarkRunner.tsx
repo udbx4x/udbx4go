@@ -16,6 +16,7 @@ import {
   ViewportQueryCoordinator,
 } from '../spatial/ViewportQueryCoordinator'
 import { createDefaultLayerStyle } from '../spatial/layerStyle'
+import { isDegradedSpatialPreview } from '../spatial/spatialPreviewDegradation'
 import { runBenchmarkScenario as defaultRunBenchmarkScenario } from './runBenchmarkScenario'
 import type {
   BenchmarkConfig,
@@ -246,9 +247,9 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
           publishLayer({
             ...layer,
             preview,
-            queryStatus: preview.degradedReason ? 'degraded' : 'ready',
+            queryStatus: isDegradedSpatialPreview(preview) ? 'degraded' : 'ready',
             queryError: null,
-            lastQueriedBounds: preview.queriedBounds,
+            lastQueriedBounds: preview.queriedBounds ?? undefined,
           })
           stepMeasurement?.backendQueryMS.push(preview.queryDurationMs)
           stepMeasurement?.strategies.push(preview.strategy)
@@ -327,7 +328,13 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
         for (const datasetName of step.showLayers ?? []) {
           const layer = layerStates.get(datasetName)
           if (layer) {
-            publishLayer({ ...layer, visible: true, queryStatus: layer.preview ? 'ready' : 'idle' })
+            publishLayer({
+              ...layer,
+              visible: true,
+              queryStatus: layer.preview
+                ? (isDegradedSpatialPreview(layer.preview) ? 'degraded' : 'ready')
+                : 'idle',
+            })
             adapter.setLayerVisible(datasetName, true)
           }
         }
@@ -444,6 +451,21 @@ export const BenchmarkRunner: React.FC<BenchmarkRunnerProps> = ({
             gate.releaseFirst.resolve()
           }
         })()
+      },
+      waitForCoordinatorIdle: async () => {
+        const startedAt = performance.now()
+        while (true) {
+          const metrics = coordinator.getMetrics()
+          if (metrics.activeQueries === 0 && metrics.pendingQueries === 0) {
+            return
+          }
+          if (performance.now() - startedAt >= viewportStepTimeoutMs) {
+            throw new Error(
+              `coordinator did not drain after ${viewportStepTimeoutMs}ms; active=${metrics.activeQueries}; pending=${metrics.pendingQueries}`,
+            )
+          }
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 10))
+        }
       },
       getCoordinatorMetrics: () => coordinator.getMetrics(),
       resetCoordinatorMetrics: () => coordinator.resetMetrics(),

@@ -4,7 +4,6 @@ import (
 	"context"
 	stderrors "errors"
 	"fmt"
-	"strings"
 
 	"github.com/udbx4x/udbx4go/internal/codec"
 	"github.com/udbx4x/udbx4go/internal/sqliteutil"
@@ -47,18 +46,25 @@ func (q *SpatialQuerier) QueryWithEnvelopeCache(
 			udbxerrors.UnsupportedError(fmt.Sprintf("dataset kind '%s' does not support spatial queries", q.info.Kind.String())),
 		)
 	}
-	if !detected.Capability.RTreeAvailable {
-		detected.IDColumn, detected.GeometryColumn, err = q.detectEnvelopeColumns(ctx)
+	if !detected.Capability.RTreeAvailable && !detected.Capability.FallbackAvailable {
+		return nil, spatialQueryFailure(
+			types.SpatialQueryReasonSpatialIndexUnavailable,
+			udbxerrors.UnsupportedError("spatial query columns are unavailable"),
+		)
+	}
+	if manager == nil {
+		manager, err = NewEnvelopeCacheManager(types.DefaultSpatialQueryPolicy())
 		if err != nil {
-			return nil, mapSpatialQueryExecutionError(ctx, err)
+			return nil, err
 		}
+		defer manager.Close()
 	}
 
 	strategy := types.SpatialQueryStrategyRTree
 	var candidateIDs []int
 	var hasMore bool
 	if detected.Capability.RTreeAvailable {
-		candidateIDs, hasMore, err = q.queryRTreeCandidateIDs(ctx, detected, normalized)
+		candidateIDs, hasMore, err = q.queryRTreeCandidateIDs(ctx, detected, normalized, manager)
 	} else {
 		candidateIDs, hasMore, strategy, err = q.queryFallbackCandidateIDs(ctx, detected, normalized, manager)
 	}
@@ -67,8 +73,7 @@ func (q *SpatialQuerier) QueryWithEnvelopeCache(
 	}
 	orderedIDs := appendRequiredSpatialIDs(candidateIDs, normalized.RequiredIDs)
 
-	vector := NewVectorDataset(q.db, q.info)
-	featuresByID, err := vector.loadFeaturesByIDs(ctx, orderedIDs, detected.IDColumn, detected.GeometryColumn)
+	featuresByID, err := q.loadFeaturesByIDs(ctx, orderedIDs, detected)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, spatialQueryFailure(types.SpatialQueryReasonQueryTimeout, ctxErr)
@@ -95,22 +100,34 @@ func (q *SpatialQuerier) QueryWithEnvelopeCache(
 	}, nil
 }
 
+func (q *SpatialQuerier) loadFeaturesByIDs(
+	ctx context.Context,
+	ids []int,
+	detected *detectedSpatialCapability,
+) (map[int]*types.Feature, error) {
+	switch q.info.Kind {
+	case types.DatasetKindText:
+		return NewTextDataset(q.db, q.info).loadFeaturesByIDs(
+			ctx, ids, detected.IDColumn, detected.PayloadColumn, detected.EnvelopeColumn,
+		)
+	case types.DatasetKindCAD:
+		return NewCadDataset(q.db, q.info).loadFeaturesByIDs(
+			ctx, ids, detected.IDColumn, detected.PayloadColumn, detected.EnvelopeColumn, detected.CADTypeColumn,
+		)
+	default:
+		return NewVectorDataset(q.db, q.info).loadFeaturesByIDs(
+			ctx, ids, detected.IDColumn, detected.PayloadColumn,
+		)
+	}
+}
+
 func (q *SpatialQuerier) queryFallbackCandidateIDs(
 	ctx context.Context,
 	detected *detectedSpatialCapability,
 	options types.SpatialQueryOptions,
 	manager *EnvelopeCacheManager,
 ) ([]int, bool, types.SpatialQueryStrategy, error) {
-	if manager == nil {
-		var err error
-		manager, err = NewEnvelopeCacheManager(types.DefaultSpatialQueryPolicy())
-		if err != nil {
-			return nil, false, "", err
-		}
-		defer manager.Close()
-	}
-
-	cacheKey := q.info.TableName + "\x00" + detected.IDColumn + "\x00" + detected.GeometryColumn
+	cacheKey := spatialEnvelopeCacheKey(q.info.TableName, detected.IDColumn, detected.EnvelopeColumn)
 	cache, err := manager.GetOrBuild(ctx, cacheKey, q.info.ObjectCount, func(
 		buildCtx context.Context,
 		buffer *envelopeCacheBuildBuffer,
@@ -131,43 +148,27 @@ func (q *SpatialQuerier) queryFallbackCandidateIDs(
 	return ids, hasMore, types.SpatialQueryStrategyEnvelopeCache, err
 }
 
-func (q *SpatialQuerier) detectEnvelopeColumns(ctx context.Context) (string, string, error) {
-	records, err := q.geoColsDao.ListByTableNameContext(ctx, q.info.TableName)
-	if err != nil {
-		return "", "", err
-	}
-	if len(records) != 1 || !strings.EqualFold(records[0].FTableName, q.info.TableName) {
-		return "", "", spatialQueryFailure(
-			types.SpatialQueryReasonSpatialIndexUnavailable,
-			udbxerrors.UnsupportedError("spatial query geometry metadata is unavailable"),
-		)
-	}
-	geometryColumn := records[0].FGeometryColumn
-	if geometryColumn == "" || (registeredGeometryColumn(q.record) != "" &&
-		!strings.EqualFold(registeredGeometryColumn(q.record), geometryColumn)) {
-		return "", "", spatialQueryFailure(
-			types.SpatialQueryReasonSpatialIndexUnavailable,
-			udbxerrors.UnsupportedError("spatial query geometry column is unavailable"),
-		)
-	}
-	idColumn := registeredIDColumn(q.record)
-	tableColumns, err := sqliteTableInfo(ctx, q.db, q.info.TableName)
-	if err != nil {
-		return "", "", err
-	}
-	if !hasColumn(tableColumns, idColumn) || !hasColumn(tableColumns, geometryColumn) {
-		return "", "", spatialQueryFailure(
-			types.SpatialQueryReasonSpatialIndexUnavailable,
-			udbxerrors.UnsupportedError("spatial query columns are unavailable"),
-		)
-	}
-	return idColumn, geometryColumn, nil
+func spatialEnvelopeCacheKey(tableName, idColumn, envelopeColumn string) string {
+	return tableName + "\x00" + idColumn + "\x00" + envelopeColumn
 }
 
 func (q *SpatialQuerier) buildEnvelopeEntries(
 	ctx context.Context,
 	detected *detectedSpatialCapability,
 	buffer *envelopeCacheBuildBuffer,
+) error {
+	return q.scanSpatialEnvelopeRows(ctx, detected, func(entry *envelopeEntry) error {
+		if entry == nil {
+			return buffer.SkipRow()
+		}
+		return buffer.Append(*entry)
+	})
+}
+
+func (q *SpatialQuerier) scanSpatialEnvelopeRows(
+	ctx context.Context,
+	detected *detectedSpatialCapability,
+	consume func(*envelopeEntry) error,
 ) (returnErr error) {
 	quotedTable, err := sqliteutil.QuoteIdentifier(q.info.TableName)
 	if err != nil {
@@ -177,13 +178,21 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 	if err != nil {
 		return udbxerrors.IOError("failed to quote feature ID column", err)
 	}
-	quotedGeometry, err := sqliteutil.QuoteIdentifier(detected.GeometryColumn)
+	quotedEnvelope, err := sqliteutil.QuoteIdentifier(detected.EnvelopeColumn)
 	if err != nil {
-		return udbxerrors.IOError("failed to quote geometry column", err)
+		return udbxerrors.IOError("failed to quote envelope column", err)
 	}
 
-	query := fmt.Sprintf("SELECT %s, substr(%s, 1, %d)", quotedID, quotedGeometry, codec.GaiaHeaderLength) +
-		" FROM " + quotedTable + " ORDER BY " + quotedID
+	nullablePayload := q.info.Kind == types.DatasetKindText || q.info.Kind == types.DatasetKindCAD
+	query := fmt.Sprintf("SELECT %s, substr(%s, 1, %d)", quotedID, quotedEnvelope, codec.GaiaHeaderLength)
+	if nullablePayload {
+		quotedPayload, err := sqliteutil.QuoteIdentifier(detected.PayloadColumn)
+		if err != nil {
+			return udbxerrors.IOError("failed to quote payload column", err)
+		}
+		query += ", " + quotedPayload + " IS NOT NULL"
+	}
+	query += " FROM " + quotedTable + " ORDER BY " + quotedID
 	rows, err := q.db.QueryContext(ctx, query)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -197,20 +206,44 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 		}
 	}()
 
+	scannedRows := 0
 	for rows.Next() {
-		if len(buffer.entries)%256 == 0 {
+		if scannedRows%256 == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
 		var idValue interface{}
 		var headerValue interface{}
-		if err := rows.Scan(&idValue, &headerValue); err != nil {
-			return udbxerrors.IOError("failed to scan GAIA envelope row", err)
+		payloadPresent := 1
+		var scanErr error
+		if nullablePayload {
+			scanErr = rows.Scan(&idValue, &headerValue, &payloadPresent)
+		} else {
+			scanErr = rows.Scan(&idValue, &headerValue)
+		}
+		if scanErr != nil {
+			return udbxerrors.IOError("failed to scan GAIA envelope row", scanErr)
 		}
 		id, err := spatialEnvelopeID(idValue)
 		if err != nil {
 			return err
+		}
+		if nullablePayload && headerValue == nil {
+			if payloadPresent != 0 {
+				return spatialQueryFailure(
+					types.SpatialQueryReasonSpatialIndexUnavailable,
+					udbxerrors.UnsupportedError("spatial payload is missing its SmIndexKey envelope"),
+				)
+			}
+			if err := consume(nil); err != nil {
+				return err
+			}
+			scannedRows++
+			continue
+		}
+		if nullablePayload && payloadPresent == 0 {
+			return newSpatialGeometryError("SmIndexKey envelope exists without a spatial payload")
 		}
 		header, ok := headerValue.([]byte)
 		if !ok {
@@ -220,12 +253,14 @@ func (q *SpatialQuerier) buildEnvelopeEntries(
 		if err != nil {
 			return &spatialGeometryError{cause: udbxerrors.FormatError("failed to read GAIA envelope", err)}
 		}
-		if err := buffer.Append(envelopeEntry{
+		entry := envelopeEntry{
 			ID: id, MinX: envelope.MinX, MinY: envelope.MinY,
 			MaxX: envelope.MaxX, MaxY: envelope.MaxY,
-		}); err != nil {
+		}
+		if err := consume(&entry); err != nil {
 			return err
 		}
+		scannedRows++
 	}
 	if err := rows.Err(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -273,7 +308,16 @@ func (q *SpatialQuerier) queryRTreeCandidateIDs(
 	ctx context.Context,
 	detected *detectedSpatialCapability,
 	options types.SpatialQueryOptions,
+	manager *EnvelopeCacheManager,
 ) ([]int, bool, error) {
+	if q.info.Kind == types.DatasetKindText || q.info.Kind == types.DatasetKindCAD {
+		cacheKey := spatialEnvelopeCacheKey(q.info.TableName, detected.IDColumn, detected.EnvelopeColumn)
+		if err := manager.validateEnvelopeIntegrity(ctx, cacheKey, func(validateCtx context.Context) error {
+			return q.scanSpatialEnvelopeRows(validateCtx, detected, func(*envelopeEntry) error { return nil })
+		}); err != nil {
+			return nil, false, err
+		}
+	}
 	quotedRTree, err := sqliteutil.QuoteIdentifier(detected.RTreeName)
 	if err != nil {
 		return nil, false, udbxerrors.IOError("failed to quote spatial index name", err)

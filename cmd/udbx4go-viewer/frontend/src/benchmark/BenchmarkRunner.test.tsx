@@ -115,6 +115,46 @@ function createAdapter() {
 }
 
 describe('BenchmarkRunner', () => {
+  it('未知 preview reason 不把视口响应标记为 degraded', async () => {
+    const adapter = createAdapter()
+    vi.mocked(LoadSpatialPreview).mockImplementationOnce(async (datasetName, request) => new main.SpatialPreviewDTO({
+      datasetName,
+      kind: 'point',
+      features: [{ id: 7, geometry: { type: 'Point', coordinates: [1, 2], hasZ: false } }],
+      estimatedVertexCount: 1,
+      sampled: false,
+      queriedBounds: request.viewport,
+      strategy: 'bounded_sample',
+      hasMore: false,
+      degradedReason: 'future_backend_reason',
+      queryDurationMs: 9,
+      fileGeneration: 1,
+    }))
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      dependencies.setLayer(queryablePointLayer())
+      await dependencies.runViewportStep(config.scenario.viewportSteps[0], [])
+      return passedResult
+    })
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={() => adapter}
+        runScenario={runScenario}
+        saveResult={saveResult}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await waitFor(() => expect(saveResult).toHaveBeenCalled())
+    expect(adapter.setLayer).toHaveBeenLastCalledWith(expect.objectContaining({
+      queryStatus: 'ready',
+      preview: expect.objectContaining({ degradedReason: 'future_backend_reason' }),
+    }))
+  })
+
   it('保存成功结果后退出基准应用', async () => {
     const adapter = createAdapter()
     const runScenario = vi.fn().mockResolvedValue(passedResult)
@@ -367,6 +407,47 @@ describe('BenchmarkRunner', () => {
 
     await expect(probeSettled.promise).resolves.toBeUndefined()
     expect(probeError).toEqual(new Error('benchmark runner unmounted'))
+  })
+
+  it('等待协调器 idle 时不会越过 debounce 中尚未发布的视口查询', async () => {
+    const adapter = createAdapter()
+    const response = createDeferred<main.SpatialPreviewDTO>()
+    vi.mocked(LoadSpatialPreview).mockClear()
+    vi.mocked(LoadSpatialPreview).mockImplementationOnce(() => response.promise)
+    let idleResolved = false
+    const runScenario = vi.fn(async (_config, dependencies) => {
+      await dependencies.openFile(config.scenario.filePath)
+      dependencies.setLayer(queryablePointLayer())
+      const viewportStep = dependencies.runViewportStep(config.scenario.viewportSteps[0], [])
+      await dependencies.waitForCoordinatorIdle?.()
+      idleResolved = true
+      await viewportStep
+      return passedResult
+    })
+    const saveResult = vi.fn().mockResolvedValue(undefined)
+
+    render(
+      <BenchmarkRunner
+        config={config}
+        adapterFactory={() => adapter}
+        runScenario={runScenario}
+        saveResult={saveResult}
+        quitBenchmark={vi.fn().mockResolvedValue(undefined)}
+      />,
+    )
+
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(idleResolved).toBe(false)
+    expect(LoadSpatialPreview).not.toHaveBeenCalled()
+
+    await waitFor(() => expect(LoadSpatialPreview).toHaveBeenCalledOnce())
+    expect(idleResolved).toBe(false)
+    const request = vi.mocked(LoadSpatialPreview).mock.calls[0][1]
+    response.resolve(spatialPreview(request.viewport!, 9))
+
+    await waitFor(() => expect(saveResult).toHaveBeenCalledWith(passedResult))
+    expect(idleResolved).toBe(true)
   })
 
   it('并发为 1 时等待所有可查询空间层完成本轮请求范围', async () => {

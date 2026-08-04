@@ -57,7 +57,7 @@ export interface SpatialPreview {
   estimatedVertexCount: number
   sampled: boolean
   sampleReason?: string
-  queriedBounds?: BoundingBox
+  queriedBounds?: BoundingBox | null
   strategy: string
   hasMore: boolean
   degradedReason?: string

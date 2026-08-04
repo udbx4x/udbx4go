@@ -10,7 +10,7 @@ import type {
   SpatialSummary,
 } from '../types'
 
-export type SpatialQueryStrategy = 'rtree' | 'envelope_cache' | 'bounded_sample'
+export type SpatialQueryStrategy = 'rtree' | 'envelope_cache'
 
 export interface BenchmarkViewportStep {
   bounds: BoundingBox
@@ -111,6 +111,7 @@ export interface BenchmarkDependencies {
     latest: BenchmarkViewportStep,
     requiredIDs: number[],
   ) => Promise<BenchmarkViewportResult>
+  waitForCoordinatorIdle?: () => Promise<void>
   getCoordinatorMetrics: () => BenchmarkCoordinatorMetrics
   resetCoordinatorMetrics?: () => void
 }

@@ -424,18 +424,13 @@ func (a *App) GetDatasetSpatialSummary(datasetName string) (*SpatialSummaryDTO, 
 		summary.QueryDiagnosticReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
 		return summary, nil
 	}
-	if !supportsViewportSpatialQuery(info.Kind) {
-		summary.QueryDiagnosticReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
-		return summary, nil
-	}
-
 	queryContext, cancel := a.spatialQueryContext(dataSourceContext)
 	defer cancel()
 	capability, err := dataSource.GetSpatialQueryCapability(queryContext, datasetName)
 	if err != nil {
 		return nil, err
 	}
-	summary.ViewportQuerySupported = capability.Supported
+	summary.ViewportQuerySupported = capability.RTreeAvailable || capability.FallbackAvailable
 	summary.RTreeAvailable = capability.RTreeAvailable
 	summary.QueryDiagnosticReason = string(capability.DiagnosticReason)
 	return summary, nil
@@ -485,26 +480,39 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 			return nil, mapViewerPreviewError(queryContext, err)
 		}
 	}
+	explicitViewport := request.Viewport != nil
 
 	var (
 		features       []*types.Feature
 		queriedBounds  *BoundingBoxDTO
-		strategy       = spatialPreviewStrategyBoundedSample
+		strategy       string
 		hasMore        bool
 		degradedReason string
 	)
 	queryStarted := time.Now()
-	if supportsViewportSpatialQuery(info.Kind) && request.Viewport != nil {
+	if !explicitViewport {
+		features, hasMore, err = a.loadBoundedPreviewFeatures(
+			queryContext,
+			ds,
+			request.Limit,
+			request.RequiredIDs,
+		)
+		if err != nil {
+			return nil, mapViewerPreviewError(queryContext, err)
+		}
+		strategy = spatialPreviewStrategyBoundedSample
+	} else {
+		queryBounds := request.Viewport.spatialBoundingBox()
 		queryResult, queryErr := dataSource.QuerySpatial(queryContext, datasetName, types.SpatialQueryOptions{
-			Bounds:      request.Viewport.spatialBoundingBox(),
+			Bounds:      queryBounds,
 			Limit:       request.Limit,
 			RequiredIDs: request.RequiredIDs,
 		})
 		if queryErr != nil {
-			reason, ok := udbxerrors.SpatialQueryReasonOf(queryErr)
-			if !ok || reason != types.SpatialQueryReasonEnvelopeCacheBudgetExceeded {
+			if !viewerCanUseBoundedFallback(queryErr) {
 				return nil, queryErr
 			}
+			reason, _ := udbxerrors.SpatialQueryReasonOf(queryErr)
 			features, hasMore, err = a.loadBoundedPreviewFeatures(
 				queryContext,
 				ds,
@@ -514,27 +522,14 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 			if err != nil {
 				return nil, err
 			}
-			requestedBounds := request.Viewport.spatialBoundingBox()
-			queriedBounds = boundingBoxDTO(&requestedBounds)
+			queriedBounds = boundingBoxDTO(&queryBounds)
+			strategy = spatialPreviewStrategyBoundedSample
 			degradedReason = string(reason)
 		} else {
 			features = queryResult.Features
 			queriedBounds = boundingBoxDTO(&queryResult.QueriedBounds)
 			strategy = string(queryResult.Strategy)
 			hasMore = queryResult.HasMore
-		}
-	} else {
-		features, hasMore, err = a.loadBoundedPreviewFeatures(
-			queryContext,
-			ds,
-			request.Limit,
-			request.RequiredIDs,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if !supportsViewportSpatialQuery(info.Kind) {
-			degradedReason = string(types.SpatialQueryReasonUnsupportedDatasetKind)
 		}
 	}
 	queryDurationMS := float64(time.Since(queryStarted).Nanoseconds()) / float64(time.Millisecond)
@@ -561,16 +556,7 @@ func (a *App) LoadSpatialPreview(datasetName string, request SpatialPreviewReque
 		response.EstimatedVertexCount += countPreviewVertices(feature.Geometry)
 		response.Extent = mergeBBox(response.Extent, feature.BBox)
 	}
-	if request.Viewport != nil && supportsViewportSpatialQuery(info.Kind) {
-		applySpatialPreviewSampling(response, vertexBudgetReached)
-	} else {
-		response.Sampled, response.SampleReason = spatialPreviewSampleReason(
-			info.ObjectCount,
-			len(features),
-			request.Limit,
-			vertexBudgetReached,
-		)
-	}
+	applySpatialPreviewSampling(response, vertexBudgetReached)
 	if a.previewResultHook != nil {
 		a.previewResultHook(queryContext)
 	}
@@ -825,26 +811,21 @@ func mapViewerPreviewError(ctx context.Context, err error) error {
 	return err
 }
 
+func viewerCanUseBoundedFallback(err error) bool {
+	reason, ok := udbxerrors.SpatialQueryReasonOf(err)
+	if !ok {
+		return false
+	}
+	return reason == types.SpatialQueryReasonEnvelopeCacheBudgetExceeded ||
+		reason == types.SpatialQueryReasonSpatialIndexUnavailable
+}
+
 func newViewerSpatialError(reason types.SpatialQueryReason, cause error) error {
 	spatialErr, err := udbx4go.NewSpatialQueryError(reason, cause)
 	if err != nil {
 		return err
 	}
 	return spatialErr
-}
-
-func spatialPreviewSampleReason(objectCount int, rawFeatureCount int, featureLimit int, vertexBudgetReached bool) (bool, string) {
-	sampleReasons := make([]string, 0, 2)
-	if objectCount > rawFeatureCount && rawFeatureCount >= featureLimit {
-		sampleReasons = append(sampleReasons, "预览达到要素上限")
-	}
-	if vertexBudgetReached {
-		sampleReasons = append(sampleReasons, "预览达到顶点上限")
-	}
-	if len(sampleReasons) == 0 {
-		return false, ""
-	}
-	return true, strings.Join(sampleReasons, "，")
 }
 
 func spatialPreviewResultSampleReason(hasMore bool, vertexBudgetReached bool) (bool, string) {
@@ -859,20 +840,6 @@ func spatialPreviewResultSampleReason(hasMore bool, vertexBudgetReached bool) (b
 		return false, ""
 	}
 	return true, strings.Join(sampleReasons, "，")
-}
-
-func supportsViewportSpatialQuery(kind types.DatasetKind) bool {
-	switch kind {
-	case types.DatasetKindPoint,
-		types.DatasetKindLine,
-		types.DatasetKindRegion,
-		types.DatasetKindPointZ,
-		types.DatasetKindLineZ,
-		types.DatasetKindRegionZ:
-		return true
-	default:
-		return false
-	}
 }
 
 func (b *BoundingBoxDTO) spatialBoundingBox() types.BoundingBox {

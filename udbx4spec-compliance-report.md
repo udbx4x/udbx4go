@@ -216,7 +216,7 @@ go test . -run Udbx4Spec -v
 |------|------|----------|
 | Text / GeoText | 已完成最小合规基线 | 扩展复杂样式、复杂文本对象和更多真实样本 |
 | CAD GeoHeader | 已完成最小合规基线 | 扩展复杂 CAD 类型、样式和混合对象 |
-| 视口空间查询 | Go 已实现并通过 SDK/自动测试；Java/TypeScript reference-only | Text/CAD 视口查询、投影转换和精确拓扑谓词；严格 stale/canvas 门禁的 macOS 打包运行需要重新验收 |
+| 视口空间查询 | Go 已实现并通过 SDK、packaged 自动验收和人工 Smoke；Java/TypeScript reference-only | 后续实现投影转换和精确拓扑谓词；查询协调、渲染或选择行为变更后重新执行对应门禁 |
 
 ## 命名一致性检查
 
@@ -262,10 +262,10 @@ go test . -run Udbx4Spec -v
 - Text / GeoText 最小基线已纳入合规闭环
 - CAD 最小 GeoHeader 基线已纳入合规闭环
 - Go 视口空间查询已实现；两种 SDK 成功策略、普通要素 MBR 相交、仅 required ID 可在视口外、预算超限错误和六个原因码均已纳入合规闭环
-- Viewer 私有 `bounded_sample` 是预算错误或 Text/CAD 路径的非空间有界预览，不属于 SDK 成功结果；Viewer DTO 可保留 `degradedReason`
+- Viewer 无 viewport 的初始预览通过 `ListContext` 返回无 `degradedReason` 的私有 `bounded_sample`；显式 viewport 必须调用公共空间查询，正常 Text/CAD 返回 `rtree` 或 `envelope_cache`，只有 `envelope_cache_budget_exceeded` 或 `spatial_index_unavailable` 才以携带对应 `degradedReason` 的 `bounded_sample` 降级；该策略不属于 SDK 成功结果
 
 需要改进：
 - 扩展真实 SuperMap UDBX 样本文本和 CAD 兼容范围
-- 使用严格契约、确定性 stale probe 和 canvas 像素门禁重新执行 macOS 打包三场景验收；证据按人工 1-4、自动化故障注入 5、真实切换加自动化生命周期 6 分类，当前固定并发保持 1
+- 保持严格契约、确定性 stale probe、canvas 像素和 RSS 门禁；当前 macOS packaged 三场景 30/30 与人工 Smoke 5/5 已通过，后续行为变更时按相同证据分类重新验收，当前固定并发保持 1
 
 建议后续以真实样本兼容和发布治理为重点继续推进。

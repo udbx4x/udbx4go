@@ -5,7 +5,37 @@ import type {
   MapLayerState,
   PageData,
   SelectedMapFeature,
+  SpatialPreview,
 } from '../types'
+import type { SpatialPreviewDegradedReason } from '../spatial/spatialPreviewDegradation'
+
+export function createSpatialPreviewFixture(
+  overrides: Partial<SpatialPreview> = {},
+): SpatialPreview {
+  return {
+    datasetName: 'BaseMap_P',
+    kind: 'point',
+    features: [],
+    estimatedVertexCount: 0,
+    sampled: false,
+    strategy: 'rtree',
+    hasMore: false,
+    queryDurationMs: 0,
+    fileGeneration: 0,
+    ...overrides,
+  }
+}
+
+export function createDegradedSpatialPreviewFixture(
+  degradedReason: SpatialPreviewDegradedReason,
+  overrides: Partial<Omit<SpatialPreview, 'strategy' | 'degradedReason'>> = {},
+): SpatialPreview {
+  return createSpatialPreviewFixture({
+    ...overrides,
+    strategy: 'bounded_sample',
+    degradedReason,
+  })
+}
 
 const cloneLayerStyle = (style: LayerStyle): LayerStyle => ({
   point: { ...style.point },
@@ -67,17 +97,7 @@ export const mapLayerFixtures: MapLayerState[] = [
     loading: false,
     error: null,
     summary: null,
-    preview: {
-      datasetName: 'BaseMap_P',
-      kind: 'point',
-      features: [],
-      estimatedVertexCount: 0,
-      sampled: false,
-      strategy: 'bounded_sample',
-      hasMore: false,
-      queryDurationMs: 0,
-      fileGeneration: 0,
-    },
+    preview: createSpatialPreviewFixture({ strategy: 'bounded_sample' }),
     queryStatus: 'ready',
     queryError: null,
     style: {
@@ -99,16 +119,12 @@ export const sampledMapLayerFixture: MapLayerState = {
   datasetName: 'Jingjin_NetworkZ_Node',
   kind: 'pointZ',
   style: cloneLayerStyle(mapLayerFixtures[0].style),
-  preview: {
+  preview: createSpatialPreviewFixture({
     datasetName: 'Jingjin_NetworkZ_Node',
     kind: 'pointZ',
-    features: [],
     estimatedVertexCount: 50000,
     sampled: true,
     sampleReason: '预览达到要素上限',
     strategy: 'bounded_sample',
-    hasMore: false,
-    queryDurationMs: 0,
-    fileGeneration: 0,
-  },
+  }),
 }

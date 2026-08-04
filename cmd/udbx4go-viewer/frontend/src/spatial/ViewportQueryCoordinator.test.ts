@@ -90,6 +90,64 @@ describe('ViewportQueryCoordinator', () => {
     expect(harness.requests[0].job.bounds).toEqual({ minX: 85, minY: 35, maxX: 215, maxY: 165 })
   })
 
+  it('debounce 窗口内把仍有效的待发布图层计入 pending 和峰值', () => {
+    const harness = createHarness()
+
+    harness.coordinator.scheduleViewport(
+      viewportA,
+      [layer('points'), layer('roads')],
+      1,
+    )
+
+    expect(harness.coordinator.getMetrics()).toMatchObject({
+      activeQueries: 0,
+      pendingQueries: 2,
+      pendingPeak: 2,
+    })
+
+    harness.coordinator.resetMetrics()
+    expect(harness.coordinator.getMetrics()).toMatchObject({
+      activeQueries: 0,
+      pendingQueries: 2,
+      pendingPeak: 2,
+    })
+  })
+
+  it('debounce pending 只统计未失效且仍存在的可见图层', async () => {
+    const harness = createHarness()
+
+    harness.coordinator.scheduleViewport(
+      viewportA,
+      [layer('points'), layer('roads')],
+      1,
+    )
+    harness.coordinator.invalidateLayer('points')
+
+    expect(harness.coordinator.getMetrics().pendingQueries).toBe(1)
+
+    harness.layers.delete('roads')
+    expect(harness.coordinator.getMetrics().pendingQueries).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(250)
+    expect(harness.loadPreview).not.toHaveBeenCalled()
+  })
+
+  it('invalidateAll 立即清空 debounce pending 观测', () => {
+    const harness = createHarness()
+    harness.coordinator.scheduleViewport(
+      viewportA,
+      [layer('points'), layer('roads')],
+      1,
+    )
+
+    expect(harness.coordinator.getMetrics().pendingQueries).toBe(2)
+    harness.coordinator.invalidateAll()
+    expect(harness.coordinator.getMetrics()).toMatchObject({
+      activeQueries: 0,
+      pendingQueries: 0,
+    })
+  })
+
   it('按配置限制并发并暴露 pending、并发和迟到丢弃观测', async () => {
     const harness = createHarness(2)
     harness.layers.set('counties', { visible: true })

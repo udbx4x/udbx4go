@@ -111,8 +111,16 @@ func (d *TextDataset) Insert(feature *types.Feature) error {
 		strings.Join(columns, ", "),
 		strings.Join(placeholders, ", "))
 
-	if _, err := d.DB().Exec(query, values...); err != nil {
+	result, err := d.DB().Exec(query, values...)
+	if err != nil {
 		return errors.IOError("failed to insert Text feature", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read inserted Text row count", err)
+	}
+	if rowsAffected > 0 {
+		d.notifySpatialMutation()
 	}
 
 	return d.syncObjectCount()
@@ -182,10 +190,14 @@ func (d *TextDataset) Update(id int, changes *FeatureChanges) error {
 		return errors.IOError("failed to update Text feature", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read updated Text row count", err)
+	}
 	if rowsAffected == 0 {
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
+	d.notifySpatialMutation()
 
 	return d.syncObjectCount()
 }
@@ -198,10 +210,14 @@ func (d *TextDataset) Delete(id int) error {
 		return errors.IOError("failed to delete Text feature", err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return errors.IOError("failed to read deleted Text row count", err)
+	}
 	if rowsAffected == 0 {
 		return errors.FeatureNotFound(d.Info().Name, id)
 	}
+	d.notifySpatialMutation()
 
 	return d.syncObjectCount()
 }
@@ -275,41 +291,110 @@ func (d *TextDataset) scanFeaturesContext(ctx context.Context, rows *sql.Rows) (
 }
 
 func (d *TextDataset) buildFeature(columns []string, values []interface{}) (*types.Feature, error) {
+	return d.buildFeatureWithMetadata(columns, values, "SmID", "SmGeometry", "SmIndexKey")
+}
+
+func (d *TextDataset) buildFeatureWithMetadata(
+	columns []string,
+	values []interface{},
+	idColumn string,
+	payloadColumn string,
+	envelopeColumn string,
+) (*types.Feature, error) {
 	feature := &types.Feature{Attributes: make(map[string]interface{})}
 	var geometryBlob []byte
+	idColumnFound := false
 	geometryColumnFound := false
+	indexKeyColumnFound := false
+	var indexEnvelope *types.BoundingBox
 
 	for index, column := range columns {
 		value := values[index]
-		switch column {
-		case "SmID":
-			if id, ok := value.(int64); ok {
+		switch {
+		case strings.EqualFold(column, idColumn):
+			idColumnFound = true
+			switch id := value.(type) {
+			case int64:
 				feature.ID = int(id)
+			case int:
+				feature.ID = id
+			default:
+				return nil, errors.FormatError("Text feature ID column is not an integer")
 			}
-		case "SmGeometry":
+		case strings.EqualFold(column, payloadColumn):
 			geometryColumnFound = true
 			blob, ok := value.([]byte)
 			if !ok || len(blob) == 0 {
 				return nil, newSpatialGeometryError("Text geometry column is not a non-empty BLOB")
 			}
 			geometryBlob = blob
-		case "SmUserID", "SmIndexKey":
+		case strings.EqualFold(column, envelopeColumn):
+			indexKeyColumnFound = true
+			if value == nil {
+				continue
+			}
+			indexKey, ok := value.([]byte)
+			if !ok || len(indexKey) == 0 {
+				return nil, newSpatialGeometryError("Text SmIndexKey column is not a non-empty BLOB or NULL")
+			}
+			envelope, err := codec.ReadGaiaEnvelope(indexKey)
+			if err != nil {
+				return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode Text SmIndexKey envelope", err)}
+			}
+			indexEnvelope = &envelope
+		case strings.EqualFold(column, "SmID"),
+			strings.EqualFold(column, "SmUserID"),
+			strings.EqualFold(column, "SmGeometry"),
+			strings.EqualFold(column, "SmIndexKey"):
 			continue
 		default:
 			feature.Attributes[column] = value
 		}
 	}
 
+	if !idColumnFound {
+		return nil, errors.FormatError("Text feature ID column is missing")
+	}
 	if !geometryColumnFound {
 		return nil, newSpatialGeometryError("Text geometry column is missing")
+	}
+	if !indexKeyColumnFound {
+		return nil, newSpatialGeometryError("Text SmIndexKey column is missing")
 	}
 	geometry, err := d.textCodec.Decode(geometryBlob)
 	if err != nil {
 		return nil, &spatialGeometryError{cause: errors.FormatError("failed to decode GeoText geometry", err)}
 	}
+	if indexEnvelope != nil {
+		geometry.BBox = []float64{
+			indexEnvelope.MinX,
+			indexEnvelope.MinY,
+			indexEnvelope.MaxX,
+			indexEnvelope.MaxY,
+		}
+	}
+	geometry.SRID = d.srid()
 	feature.Geometry = geometry
 
 	return feature, nil
+}
+
+func (d *TextDataset) loadFeaturesByIDs(
+	ctx context.Context,
+	ids []int,
+	idColumn string,
+	payloadColumn string,
+	envelopeColumn string,
+) (map[int]*types.Feature, error) {
+	return loadSpatialFeaturesByIDs(ctx, d.DB(), d.TableName(), idColumn, ids, func(
+		columns []string,
+		values []interface{},
+	) (*types.Feature, error) {
+		if spatialFeatureRowIsDoubleNull(columns, values, payloadColumn, envelopeColumn) {
+			return nil, nil
+		}
+		return d.buildFeatureWithMetadata(columns, values, idColumn, payloadColumn, envelopeColumn)
+	})
 }
 
 func (d *TextDataset) buildQuery(opts *types.QueryOptions) (string, []interface{}) {

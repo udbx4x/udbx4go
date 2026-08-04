@@ -2,18 +2,19 @@
 package schema
 
 import (
-	"database/sql"
+	"fmt"
 
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 )
 
 // Initializer handles creation of UDBX system tables.
 type Initializer struct {
-	db *sql.DB
+	db sqliteutil.DBTX
 }
 
 // NewInitializer creates a new schema initializer.
-func NewInitializer(db *sql.DB) *Initializer {
+func NewInitializer(db sqliteutil.DBTX) *Initializer {
 	return &Initializer{db: db}
 }
 
@@ -155,6 +156,51 @@ func (i *Initializer) CreateDatasetTable(tableName string, hasGeometry bool, fie
 
 	_, err := i.db.Exec(query)
 	return err
+}
+
+// CreateCadDatasetTable creates a whitepaper-compatible CAD dataset table.
+func (i *Initializer) CreateCadDatasetTable(tableName string, fieldInfos []FieldColumn) error {
+	quotedTableName, err := sqliteutil.QuoteIdentifier(tableName)
+	if err != nil {
+		return fmt.Errorf("failed to quote CAD dataset table name: %w", err)
+	}
+
+	query := "CREATE TABLE IF NOT EXISTS " + quotedTableName + " (\n"
+	query += "\tSmID INTEGER PRIMARY KEY,\n"
+	query += "\tSmUserID INTEGER DEFAULT 0,\n"
+	query += "\tSmGeoType INTEGER NOT NULL,\n"
+	query += "\tSmGeometry BLOB,\n"
+	query += "\tSmIndexKey POLYGON"
+
+	for _, field := range fieldInfos {
+		quotedFieldName, err := sqliteutil.QuoteIdentifier(field.Name)
+		if err != nil {
+			return fmt.Errorf("failed to quote CAD field name %q: %w", field.Name, err)
+		}
+		if err := validateCadFieldSQLiteType(field.SQLiteType); err != nil {
+			return fmt.Errorf("invalid CAD field %q: %w", field.Name, err)
+		}
+
+		query += ",\n\t" + quotedFieldName + " " + field.SQLiteType
+		if !field.Nullable {
+			query += " NOT NULL"
+		}
+	}
+
+	query += "\n)"
+
+	_, err = i.db.Exec(query)
+	return err
+}
+
+func validateCadFieldSQLiteType(sqliteType string) error {
+	// FieldType.SQLiteType returns exactly these four SQLite storage classes.
+	switch sqliteType {
+	case "INTEGER", "REAL", "BLOB", "TEXT":
+		return nil
+	default:
+		return fmt.Errorf("unsupported SQLite type %q", sqliteType)
+	}
 }
 
 // DropDatasetTable drops a dataset data table.

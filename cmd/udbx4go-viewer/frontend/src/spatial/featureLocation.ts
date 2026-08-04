@@ -4,7 +4,7 @@ export type GeometryKind = 'point' | 'line' | 'polygon'
 
 export function featureGeometryKind(geometryType: string): GeometryKind | null {
   const normalized = geometryType.toLowerCase()
-  if (normalized === 'point' || normalized === 'text' || normalized === 'cadpoint') {
+  if (normalized === 'point' || normalized === 'text' || normalized === 'cadpoint' || normalized === 'cadtext') {
     return 'point'
   }
   if (normalized === 'linestring' || normalized === 'multilinestring' || normalized === 'cadline') {

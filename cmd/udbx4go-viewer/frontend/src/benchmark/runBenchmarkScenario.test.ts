@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createSpatialPreviewFixture } from '../test/fixtures'
 import { runBenchmarkScenario } from './runBenchmarkScenario'
 import type { BenchmarkConfig, BenchmarkDependencies } from './types'
 
@@ -149,6 +150,34 @@ function setMeasuredStepStrategies(
 }
 
 describe('runBenchmarkScenario', () => {
+  it('未知 preview reason 不把初始有界图层标记为 degraded', async () => {
+    const dependencies = createDependencies([])
+    const setLayer = vi.fn()
+    dependencies.getSpatialSummary = async (datasetName) => ({
+      datasetName,
+      kind: 'region',
+      objectCount: 1,
+      estimatedVertexCount: 1,
+      previewSupported: true,
+      viewportQuerySupported: false,
+      rtreeAvailable: false,
+    })
+    dependencies.loadSpatialPreview = async (datasetName) => createSpatialPreviewFixture({
+      datasetName,
+      kind: 'region',
+      strategy: 'bounded_sample',
+      degradedReason: 'future_backend_reason',
+    })
+    dependencies.setLayer = setLayer
+
+    await runBenchmarkScenario(config, dependencies)
+
+    expect(setLayer).toHaveBeenCalledWith(expect.objectContaining({
+      queryStatus: 'idle',
+      preview: expect.objectContaining({ degradedReason: 'future_backend_reason' }),
+    }))
+  })
+
   it('stale probe 拒绝只有一个 viewport step 的场景且不启动副作用', async () => {
     const calls: string[] = []
     const singleStepConfig: BenchmarkConfig = {
@@ -240,9 +269,9 @@ describe('runBenchmarkScenario', () => {
       'viewport:envelope_cache::action',
       'viewport:envelope_cache::plain',
       'stale:110.3:113::plain',
-      'metrics',
       'viewport:envelope_cache:101:plain:112:polygon',
       'setSelection:县级行政区划:101',
+      'metrics',
     ])
     expect(result.metrics.backendQueryMs).toEqual([8, 8, 13, 7])
     expect(result.metrics.moveendToRenderMs).toEqual([24, 24, 31])
@@ -262,6 +291,28 @@ describe('runBenchmarkScenario', () => {
     await expect(runBenchmarkScenario(config, dependencies)).rejects.toThrow(
       'stale viewport probe did not discard an obsolete result',
     )
+  })
+
+  it('读取最终指标前等待协调器清空 active 和 pending 队列', async () => {
+    const dependencies = createDependencies([])
+    let pendingQueries = 2
+    const waitForCoordinatorIdle = vi.fn(async () => {
+      pendingQueries = 0
+    })
+    Object.assign(dependencies, { waitForCoordinatorIdle })
+    dependencies.getCoordinatorMetrics = () => ({
+      maxConcurrentQueries: 1,
+      pendingPeak: 5,
+      activeQueries: pendingQueries > 0 ? 1 : 0,
+      pendingQueries,
+      staleResultsDiscarded: 1,
+      staleResultApplied: false,
+    })
+
+    const result = await runBenchmarkScenario(config, dependencies)
+
+    expect(waitForCoordinatorIdle).toHaveBeenCalledOnce()
+    expect(result.metrics.pendingFinal).toBe(0)
   })
 
   it('stale probe 必须返回 latest 策略证据', async () => {

@@ -127,7 +127,9 @@ func (ds *DataSource) GetSpatialQueryCapability(ctx context.Context, datasetName
 	return capability, nil
 }
 
-// QuerySpatial queries features intersecting a viewport through the dataset RTree.
+// QuerySpatial queries viewport-intersecting features for supported ordinary
+// vector, Text, and CAD datasets, using a verified RTree when available or a
+// DataSource-owned envelope cache otherwise.
 func (ds *DataSource) QuerySpatial(
 	ctx context.Context,
 	datasetName string,
@@ -180,9 +182,9 @@ func (ds *DataSource) GetDataset(name string) (dataset.Dataset, error) {
 	case types.DatasetKindRegionZ:
 		return dataset.NewRegionZDataset(ds.db, info), nil
 	case types.DatasetKindText:
-		return dataset.NewTextDataset(ds.db, info), nil
+		return ds.newTextDataset(info), nil
 	case types.DatasetKindCAD:
-		return dataset.NewCadDataset(ds.db, info), nil
+		return ds.newCadDataset(info), nil
 	default:
 		return nil, errors.UnsupportedError(fmt.Sprintf("dataset kind '%s' is not supported", info.Kind.String()))
 	}
@@ -506,7 +508,6 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 	}
 
 	tableName := generateTableName(name)
-	initializer := schema.NewInitializer(ds.db)
 
 	fieldColumns := make([]schema.FieldColumn, len(fields))
 	for i, f := range fields {
@@ -517,8 +518,27 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 		}
 	}
 
-	if err := initializer.CreateDatasetTable(tableName, true, fieldColumns); err != nil {
-		return nil, errors.IOError("failed to create CAD dataset table", err)
+	tx, err := ds.db.Begin()
+	if err != nil {
+		return nil, errors.IOError("failed to begin CAD dataset transaction", err)
+	}
+	rollback := func(operationErr error) error {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return errors.IOError(
+				"failed to rollback CAD dataset transaction",
+				fmt.Errorf("operation failed: %v; rollback failed: %w", operationErr, rollbackErr),
+			)
+		}
+		return operationErr
+	}
+
+	initializer := schema.NewInitializer(tx)
+	registerDao := system.NewSmRegisterDao(tx)
+	geoColsDao := system.NewGeometryColumnsDao(tx)
+	fieldInfoDao := system.NewSmFieldInfoDao(tx)
+
+	if err := initializer.CreateCadDatasetTable(tableName, fieldColumns); err != nil {
+		return nil, rollback(errors.IOError("failed to create CAD dataset table", err))
 	}
 
 	record := &system.SmRegisterRecord{
@@ -526,9 +546,25 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 		SmDatasetName: name,
 		SmTableName:   tableName,
 		SmObjectCount: 0,
+		SmIDColName:   sql.NullString{String: "SmID", Valid: true},
+		SmGeoColName:  sql.NullString{String: "SmGeometry", Valid: true},
+		SmSRID:        sql.NullInt32{Int32: 0, Valid: true},
+		SmIndexType:   sql.NullInt32{Int32: 0, Valid: true},
 	}
-	if err := ds.registerDao.Insert(record); err != nil {
-		return nil, err
+	if err := registerDao.Insert(record); err != nil {
+		return nil, rollback(err)
+	}
+
+	geoRecord := &system.GeometryColumnsRecord{
+		FTableName:          strings.ToLower(tableName),
+		FGeometryColumn:     "SmIndexKey",
+		GeometryType:        3,
+		CoordDimension:      2,
+		SRID:                0,
+		SpatialIndexEnabled: 0,
+	}
+	if err := geoColsDao.Insert(geoRecord); err != nil {
+		return nil, rollback(err)
 	}
 
 	for _, field := range fields {
@@ -541,12 +577,16 @@ func (ds *DataSource) createCadDatasetInternal(name string, fields []*types.Fiel
 		if field.Alias != nil {
 			fieldRecord.SmFieldCaption = sql.NullString{String: *field.Alias, Valid: true}
 		}
-		if err := ds.fieldInfoDao.Insert(fieldRecord); err != nil {
-			return nil, err
+		if err := fieldInfoDao.Insert(fieldRecord); err != nil {
+			return nil, rollback(err)
 		}
 	}
 
-	return dataset.NewCadDataset(ds.db, record.ToDatasetInfo()), nil
+	if err := tx.Commit(); err != nil {
+		return nil, errors.IOError("failed to commit CAD dataset transaction", err)
+	}
+
+	return ds.newCadDataset(record.ToDatasetInfo()), nil
 }
 
 func (ds *DataSource) createTextDatasetInternal(name string, srid int, fields []*types.FieldInfo) (*dataset.TextDataset, error) {
@@ -626,7 +666,27 @@ func (ds *DataSource) createTextDatasetInternal(name string, srid int, fields []
 		}
 	}
 
-	return dataset.NewTextDataset(ds.db, record.ToDatasetInfo()), nil
+	return ds.newTextDataset(record.ToDatasetInfo()), nil
+}
+
+func (ds *DataSource) newTextDataset(info *types.DatasetInfo) *dataset.TextDataset {
+	text := dataset.NewTextDataset(ds.db, info)
+	ds.attachSpatialMutationHook(text)
+	return text
+}
+
+func (ds *DataSource) newCadDataset(info *types.DatasetInfo) *dataset.CadDataset {
+	cad := dataset.NewCadDataset(ds.db, info)
+	ds.attachSpatialMutationHook(cad)
+	return cad
+}
+
+func (ds *DataSource) attachSpatialMutationHook(value dataset.Dataset) {
+	tableName := value.Info().TableName
+	manager := ds.envelopeCacheManager
+	dataset.AttachSpatialMutationHook(value, func() {
+		manager.InvalidateDataset(tableName)
+	})
 }
 
 // generateTableName generates a safe table name from dataset name.

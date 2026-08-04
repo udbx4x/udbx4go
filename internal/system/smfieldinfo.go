@@ -3,6 +3,7 @@ package system
 import (
 	"database/sql"
 
+	"github.com/udbx4x/udbx4go/internal/sqliteutil"
 	"github.com/udbx4x/udbx4go/pkg/errors"
 	"github.com/udbx4x/udbx4go/pkg/types"
 )
@@ -10,11 +11,11 @@ import (
 // SmFieldInfoDao provides access to the SmFieldInfo system table.
 // SmFieldInfo stores field metadata for datasets.
 type SmFieldInfoDao struct {
-	db *sql.DB
+	db sqliteutil.DBTX
 }
 
 // NewSmFieldInfoDao creates a new SmFieldInfoDao.
-func NewSmFieldInfoDao(db *sql.DB) *SmFieldInfoDao {
+func NewSmFieldInfoDao(db sqliteutil.DBTX) *SmFieldInfoDao {
 	return &SmFieldInfoDao{db: db}
 }
 
