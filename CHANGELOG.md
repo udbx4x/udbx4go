@@ -17,12 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added CAD `SmIndexKey` writes and Text/CAD mutation-driven envelope-cache invalidation so create/update/delete operations cannot publish or reuse stale query state.
 - Added Viewer-private non-spatial `bounded_sample` previews: initial no-viewport samples have no `degradedReason`, while viewport-query fallbacks carry only `envelope_cache_budget_exceeded` or `spatial_index_unavailable`.
 - Added Viewer viewport coordination, offscreen selection retention, deterministic stale-result probes, canvas-pixel blank-render gates, real-sample automatic tests, the envelope-cache PoC, and transactional macOS benchmark tooling.
+- Added Wails-based `udbx4go-viewer` desktop viewer with OpenLayers multi-layer spatial preview, dataset browser, paginated attribute table, layer visibility/removal, feature inspection, and map-table selection linking.
+- Added local viewer settings for preview limits, vertex budget, auto-fit behavior, selection zoom, table default state, and preview statistics.
+- Added CAD text geometry preview support and explicit errors for unsupported dataset previews.
 
 ### Changed
 
 - The current envelope-cache defaults are 32 MiB per dataset and 64 MiB per open DataSource. They are measured SDK resource policies, not UDBX format limits.
 - Tightened `QuerySpatial` to the `udbx4spec` contract: successful strategies are only `rtree` and `envelope_cache`; ordinary features must intersect the requested MBR, only required IDs may be offscreen, and `SpatialQueryResult` no longer carries degraded-result diagnostics.
 - Viewer query concurrency is fixed at 1 by the 2026-07-23 packaged acceptance run; changing it requires a new candidate calibration and final rerun.
+
+### Fixed
+
+- Prevented blank viewer screens when spatial preview loading fails.
+- Corrected feature fitting so point, line, and polygon selections use geometry-appropriate view extents.
+- Preserved selection behavior for records beyond the first attribute-table page and hardened sampled preview feedback.
 
 ### Known limitations
 
